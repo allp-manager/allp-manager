@@ -37,4 +37,8 @@ When Allp is launched through sudo and an interactive scope selector is needed, 
 
 `--yes` bypasses only Allp's final confirmation. It does not add native auto-confirm flags, does not bypass package ambiguity, and does not bypass Python, Node, Homebrew, or original-user safety checks.
 
+Prerequisite installation, service activation, and remote/repository setup are separate mutations. `--yes` alone cannot approve them in non-interactive mode; `--allow-bootstrap` is also required after the complete plan is displayed.
+
+Self-update determines writability from effective UID/group permissions, not merely the presence of any write bit. Writable Linux/macOS installs replace through same-directory staging. Non-writable or root-owned installs display a minimal internal replacement plan and elevate only that helper, preserving destination mode and ownership. Windows replacement is deferred until the running process exits.
+
 When Allp de-escalates a user-scoped plan from sudo, it invokes the native command as the original sudo user and restores that user's HOME from the local passwd database when available.

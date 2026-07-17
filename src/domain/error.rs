@@ -42,6 +42,10 @@ pub enum AllpError {
         backend: String,
         message: String,
     },
+    CandidateUnavailable {
+        backend: String,
+        message: String,
+    },
     ValidationStartFailed {
         backend: String,
         executable: String,
@@ -85,9 +89,9 @@ impl AllpError {
             Self::BackendNotDetected(_) => AllpExitCode::BackendNotDetected.code(),
             Self::NoConfiguredRemotes { .. } => AllpExitCode::BackendNotDetected.code(),
             Self::UnsupportedOperation { .. } => AllpExitCode::UnsupportedOperation.code(),
-            Self::ValidationFailed { .. } | Self::ValidationStartFailed { .. } => {
-                AllpExitCode::NativeCommandFailed.code()
-            }
+            Self::ValidationFailed { .. }
+            | Self::CandidateUnavailable { .. }
+            | Self::ValidationStartFailed { .. } => AllpExitCode::NativeCommandFailed.code(),
             Self::MetadataParseFailed { .. } => AllpExitCode::InternalError.code(),
             Self::CommandFailed { .. } => AllpExitCode::NativeCommandFailed.code(),
             Self::BackendBusy { .. } => AllpExitCode::BackendBusy.code(),
@@ -128,6 +132,13 @@ impl fmt::Display for AllpError {
             }
             Self::ValidationFailed { backend, message } => {
                 write!(f, "{backend} validation failed")?;
+                if !message.trim().is_empty() {
+                    write!(f, "\n{}", message.trim())?;
+                }
+                Ok(())
+            }
+            Self::CandidateUnavailable { backend, message } => {
+                write!(f, "{backend} candidate unavailable")?;
                 if !message.trim().is_empty() {
                     write!(f, "\n{}", message.trim())?;
                 }

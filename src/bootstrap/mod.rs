@@ -4,6 +4,7 @@ use crate::{
 };
 
 pub mod homebrew;
+pub mod providers;
 
 pub fn has_bootstrap_candidate(query: &str) -> bool {
     resolver::is_known_bootstrap_query(query)

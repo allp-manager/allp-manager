@@ -14,7 +14,7 @@ CURRENT_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt fmt-check check clippy test architecture build release quality clean run version git-status docs-check install uninstall reinstall install-user install-check release-prepare release-status release-notes release-archive release-checksum release-finalize release-clean hooks-install hooks-status release-workflow-test
+.PHONY: help fmt fmt-check check clippy test architecture build release quality clean run doctor version git-status docs-check install uninstall reinstall install-user install-check release-prepare release-status release-notes release-archive release-checksum release-finalize release-push release-clean hooks-install hooks-status release-workflow-test release-assets-test
 
 help:
 	@printf '%s\n' 'Allp development targets:'
@@ -29,6 +29,7 @@ help:
 	@printf '%s\n' '  make quality          Run the full local quality gate'
 	@printf '%s\n' '  make clean            Remove Cargo build output'
 	@printf '%s\n' '  make run ARGS="..."   Run Allp through cargo'
+	@printf '%s\n' '  make doctor           Run platform and capability diagnostics'
 	@printf '%s\n' '  make version          Print Allp version'
 	@printf '%s\n' '  make git-status       Show short Git status'
 	@printf '%s\n' '  make docs-check       Validate required documentation anchors'
@@ -45,6 +46,8 @@ help:
 	@printf '%s\n' '  make release-prepare BUMP=patch|minor|major'
 	@printf '%s\n' '  make release-prepare VERSION=x.y.z'
 	@printf '%s\n' '  make release-status   Show pending local release state'
+	@printf '%s\n' '  make release-finalize Finalize a prepared local release'
+	@printf '%s\n' '  make release-push     Push current branch and matching release tag'
 	@printf '%s\n' '  make release-clean    Remove ignored local release output'
 	@printf '%s\n' '  make release-workflow-test'
 
@@ -80,6 +83,9 @@ clean:
 run:
 	$(CARGO) run -- $(ARGS)
 
+doctor:
+	$(CARGO) run -- doctor
+
 version:
 	$(CARGO) run -- --version
 
@@ -93,6 +99,12 @@ docs-check:
 	test -f ROADMAP.md
 	test -f TODO.md
 	test -f docs/CLI_CONTRACT.md
+	test -f docs/SNAP_BACKEND.md
+	test -f docs/FLATPAK_BACKEND.md
+	test -f docs/PREREQUISITES.md
+	test -f docs/ALTERNATIVE_INSTALLERS.md
+	test -f docs/SELF_UPDATE.md
+	test -f docs/RELEASE_MANIFEST.md
 	test -n '$(CURRENT_VERSION)'
 	grep -q '$(CURRENT_VERSION)' README.md
 	grep -q '$(CURRENT_VERSION)' README.fa.md
@@ -100,6 +112,8 @@ docs-check:
 	grep -q 'Snap' README.fa.md
 	grep -q 'make quality' README.md
 	grep -q 'make quality' README.fa.md
+	grep -q 'allp self-update' README.md
+	grep -q 'allp self-update' README.fa.md
 	grep -q 'allp install pycharm' README.md
 	grep -q 'allp install pycharm' README.fa.md
 
@@ -157,16 +171,25 @@ release-checksum:
 release-finalize:
 	DIST_DIR="$(DIST_DIR)" RELEASE_PREFIX="$(RELEASE_PREFIX)" $(BASH) scripts/release-finalize.sh
 
+release-push:
+	DIST_DIR="$(DIST_DIR)" RELEASE_PREFIX="$(RELEASE_PREFIX)" $(BASH) scripts/release-push.sh
+
 release-clean:
 	rm -rf "$(DIST_DIR)" .release-state
 	@printf '%s\n' 'Removed ignored local release output.'
 
 hooks-install:
 	git config core.hooksPath .githooks
+	git config push.followTags true
 	@printf '%s\n' 'Installed local Git hooks from .githooks/.'
+	@printf '%s\n' 'Configured push.followTags=true for this repository.'
 
 hooks-status:
 	DIST_DIR="$(DIST_DIR)" RELEASE_PREFIX="$(RELEASE_PREFIX)" $(BASH) scripts/release-status.sh --hooks-only
 
 release-workflow-test:
 	$(BASH) scripts/test-release-workflow.sh
+	$(BASH) scripts/test-release-assets.sh
+
+release-assets-test:
+	$(BASH) scripts/test-release-assets.sh

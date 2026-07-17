@@ -31,6 +31,7 @@ pub struct SearchBackendSummary {
 pub enum SearchBackendState {
     Available,
     Unavailable,
+    Skipped,
     NoConfiguredRemotes,
     SearchFailed,
     ParsedResults,

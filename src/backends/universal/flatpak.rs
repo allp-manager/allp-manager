@@ -11,9 +11,38 @@ use crate::{
         PrivilegeRequirement,
     },
     execution::{ProcessRunner, ProcessStatus},
+    platform::PlatformContext,
+    requirements::{flatpak_requirements, BackendRequirements, RequirementSet},
 };
+use serde::Serialize;
 
 pub struct FlatpakBackend;
+
+pub const FLATHUB_NAME: &str = "flathub";
+pub const FLATHUB_URL: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlatpakBackendState {
+    NotInstalled,
+    InstalledWithoutRemotes,
+    InstalledWithRemotes(Vec<FlatpakRemote>),
+    BackendError(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlatpakRemote {
+    pub name: String,
+    pub title: Option<String>,
+    pub url: Option<String>,
+    pub filter: Option<String>,
+    pub options: Option<String>,
+}
+
+impl BackendRequirements for FlatpakBackend {
+    fn requirements(&self, context: &PlatformContext) -> RequirementSet {
+        flatpak_requirements(context)
+    }
+}
 
 const CAPABILITIES: &[Capability] = &[
     Capability::Search,
@@ -46,6 +75,11 @@ impl Backend for FlatpakBackend {
         REQUIREMENTS
     }
 
+    fn probe(&self, commands: &CommandMap, runner: &dyn ProcessRunner) -> AllpResult<()> {
+        let flatpak = command_path(self, commands, "flatpak")?;
+        capture_checked(self, runner, NativeCommand::new(flatpak).arg("--version")).map(|_| ())
+    }
+
     fn search(
         &self,
         commands: &CommandMap,
@@ -56,7 +90,8 @@ impl Backend for FlatpakBackend {
         let remotes = capture_checked(
             self,
             runner,
-            NativeCommand::new(flatpak).args(["remotes", "--columns=name,url"]),
+            NativeCommand::new(flatpak)
+                .args(["remotes", "--columns=name,title,url,filter,options"]),
         )?;
         if parse_flatpak_remotes(&remotes).is_empty() {
             return Err(AllpError::NoConfiguredRemotes {
@@ -91,6 +126,9 @@ impl Backend for FlatpakBackend {
             if let Some(remote) = &remote {
                 metadata.insert("flatpak.remote".to_owned(), remote.clone());
             }
+            if let Some(branch) = columns.get(4).filter(|value| !value.is_empty()) {
+                metadata.insert("flatpak.branch".to_owned(), branch.clone());
+            }
             let candidate_match = if package_id.eq_ignore_ascii_case(query)
                 || display_name.eq_ignore_ascii_case(query)
             {
@@ -122,6 +160,18 @@ impl Backend for FlatpakBackend {
         }
 
         Ok(candidates)
+    }
+
+    fn plan_search_prerequisite(&self, commands: &CommandMap) -> AllpResult<Option<ExecutionPlan>> {
+        plan_add_flathub(commands).map(Some)
+    }
+
+    fn verify_search_prerequisite(
+        &self,
+        commands: &CommandMap,
+        runner: &dyn ProcessRunner,
+    ) -> AllpResult<bool> {
+        flathub_is_configured(commands, runner)
     }
 
     fn list_installed(
@@ -234,14 +284,18 @@ impl Backend for FlatpakBackend {
         candidate: &PackageCandidate,
     ) -> AllpResult<ExecutionPlan> {
         let flatpak = command_path(self, commands, "flatpak")?;
-        let mut command = NativeCommand::new(flatpak).args(["install", "--user"]);
-        if let Some(source) = candidate
-            .source
-            .as_deref()
-            .filter(|source| !source.contains(' ') && !source.is_empty())
-        {
-            command = command.arg(source);
-        }
+        let remote = candidate
+            .metadata
+            .get("flatpak.remote")
+            .or(candidate.source.as_ref())
+            .filter(|remote| !remote.contains(char::is_whitespace) && !remote.is_empty())
+            .ok_or_else(|| {
+                AllpError::InvalidInput(
+                    "Flatpak installation requires the exact source remote from search results"
+                        .to_owned(),
+                )
+            })?;
+        let mut command = NativeCommand::new(flatpak).args(["install", "--user", remote]);
         command = command.arg(candidate.package_id.as_str());
         Ok(ExecutionPlan {
             backend_id: self.id().to_owned(),
@@ -251,7 +305,11 @@ impl Backend for FlatpakBackend {
             package_id: Some(candidate.package_id.clone()),
             source: candidate.source.clone(),
             scope: Some("User".to_owned()),
-            details: Vec::new(),
+            details: candidate
+                .metadata
+                .get("flatpak.branch")
+                .map(|branch| vec![("Branch".to_owned(), branch.clone())])
+                .unwrap_or_default(),
             command,
             privilege: PrivilegeRequirement::OriginalUserRequired,
             requires_root: false,
@@ -401,7 +459,83 @@ fn parse_flatpak_update_status(stdout: &str, stderr: &str) -> Option<(OperationS
     None
 }
 
-fn parse_flatpak_remotes(output: &str) -> Vec<(String, String)> {
+pub fn detect_flatpak_state(
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+) -> FlatpakBackendState {
+    let Some(flatpak) = commands.get("flatpak") else {
+        return FlatpakBackendState::NotInstalled;
+    };
+    let command =
+        NativeCommand::new(flatpak).args(["remotes", "--columns=name,title,url,filter,options"]);
+    match runner.capture(&command) {
+        Ok(output) if output.success => {
+            let remotes = parse_flatpak_remotes(&output.stdout);
+            if remotes.is_empty() {
+                FlatpakBackendState::InstalledWithoutRemotes
+            } else {
+                FlatpakBackendState::InstalledWithRemotes(remotes)
+            }
+        }
+        Ok(output) => FlatpakBackendState::BackendError(if output.stderr.trim().is_empty() {
+            output.stdout.trim().to_owned()
+        } else {
+            output.stderr.trim().to_owned()
+        }),
+        Err(error) => FlatpakBackendState::BackendError(error.to_string()),
+    }
+}
+
+pub fn plan_add_flathub(commands: &CommandMap) -> AllpResult<ExecutionPlan> {
+    let backend = FlatpakBackend;
+    let flatpak = command_path(&backend, commands, "flatpak")?;
+    Ok(ExecutionPlan {
+        backend_id: backend.id().to_owned(),
+        backend_name: backend.display_name().to_owned(),
+        operation: OperationKind::Bootstrap,
+        action: "Add the Flathub Flatpak remote".to_owned(),
+        package_id: Some(FLATHUB_NAME.to_owned()),
+        source: Some(FLATHUB_URL.to_owned()),
+        scope: Some("User".to_owned()),
+        details: vec![
+            ("Mutation".to_owned(), "Add remote".to_owned()),
+            ("Remote".to_owned(), FLATHUB_NAME.to_owned()),
+            ("URL".to_owned(), FLATHUB_URL.to_owned()),
+        ],
+        command: NativeCommand::new(flatpak).args([
+            "remote-add",
+            "--user",
+            "--if-not-exists",
+            FLATHUB_NAME,
+            FLATHUB_URL,
+        ]),
+        privilege: PrivilegeRequirement::OriginalUserRequired,
+        requires_root: false,
+        interactive: false,
+    })
+}
+
+pub fn flathub_is_configured(
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+) -> AllpResult<bool> {
+    match detect_flatpak_state(commands, runner) {
+        FlatpakBackendState::InstalledWithRemotes(remotes) => Ok(remotes
+            .iter()
+            .any(|remote| remote.name.eq_ignore_ascii_case(FLATHUB_NAME))),
+        FlatpakBackendState::InstalledWithoutRemotes | FlatpakBackendState::NotInstalled => {
+            Ok(false)
+        }
+        FlatpakBackendState::BackendError(message) => Err(AllpError::CommandFailed {
+            backend: "Flatpak".to_owned(),
+            command: "flatpak remotes --columns=name,title,url,filter,options".to_owned(),
+            code: None,
+            stderr: message,
+        }),
+    }
+}
+
+fn parse_flatpak_remotes(output: &str) -> Vec<FlatpakRemote> {
     output
         .lines()
         .filter_map(|line| {
@@ -412,18 +546,26 @@ fn parse_flatpak_remotes(output: &str) -> Vec<(String, String)> {
             {
                 return None;
             }
-            Some((
-                columns[0].clone(),
-                columns.get(1).cloned().unwrap_or_default(),
-            ))
+            Some(FlatpakRemote {
+                name: columns[0].clone(),
+                title: columns.get(1).cloned().filter(|value| !value.is_empty()),
+                url: columns.get(2).cloned().filter(|value| !value.is_empty()),
+                filter: columns.get(3).cloned().filter(|value| !value.is_empty()),
+                options: columns.get(4).cloned().filter(|value| !value.is_empty()),
+            })
         })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_flatpak_remotes, parse_flatpak_update_status};
+    use super::{parse_flatpak_remotes, parse_flatpak_update_status, FlatpakBackend};
     use crate::domain::OperationStatus;
+    use crate::{
+        backends::{Backend, CommandMap},
+        domain::{BackendCategory, MatchKind, PackageCandidate, PackageDomain},
+    };
+    use std::{collections::BTreeMap, path::PathBuf};
 
     #[test]
     fn nothing_to_do_maps_to_up_to_date() {
@@ -437,11 +579,55 @@ mod tests {
 
     #[test]
     fn parses_configured_remotes() {
-        let remotes = parse_flatpak_remotes("Name\tURL\nflathub\thttps://flathub.org/repo/\n");
+        let remotes = parse_flatpak_remotes(
+            "Name\tTitle\tURL\tFilter\tOptions\nflathub\tFlathub\thttps://flathub.org/repo/\t\tuser\n",
+        );
 
+        assert_eq!(remotes[0].name, "flathub");
+        assert_eq!(remotes[0].title.as_deref(), Some("Flathub"));
+        assert_eq!(remotes[0].url.as_deref(), Some("https://flathub.org/repo/"));
+    }
+
+    #[test]
+    fn install_plan_uses_exact_remote_and_application_id() {
+        let mut commands = CommandMap::new();
+        commands.insert("flatpak".to_owned(), PathBuf::from("/usr/bin/flatpak"));
+        let mut metadata = BTreeMap::new();
+        metadata.insert("flatpak.remote".to_owned(), "flathub".to_owned());
+        let candidate = PackageCandidate {
+            backend_id: "flatpak".to_owned(),
+            backend_name: "Flatpak".to_owned(),
+            category: BackendCategory::Universal,
+            domain: PackageDomain::Universal,
+            package_id: "org.telegram.desktop".to_owned(),
+            display_name: "Telegram Desktop".to_owned(),
+            description: None,
+            version: None,
+            source: Some("flathub".to_owned()),
+            installers: vec!["Flatpak".to_owned()],
+            artifact_kind: "universal application".to_owned(),
+            scope: None,
+            match_kind: MatchKind::Exact,
+            identity: PackageCandidate::infer_identity(
+                MatchKind::Exact,
+                PackageDomain::Universal,
+                "universal application",
+            ),
+            metadata,
+        };
+
+        let plan = FlatpakBackend
+            .plan_install(&commands, &candidate)
+            .expect("exact Flatpak result should produce a plan");
+
+        assert_eq!(plan.command.program, PathBuf::from("/usr/bin/flatpak"));
         assert_eq!(
-            remotes,
-            vec![("flathub".to_owned(), "https://flathub.org/repo/".to_owned())]
+            plan.command
+                .args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["install", "--user", "flathub", "org.telegram.desktop"]
         );
     }
 }

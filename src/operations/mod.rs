@@ -24,6 +24,7 @@ pub struct OperationContext<'a> {
     pub dry_run: bool,
     pub no_interactive: bool,
     pub yes: bool,
+    pub allow_bootstrap: bool,
     pub verbose: u8,
     pub backend_filter: Option<&'a str>,
     pub search_scope: Option<SearchScope>,

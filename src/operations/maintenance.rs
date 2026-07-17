@@ -96,6 +96,7 @@ pub fn run(
             operation: operation_name.to_owned(),
             records,
         };
+        update_phase(context, operation_name, "Phase 6: Summary");
         context
             .renderer
             .maintenance_summary(&report, context.verbose > 0, context.dry_run);
@@ -115,12 +116,14 @@ pub fn run(
             operation: operation_name.to_owned(),
             records,
         };
+        update_phase(context, operation_name, "Phase 6: Summary");
         context
             .renderer
             .maintenance_summary(&report, context.verbose > 0, context.dry_run);
         return Ok(report);
     }
 
+    update_phase(context, operation_name, "Phase 4: Confirmation");
     context.renderer.privilege_notice(
         &plans,
         context.no_interactive,
@@ -160,9 +163,14 @@ pub fn run(
             operation: operation_name.to_owned(),
             records,
         };
+        update_phase(context, operation_name, "Phase 6: Summary");
+        context
+            .renderer
+            .maintenance_summary(&report, context.verbose > 0, context.dry_run);
         return Ok(report);
     }
 
+    update_phase(context, operation_name, "Phase 5: Execution");
     let total = plans.len();
     for (offset, plan) in plans.into_iter().enumerate() {
         let index = offset + 1;
@@ -262,10 +270,17 @@ pub fn run(
         operation: operation_name.to_owned(),
         records,
     };
+    update_phase(context, operation_name, "Phase 6: Summary");
     context
         .renderer
         .maintenance_summary(&report, context.verbose > 0, context.dry_run);
     Ok(report)
+}
+
+fn update_phase(context: &OperationContext<'_>, operation_name: &str, label: &str) {
+    if operation_name == "update" {
+        context.renderer.phase(label);
+    }
 }
 
 fn classify_success(

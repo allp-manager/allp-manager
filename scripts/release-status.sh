@@ -26,6 +26,13 @@ main() {
     local planned_version
     local tag
     local status
+    local title
+    local notes
+    local archive
+    local checksum
+    local manifest
+    local binary_count
+    local checksum_count
 
     release_cd_root
 
@@ -40,6 +47,18 @@ main() {
     planned_version="${marker_version:-$current}"
     tag="v$planned_version"
     status="$(git status --porcelain)"
+    title="$(release_title_path "$planned_version")"
+    notes="$(release_draft_notes_path "$planned_version")"
+    archive="$(release_archive_path "$planned_version")"
+    checksum="$(release_checksum_path "$planned_version")"
+    manifest="$(release_manifest_path)"
+    if [ -d "${DIST_DIR:-dist}" ]; then
+        binary_count="$(find "${DIST_DIR:-dist}" -maxdepth 1 -type f \( -name "allp-v${planned_version}-*-unknown-linux-*.tar.gz" -o -name "allp-v${planned_version}-*-apple-darwin.tar.gz" -o -name "allp-v${planned_version}-*-pc-windows-msvc.zip" \) | wc -l | tr -d ' ')"
+        checksum_count="$(find "${DIST_DIR:-dist}" -maxdepth 1 -type f -name "allp-v${planned_version}-*.sha256" | wc -l | tr -d ' ')"
+    else
+        binary_count=0
+        checksum_count=0
+    fi
 
     printf 'Allp release status\n'
     printf 'Current Cargo.toml version: %s\n' "$current"
@@ -58,13 +77,46 @@ main() {
     fi
 
     if release_tag_exists "$tag"; then
-        printf 'Planned tag: %s already exists\n' "$tag"
+        printf 'Expected tag: %s exists\n' "$tag"
+        if [ "$(git rev-list -n 1 "$tag")" = "$(git rev-parse HEAD)" ]; then
+            printf 'Tag points to current commit: yes\n'
+        else
+            printf 'Tag points to current commit: no\n'
+        fi
     else
-        printf 'Planned tag: %s is available\n' "$tag"
+        printf 'Expected tag: %s is available\n' "$tag"
+        printf 'Tag points to current commit: no\n'
     fi
 
-    printf 'Source archive path: %s\n' "$(release_archive_path "$planned_version")"
-    printf 'Checksum path: %s\n' "$(release_checksum_path "$planned_version")"
+    if [ -f "$title" ]; then
+        printf 'Release title file: %s exists\n' "$title"
+    else
+        printf 'Release title file: %s missing\n' "$title"
+    fi
+    if [ -f "$notes" ]; then
+        printf 'Release notes file: %s exists\n' "$notes"
+    else
+        printf 'Release notes file: %s missing\n' "$notes"
+    fi
+    if [ -f "$archive" ]; then
+        printf 'Archive status: %s exists\n' "$archive"
+    else
+        printf 'Archive status: %s missing\n' "$archive"
+    fi
+    if [ -f "$checksum" ]; then
+        printf 'Checksum status: %s exists\n' "$checksum"
+    else
+        printf 'Checksum status: %s missing\n' "$checksum"
+    fi
+    printf 'Source archive path: %s\n' "$archive"
+    printf 'Checksum path: %s\n' "$checksum"
+    printf 'Target binary assets: %s\n' "$binary_count"
+    printf 'Release checksums: %s\n' "$checksum_count"
+    if [ -f "$manifest" ]; then
+        printf 'Release manifest: %s exists\n' "$manifest"
+    else
+        printf 'Release manifest: %s missing\n' "$manifest"
+    fi
     printf 'Final release notes path: %s\n' "$(release_dist_notes_path "$planned_version")"
 
     if [ -n "$status" ]; then

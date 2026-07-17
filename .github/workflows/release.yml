@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      title: ${{ steps.version.outputs.title }}
+      notes: ${{ steps.version.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          test "$version" = "$cargo_version"
+          title="release/RELEASE_TITLE_v${version}.txt"
+          notes="release/RELEASE_NOTES_v${version}.md"
+          test -s "$title"
+          test -s "$notes"
+          test -s release/MINIMUM_UPDATER_VERSION.txt
+          if gh release view "$tag" >/dev/null 2>&1; then
+            printf 'Release %s already exists. Refusing to overwrite it.\n' "$tag" >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >>"$GITHUB_OUTPUT"
+          printf 'title=%s\n' "$title" >>"$GITHUB_OUTPUT"
+          printf 'notes=%s\n' "$notes" >>"$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: cargo fmt --all -- --check
+      - run: cargo check --all-targets
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-targets
+      - run: bash scripts/check-architecture.sh
+      - run: cargo build --release
+
+  binary:
+    needs: validate
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            binary: allp
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            binary: allp
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            binary: allp
+          - os: macos-15
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            binary: allp
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            binary: allp.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo test --all-targets
+      - run: cargo build --release --target "${{ matrix.target }}"
+      - name: Package Unix binary
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+          name="allp-v${version}-${{ matrix.target }}.tar.gz"
+          mkdir -p dist package
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/allp
+          tar -C package -czf "dist/$name" allp
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "$name" >"$name.sha256")
+          else
+            hash="$(shasum -a 256 "dist/$name" | awk '{print $1}')"
+            printf '%s  %s\n' "$hash" "$name" >"dist/$name.sha256"
+          fi
+      - name: Package Windows binary
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ needs.validate.outputs.version }}"
+          $name = "allp-v$version-${{ matrix.target }}.zip"
+          New-Item -ItemType Directory -Force dist, package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "package/allp.exe"
+          Compress-Archive -Path "package/allp.exe" -DestinationPath "dist/$name"
+          $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content -NoNewline "dist/$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, binary]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist
+          merge-multiple: true
+      - name: Build exact-tag source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 '${{ needs.validate.outputs.tag }}')"
+          scripts/release-finalize.sh --archive
+          scripts/release-finalize.sh --checksum
+      - name: Verify checksums and generate release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          for checksum in dist/*.sha256; do
+            (cd dist && sha256sum -c "$(basename "$checksum")")
+          done
+          python3 scripts/generate-release-manifest.py \
+            --version "${{ needs.validate.outputs.version }}" \
+            --minimum-updater-version "$(tr -d '[:space:]' < release/MINIMUM_UPDATER_VERSION.txt)" \
+            --dist dist \
+            --output dist/allp-release-manifest.json
+          python3 scripts/generate-release-manifest.py \
+            --verify dist/allp-release-manifest.json \
+            --dist dist
+      - name: Create GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          title="$(cat '${{ needs.validate.outputs.title }}')"
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -printf '%p\n' | sort)
+          gh release create "$tag" "${assets[@]}" \
+            --verify-tag \
+            --title "$title" \
+            --notes-file "${{ needs.validate.outputs.notes }}"
+        env:
+          GH_TOKEN: ${{ github.token }}

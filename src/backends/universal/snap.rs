@@ -1,3 +1,6 @@
+mod rest;
+
+use self::rest::{percent_encode, SnapdClient, SnapdRestError};
 use crate::execution::render_native_command;
 use crate::{
     backends::{
@@ -15,15 +18,59 @@ use crate::{
         PrivilegeRequirement,
     },
     execution::{CommandOutput, ProcessRunner, ProcessStatus},
+    platform::PlatformContext,
+    requirements::{snap_requirements, BackendRequirements, RequirementSet},
 };
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     io::{self, Write},
-    path::Path,
-    time::Duration,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 pub struct SnapBackend;
+
+impl BackendRequirements for SnapBackend {
+    fn requirements(&self, context: &PlatformContext) -> RequirementSet {
+        snap_requirements(context)
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapAvailability {
+    Discovered,
+    Resolving,
+    Available,
+    Unavailable,
+    Stale,
+    BackendError,
+}
+
+impl SnapAvailability {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Discovered => "discovered",
+            Self::Resolving => "resolving",
+            Self::Available => "available",
+            Self::Unavailable => "unavailable",
+            Self::Stale => "stale",
+            Self::BackendError => "backend_error",
+        }
+    }
+}
+
+const SNAP_AVAILABILITY_KEY: &str = "snap.availability";
+const SNAP_DISCOVERY_QUERY_KEY: &str = "snap.discovery.query";
+const SNAP_DISCOVERY_VERSION_KEY: &str = "snap.discovery.version";
+const SNAP_DISCOVERY_PUBLISHER_KEY: &str = "snap.discovery.publisher";
+const SNAP_DISCOVERY_PUBLISHER_VERIFICATION_KEY: &str = "snap.discovery.publisher_verification";
+const SNAP_DISCOVERY_SUMMARY_KEY: &str = "snap.discovery.summary";
+const SNAP_DISCOVERY_NOTES_KEY: &str = "snap.discovery.notes";
+const SNAP_TRANSPORT_KEY: &str = "snap.transport";
+const SNAP_SOCKET_KEY: &str = "snap.socket";
+const SNAP_FALLBACK_REASON_KEY: &str = "snap.fallback_reason";
 
 const CAPABILITIES: &[Capability] = &[
     Capability::Search,
@@ -34,7 +81,8 @@ const CAPABILITIES: &[Capability] = &[
     Capability::List,
     Capability::Info,
 ];
-const REQUIREMENTS: &[CommandRequirement] = &[CommandRequirement {
+const REQUIREMENTS: &[CommandRequirement] = &[];
+const OPTIONAL_REQUIREMENTS: &[CommandRequirement] = &[CommandRequirement {
     key: "snap",
     alternatives: &["snap"],
 }];
@@ -56,16 +104,33 @@ impl Backend for SnapBackend {
         REQUIREMENTS
     }
 
+    fn optional_command_requirements(&self) -> &'static [CommandRequirement] {
+        OPTIONAL_REQUIREMENTS
+    }
+
     fn probe(&self, commands: &CommandMap, runner: &dyn ProcessRunner) -> AllpResult<()> {
-        let snap = command_path(self, commands, "snap")?;
-        capture_checked(
-            self,
-            runner,
-            NativeCommand::new(snap)
-                .arg("version")
-                .timeout(Duration::from_secs(2)),
-        )
-        .map(|_| ())
+        let socket = snapd_socket_path();
+        let rest = SnapdClient::new(&socket);
+        match rest.get("/v2/system-info") {
+            Ok(_) | Err(SnapdRestError::Daemon { .. }) => Ok(()),
+            Err(rest_error) if rest_error.allows_cli_fallback() => {
+                let snap = command_path(self, commands, "snap").map_err(|_| {
+                    AllpError::BackendNotDetected(format!(
+                        "Snap unavailable: {}; snap CLI fallback was not found",
+                        rest_error.fallback_reason()
+                    ))
+                })?;
+                capture_checked(
+                    self,
+                    runner,
+                    NativeCommand::new(snap)
+                        .arg("version")
+                        .timeout(Duration::from_secs(2)),
+                )
+                .map(|_| ())
+            }
+            Err(error) => Err(snapd_error(self, "probe", error)),
+        }
     }
 
     fn search(
@@ -74,61 +139,11 @@ impl Backend for SnapBackend {
         runner: &dyn ProcessRunner,
         query: &str,
     ) -> AllpResult<Vec<PackageCandidate>> {
-        let snap = command_path(self, commands, "snap")?;
-        let output = capture_checked(self, runner, NativeCommand::new(snap).args(["find", query]))?;
-        let mut candidates = Vec::new();
-
-        for line in output.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with("Name ") || line.starts_with("No matching") {
-                continue;
-            }
-            let columns: Vec<&str> = line.split_whitespace().collect();
-            if columns.len() < 4 {
-                continue;
-            }
-            let package_id = columns[0];
-            let version = columns.get(1).map(|value| (*value).to_owned());
-            let publisher = columns.get(2).map(|value| normalize_snap_publisher(value));
-            let mut metadata = BTreeMap::new();
-            let source = publisher.as_ref().map(|publisher| {
-                metadata.insert(
-                    "snap.publisher_name".to_owned(),
-                    publisher.name.clone().unwrap_or_default(),
-                );
-                metadata.insert(
-                    "snap.publisher_verification".to_owned(),
-                    publisher.verification.as_str().to_owned(),
-                );
-                publisher.human_label()
-            });
-            let description = (columns.len() > 4).then(|| columns[4..].join(" "));
-
-            let candidate_match = match_kind(package_id, query);
-            candidates.push(PackageCandidate {
-                backend_id: self.id().to_owned(),
-                backend_name: self.display_name().to_owned(),
-                category: self.category(),
-                domain: PackageDomain::Universal,
-                package_id: package_id.to_owned(),
-                display_name: package_id.to_owned(),
-                version,
-                description,
-                source,
-                installers: vec![self.display_name().to_owned()],
-                artifact_kind: "universal application".to_owned(),
-                scope: Some("system".to_owned()),
-                match_kind: candidate_match,
-                identity: PackageCandidate::infer_identity(
-                    candidate_match,
-                    PackageDomain::Universal,
-                    "universal application",
-                ),
-                metadata,
-            });
-        }
-
-        Ok(candidates)
+        Ok(search_snap_candidates(self, commands, runner, query)?
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.into_package_candidate(self, query))
+            .collect())
     }
 
     fn list_installed(
@@ -213,13 +228,20 @@ impl Backend for SnapBackend {
         runner: &dyn ProcessRunner,
         candidate: &PackageCandidate,
     ) -> AllpResult<InstallPreflight> {
-        let snap = command_path(self, commands, "snap")?;
-        let info = validate_snap_candidate(self, snap, runner, candidate)?;
-        validate_snap_architecture(&info)?;
-        let selected_channel = select_snap_install_channel(&info)?;
+        let validated = validate_snap_candidate(self, commands, runner, candidate)?;
+        let info = &validated.info;
+        validate_snap_architecture(self, candidate, info)?;
+        let selected_channel = select_snap_install_channel(self, candidate, info)?;
 
-        if let Some(installed) = inspect_snap_installed(snap, runner, &info.name)? {
-            let candidate_version = candidate_version_label(&info, selected_channel.as_ref());
+        let installed = if let Some(installed) = info.installed.clone() {
+            Some(installed)
+        } else if let Some(snap) = commands.get("snap") {
+            inspect_snap_installed(snap, runner, &info.name)?
+        } else {
+            None
+        };
+        if let Some(installed) = installed {
+            let candidate_version = candidate_version_label(info, selected_channel.as_ref());
             return Ok(InstallPreflight::AlreadyInstalled {
                 package_id: info.name.clone(),
                 installed_version: installed.version_label(),
@@ -238,7 +260,11 @@ impl Backend for SnapBackend {
             .collect();
 
         Ok(InstallPreflight::UseCandidate {
-            candidate: Box::new(resolve_snap_candidate(candidate, info, selected_channel)),
+            candidate: Box::new(resolve_snap_candidate(
+                candidate,
+                validated,
+                selected_channel,
+            )),
             warnings,
         })
     }
@@ -248,10 +274,11 @@ impl Backend for SnapBackend {
         commands: &CommandMap,
         candidate: &PackageCandidate,
     ) -> AllpResult<Option<InstallPreflightStatus>> {
-        let snap = command_path(self, commands, "snap")?;
+        let (command, display_command) = snap_resolution_status_command(commands, candidate)?;
         Ok(Some(InstallPreflightStatus {
             stage: "Validating Snap package...".to_owned(),
-            command: snap_info_command(snap, candidate)?,
+            command,
+            display_command: Some(display_command),
         }))
     }
 
@@ -266,6 +293,7 @@ impl Backend for SnapBackend {
         if !matches!(
             error,
             AllpError::ValidationFailed { .. }
+                | AllpError::CandidateUnavailable { .. }
                 | AllpError::ValidationStartFailed { .. }
                 | AllpError::MetadataParseFailed { .. }
         ) {
@@ -275,16 +303,15 @@ impl Backend for SnapBackend {
             return Err(error);
         }
 
-        let snap = command_path(self, commands, "snap")?;
-        let diagnostics_command = snap_info_command(snap, candidate)?;
         println!("✖ {error}");
 
         loop {
             println!();
             println!("[1] Search again");
-            println!("[2] Show Snap diagnostics");
+            println!("[2] Try another installer");
+            println!("[3] Show Snap diagnostics");
             println!("[0] Cancel");
-            print!("Choose an action [1-2, 0 to cancel]: ");
+            print!("Choose an action [1-3, 0 to cancel]: ");
             io::stdout().flush()?;
 
             let input =
@@ -292,14 +319,16 @@ impl Backend for SnapBackend {
 
             match input.as_str() {
                 "1" => return Ok(InstallPreflightRecovery::RetrySearch),
-                "2" => {
-                    print_snap_diagnostics(self, snap, runner, &diagnostics_command);
+                "2" => return Ok(InstallPreflightRecovery::TryAlternativeInstallers),
+                "3" => {
+                    print_snap_diagnostics(self, commands, runner, candidate);
                     loop {
                         println!();
                         println!("[1] Retry validation");
                         println!("[2] Search again");
+                        println!("[3] Try another installer");
                         println!("[0] Cancel");
-                        print!("Choose an action [1-2, 0 to cancel]: ");
+                        print!("Choose an action [1-3, 0 to cancel]: ");
                         io::stdout().flush()?;
                         match read_snap_action_line(
                             "input closed before a Snap validation action was selected",
@@ -308,13 +337,16 @@ impl Backend for SnapBackend {
                         {
                             "1" => return Ok(InstallPreflightRecovery::RetryValidation),
                             "2" => return Ok(InstallPreflightRecovery::RetrySearch),
+                            "3" => {
+                                return Ok(InstallPreflightRecovery::TryAlternativeInstallers);
+                            }
                             "0" => return Ok(InstallPreflightRecovery::Cancelled),
-                            _ => eprintln!("Please enter 1, 2, or 0."),
+                            _ => eprintln!("Please enter 1, 2, 3, or 0."),
                         }
                     }
                 }
                 "0" => return Ok(InstallPreflightRecovery::Cancelled),
-                _ => eprintln!("Please enter 1, 2, or 0."),
+                _ => eprintln!("Please enter 1, 2, 3, or 0."),
             }
         }
     }
@@ -324,6 +356,25 @@ impl Backend for SnapBackend {
         commands: &CommandMap,
         candidate: &PackageCandidate,
     ) -> AllpResult<ExecutionPlan> {
+        if candidate
+            .metadata
+            .get(SNAP_AVAILABILITY_KEY)
+            .map_or(true, |availability| {
+                availability != SnapAvailability::Available.as_str()
+            })
+        {
+            return Err(AllpError::CandidateUnavailable {
+                backend: self.display_name().to_owned(),
+                message: "Snap installation requires successful exact resolution".to_owned(),
+            });
+        }
+        if candidate
+            .metadata
+            .get(SNAP_TRANSPORT_KEY)
+            .is_some_and(|transport| transport == SnapTransport::Rest.as_str())
+        {
+            return snapd_install_plan(self, candidate);
+        }
         let snap = command_path(self, commands, "snap")?;
         let mut args = vec!["install".to_owned(), candidate.package_id.clone()];
         if candidate
@@ -493,6 +544,7 @@ struct SnapInfo {
     architectures: Vec<String>,
     raw_output: String,
     validation_warning: Option<String>,
+    installed: Option<InstalledSnap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -653,33 +705,822 @@ enum SnapErrorKind {
     AlreadyInstalled,
 }
 
-fn validate_snap_candidate(
-    backend: &SnapBackend,
-    snap: &Path,
-    runner: &dyn ProcessRunner,
-    candidate: &PackageCandidate,
-) -> AllpResult<SnapInfo> {
-    let package_id = normalize_snap_package_id(&candidate.package_id)?;
-    let command = snap_info_command(snap, candidate)?.timeout(Duration::from_secs(10));
-    let output = match runner.capture(&command) {
-        Ok(output) => output,
-        Err(AllpError::Io(error)) => {
-            return Err(snap_validation_start_error(
-                backend,
-                snap,
-                AllpError::Io(error),
+trait SnapService {
+    fn search(&self, query: &str) -> AllpResult<SnapWideSearch>;
+    fn resolve(&self, candidate: &PackageCandidate) -> AllpResult<SnapResolution>;
+    fn install(&self, request: SnapInstallRequest) -> AllpResult<SnapChangeId>;
+    fn change(&self, id: &SnapChangeId) -> AllpResult<SnapChange>;
+}
+
+struct SnapCliFallbackService<'a> {
+    backend: &'a SnapBackend,
+    snap: &'a Path,
+    runner: &'a dyn ProcessRunner,
+    fallback_reason: String,
+}
+
+struct SnapdRestService<'a> {
+    backend: &'a SnapBackend,
+    client: SnapdClient,
+}
+
+struct SnapWideSearch {
+    candidates: Vec<SnapCandidate>,
+}
+
+struct SnapResolution {
+    availability: SnapAvailability,
+    display_command: String,
+    output: Option<CommandOutput>,
+    info: Option<SnapInfo>,
+    native_error: Option<String>,
+    transport: SnapTransport,
+    fallback_reason: Option<String>,
+    rest_status: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+struct ValidatedSnap {
+    info: SnapInfo,
+    transport: SnapTransport,
+    socket_path: Option<PathBuf>,
+    fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapTransport {
+    Rest,
+    Cli,
+}
+
+impl SnapTransport {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Rest => "snapd-rest",
+            Self::Cli => "cli-fallback",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SnapInstallRequest {
+    name: String,
+    channel: String,
+    classic: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SnapChangeId(String);
+
+#[derive(Debug, Clone)]
+struct SnapChange {
+    ready: bool,
+    status: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SnapCandidate {
+    canonical_name: String,
+    discovery_version: Option<String>,
+    discovery_publisher: Option<SnapPublisher>,
+    discovery_summary: Option<String>,
+    discovery_notes: Vec<String>,
+    availability: SnapAvailability,
+    resolved: Option<SnapInfo>,
+    transport: SnapTransport,
+    fallback_reason: Option<String>,
+    socket_path: Option<PathBuf>,
+}
+
+impl SnapCandidate {
+    fn into_package_candidate(self, backend: &SnapBackend, query: &str) -> PackageCandidate {
+        let candidate_match = match_kind(&self.canonical_name, query);
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            SNAP_AVAILABILITY_KEY.to_owned(),
+            self.availability.as_str().to_owned(),
+        );
+        metadata.insert(SNAP_DISCOVERY_QUERY_KEY.to_owned(), query.to_owned());
+        metadata.insert(
+            SNAP_TRANSPORT_KEY.to_owned(),
+            self.transport.as_str().to_owned(),
+        );
+        if let Some(reason) = &self.fallback_reason {
+            metadata.insert(SNAP_FALLBACK_REASON_KEY.to_owned(), reason.clone());
+        }
+        if let Some(path) = &self.socket_path {
+            metadata.insert(SNAP_SOCKET_KEY.to_owned(), path.display().to_string());
+        }
+        if let Some(version) = &self.discovery_version {
+            metadata.insert(SNAP_DISCOVERY_VERSION_KEY.to_owned(), version.clone());
+        }
+        if let Some(summary) = &self.discovery_summary {
+            metadata.insert(SNAP_DISCOVERY_SUMMARY_KEY.to_owned(), summary.clone());
+        }
+        if !self.discovery_notes.is_empty() {
+            metadata.insert(
+                SNAP_DISCOVERY_NOTES_KEY.to_owned(),
+                self.discovery_notes.join(", "),
+            );
+        }
+        let source = self.discovery_publisher.as_ref().map(|publisher| {
+            if let Some(name) = &publisher.name {
+                metadata.insert(SNAP_DISCOVERY_PUBLISHER_KEY.to_owned(), name.clone());
+                metadata.insert("snap.publisher_name".to_owned(), name.clone());
+            }
+            metadata.insert(
+                SNAP_DISCOVERY_PUBLISHER_VERIFICATION_KEY.to_owned(),
+                publisher.verification.as_str().to_owned(),
+            );
+            metadata.insert(
+                "snap.publisher_verification".to_owned(),
+                publisher.verification.as_str().to_owned(),
+            );
+            publisher.human_label()
+        });
+
+        if let Some(info) = &self.resolved {
+            metadata.extend(snap_candidate_metadata(info, None));
+        }
+
+        PackageCandidate {
+            backend_id: backend.id().to_owned(),
+            backend_name: backend.display_name().to_owned(),
+            category: backend.category(),
+            domain: PackageDomain::Universal,
+            package_id: self.canonical_name.clone(),
+            display_name: self
+                .resolved
+                .as_ref()
+                .and_then(|info| info.title.clone())
+                .unwrap_or_else(|| self.canonical_name.clone()),
+            version: self
+                .resolved
+                .as_ref()
+                .and_then(|info| info.version.clone())
+                .or(self.discovery_version),
+            description: self
+                .resolved
+                .as_ref()
+                .and_then(|info| info.summary.clone().or(info.description.clone()))
+                .or(self.discovery_summary),
+            source,
+            installers: vec![backend.display_name().to_owned()],
+            artifact_kind: "universal application".to_owned(),
+            scope: Some("system".to_owned()),
+            match_kind: candidate_match,
+            identity: PackageCandidate::infer_identity(
+                candidate_match,
+                PackageDomain::Universal,
+                "universal application",
+            ),
+            metadata,
+        }
+    }
+}
+
+impl SnapService for SnapCliFallbackService<'_> {
+    fn search(&self, query: &str) -> AllpResult<SnapWideSearch> {
+        let command = snap_find_command(self.snap, query);
+        let output = self.runner.capture(&command)?;
+        if !output.success {
+            return Err(AllpError::CommandFailed {
+                backend: self.backend.display_name().to_owned(),
+                command: render_native_command(&command),
+                code: output.code,
+                stderr: output_message(&output),
+            });
+        }
+        let mut candidates = parse_snap_find(&output.stdout);
+        for candidate in &mut candidates {
+            candidate.transport = SnapTransport::Cli;
+            candidate.fallback_reason = Some(self.fallback_reason.clone());
+        }
+        Ok(SnapWideSearch { candidates })
+    }
+
+    fn resolve(&self, candidate: &PackageCandidate) -> AllpResult<SnapResolution> {
+        let package_id = normalize_snap_package_id(&candidate.package_id)?;
+        let command = snap_info_command(self.snap, candidate)?.timeout(Duration::from_secs(10));
+        let display_command = render_native_command(&command);
+        let output = match self.runner.capture(&command) {
+            Ok(output) => output,
+            Err(AllpError::Io(error)) => {
+                return Err(snap_validation_start_error(
+                    self.backend,
+                    self.snap,
+                    AllpError::Io(error),
+                ));
+            }
+            Err(error) => {
+                return Ok(SnapResolution {
+                    availability: SnapAvailability::BackendError,
+                    display_command,
+                    output: None,
+                    info: None,
+                    native_error: Some(error.to_string()),
+                    transport: SnapTransport::Cli,
+                    fallback_reason: Some(self.fallback_reason.clone()),
+                    rest_status: None,
+                });
+            }
+        };
+
+        if !output.success {
+            let native_error = snap_error_text(&output);
+            let availability =
+                if classify_snap_error(&native_error) == Some(SnapErrorKind::PackageNotFound) {
+                    SnapAvailability::Unavailable
+                } else {
+                    SnapAvailability::BackendError
+                };
+            return Ok(SnapResolution {
+                availability,
+                display_command,
+                output: Some(output),
+                info: None,
+                native_error: Some(native_error),
+                transport: SnapTransport::Cli,
+                fallback_reason: Some(self.fallback_reason.clone()),
+                rest_status: None,
+            });
+        }
+
+        let mut info = parse_snap_info(&output.stdout, &package_id)?;
+        if !output.stderr.trim().is_empty() {
+            info.validation_warning = Some(output.stderr.trim().to_owned());
+        }
+        Ok(SnapResolution {
+            availability: SnapAvailability::Available,
+            display_command,
+            output: Some(output),
+            info: Some(info),
+            native_error: None,
+            transport: SnapTransport::Cli,
+            fallback_reason: Some(self.fallback_reason.clone()),
+            rest_status: None,
+        })
+    }
+
+    fn install(&self, _request: SnapInstallRequest) -> AllpResult<SnapChangeId> {
+        Err(self
+            .backend
+            .unsupported("Snap CLI asynchronous change creation"))
+    }
+
+    fn change(&self, _id: &SnapChangeId) -> AllpResult<SnapChange> {
+        Err(self
+            .backend
+            .unsupported("Snap CLI asynchronous change monitoring"))
+    }
+}
+
+impl SnapdRestService<'_> {
+    fn search_result(&self, query: &str) -> Result<SnapWideSearch, SnapdRestError> {
+        let path = format!("/v2/find?q={}&scope=wide", percent_encode(query));
+        let response = self.client.get(&path)?;
+        let results = response.result.as_array().ok_or_else(|| {
+            SnapdRestError::UnrecognizedResponse(
+                "snapd discovery result was not an array".to_owned(),
+            )
+        })?;
+        let mut candidates = Vec::new();
+        for result in results {
+            candidates.push(parse_snapd_candidate(result, self.client.socket_path())?);
+        }
+        Ok(SnapWideSearch { candidates })
+    }
+
+    fn resolve_result(
+        &self,
+        candidate: &PackageCandidate,
+    ) -> Result<SnapResolution, SnapdRestError> {
+        let package_id = normalize_snap_package_id(&candidate.package_id)
+            .map_err(|error| SnapdRestError::UnrecognizedResponse(error.to_string()))?;
+        let path = format!("/v2/find?name={}", percent_encode(&package_id));
+        let (_command, display_command) =
+            snapd_diagnostic_command("GET", &path, self.client.socket_path());
+        let response = match self.client.get(&path) {
+            Ok(response) => response,
+            Err(SnapdRestError::Daemon {
+                status_code: 404,
+                kind,
+                message,
+                raw_body: _,
+            }) if kind.as_deref() == Some("snap-not-found") => {
+                return Ok(SnapResolution {
+                    availability: SnapAvailability::Unavailable,
+                    display_command,
+                    output: None,
+                    info: None,
+                    native_error: Some(format!(
+                        "{message} (kind: snap-not-found, value: {package_id})"
+                    )),
+                    transport: SnapTransport::Rest,
+                    fallback_reason: None,
+                    rest_status: Some(404),
+                });
+            }
+            Err(error @ SnapdRestError::Daemon { .. }) => {
+                let status = match &error {
+                    SnapdRestError::Daemon { status_code, .. } => Some(*status_code),
+                    _ => None,
+                };
+                return Ok(SnapResolution {
+                    availability: SnapAvailability::BackendError,
+                    display_command,
+                    output: None,
+                    info: None,
+                    native_error: Some(error.to_string()),
+                    transport: SnapTransport::Rest,
+                    fallback_reason: None,
+                    rest_status: status,
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        let results = response.result.as_array().ok_or_else(|| {
+            SnapdRestError::UnrecognizedResponse("snapd exact result was not an array".to_owned())
+        })?;
+        let Some(result) = results.iter().find(|result| {
+            result
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.eq_ignore_ascii_case(&package_id))
+        }) else {
+            return Ok(SnapResolution {
+                availability: SnapAvailability::Unavailable,
+                display_command,
+                output: None,
+                info: None,
+                native_error: Some(
+                    "snapd returned no exact result for the canonical name".to_owned(),
+                ),
+                transport: SnapTransport::Rest,
+                fallback_reason: None,
+                rest_status: Some(response.status_code),
+            });
+        };
+        let mut info = parse_snapd_info(result, &response.raw_body, &package_id)?;
+        info.installed = self.inspect_installed(&package_id).ok().flatten();
+        Ok(SnapResolution {
+            availability: SnapAvailability::Available,
+            display_command,
+            output: None,
+            info: Some(info),
+            native_error: None,
+            transport: SnapTransport::Rest,
+            fallback_reason: None,
+            rest_status: Some(response.status_code),
+        })
+    }
+
+    fn inspect_installed(&self, package_id: &str) -> Result<Option<InstalledSnap>, SnapdRestError> {
+        let path = format!("/v2/snaps/{}", percent_encode(package_id));
+        match self.client.get(&path) {
+            Ok(response) => Ok(Some(InstalledSnap {
+                version: response
+                    .result
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                channel: response
+                    .result
+                    .get("tracking-channel")
+                    .or_else(|| response.result.get("channel"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            })),
+            Err(SnapdRestError::Daemon {
+                status_code: 404,
+                kind,
+                ..
+            }) if matches!(kind.as_deref(), Some("snap-not-found" | "not-installed")) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn install_result(&self, request: SnapInstallRequest) -> Result<SnapChangeId, SnapdRestError> {
+        let path = format!("/v2/snaps/{}", percent_encode(&request.name));
+        let body = snap_install_request_body(&request);
+        let response = self.client.post(&path, &body)?;
+        if response.response_type != "async" {
+            return Err(SnapdRestError::UnrecognizedResponse(
+                "snapd install did not return an asynchronous change".to_owned(),
             ));
         }
-        Err(error) => return Err(snap_validation_capture_error(backend, &command, error)),
+        response
+            .change
+            .filter(|change| !change.trim().is_empty())
+            .map(SnapChangeId)
+            .ok_or_else(|| {
+                SnapdRestError::UnrecognizedResponse(
+                    "snapd install response did not include a change ID".to_owned(),
+                )
+            })
+    }
+
+    fn change_result(&self, id: &SnapChangeId) -> Result<SnapChange, SnapdRestError> {
+        let path = format!("/v2/changes/{}", percent_encode(&id.0));
+        let response = self.client.get(&path)?;
+        Ok(parse_snap_change(&response.result))
+    }
+}
+
+fn snap_install_request_body(request: &SnapInstallRequest) -> Value {
+    let mut body = serde_json::Map::new();
+    body.insert("action".to_owned(), Value::String("install".to_owned()));
+    body.insert("channel".to_owned(), Value::String(request.channel.clone()));
+    if request.classic {
+        body.insert("classic".to_owned(), Value::Bool(true));
+    }
+    Value::Object(body)
+}
+
+fn parse_snap_change(result: &Value) -> SnapChange {
+    let status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("Unknown")
+        .to_owned();
+    let ready = result
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(matches!(
+            status.as_str(),
+            "Done" | "Error" | "Abort" | "Undone"
+        ));
+    let error = result
+        .get("err")
+        .and_then(Value::as_str)
+        .filter(|error| !error.trim().is_empty())
+        .map(str::to_owned);
+    SnapChange {
+        ready,
+        status,
+        error,
+    }
+}
+
+impl SnapService for SnapdRestService<'_> {
+    fn search(&self, query: &str) -> AllpResult<SnapWideSearch> {
+        self.search_result(query)
+            .map_err(|error| snapd_error(self.backend, "discovery", error))
+    }
+
+    fn resolve(&self, candidate: &PackageCandidate) -> AllpResult<SnapResolution> {
+        self.resolve_result(candidate)
+            .map_err(|error| snapd_error(self.backend, "exact resolution", error))
+    }
+
+    fn install(&self, request: SnapInstallRequest) -> AllpResult<SnapChangeId> {
+        self.install_result(request)
+            .map_err(|error| snapd_error(self.backend, "install", error))
+    }
+
+    fn change(&self, id: &SnapChangeId) -> AllpResult<SnapChange> {
+        self.change_result(id)
+            .map_err(|error| snapd_error(self.backend, "change monitoring", error))
+    }
+}
+
+fn search_snap_candidates(
+    backend: &SnapBackend,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    query: &str,
+) -> AllpResult<SnapWideSearch> {
+    let rest = SnapdRestService {
+        backend,
+        client: SnapdClient::new(snapd_socket_path()),
     };
-    if !output.success {
-        return Err(snap_validation_failed_error(backend, &command, &output));
+    match rest.search_result(query) {
+        Ok(search) => Ok(search),
+        Err(error) if error.allows_cli_fallback() => {
+            let snap = commands.get("snap").ok_or_else(|| {
+                AllpError::BackendNotDetected(format!(
+                    "Snap REST discovery unavailable ({}); snap CLI fallback was not found",
+                    error.fallback_reason()
+                ))
+            })?;
+            SnapCliFallbackService {
+                backend,
+                snap,
+                runner,
+                fallback_reason: error.fallback_reason(),
+            }
+            .search(query)
+        }
+        Err(error) => Err(snapd_error(backend, "discovery", error)),
     }
-    let mut info = parse_snap_info(&output.stdout, &package_id)?;
-    if !output.stderr.trim().is_empty() {
-        info.validation_warning = Some(output.stderr.trim().to_owned());
+}
+
+fn validate_snap_candidate(
+    backend: &SnapBackend,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    candidate: &PackageCandidate,
+) -> AllpResult<ValidatedSnap> {
+    let preferred = candidate
+        .metadata
+        .get(SNAP_TRANSPORT_KEY)
+        .map(String::as_str)
+        .unwrap_or(SnapTransport::Rest.as_str());
+    let resolution = if preferred == SnapTransport::Cli.as_str() {
+        resolve_with_cli(
+            backend,
+            commands,
+            runner,
+            candidate,
+            candidate
+                .metadata
+                .get(SNAP_FALLBACK_REASON_KEY)
+                .cloned()
+                .unwrap_or_else(|| "candidate was discovered through the CLI fallback".to_owned()),
+        )?
+    } else {
+        let socket = candidate
+            .metadata
+            .get(SNAP_SOCKET_KEY)
+            .map(PathBuf::from)
+            .unwrap_or_else(snapd_socket_path);
+        let rest = SnapdRestService {
+            backend,
+            client: SnapdClient::new(socket),
+        };
+        match rest.resolve_result(candidate) {
+            Ok(resolution) => resolution,
+            Err(error) if error.allows_cli_fallback() => resolve_with_cli(
+                backend,
+                commands,
+                runner,
+                candidate,
+                error.fallback_reason(),
+            )?,
+            Err(error) => return Err(snapd_error(backend, "exact resolution", error)),
+        }
+    };
+    match resolution.info {
+        Some(info) => Ok(ValidatedSnap {
+            info,
+            transport: resolution.transport,
+            socket_path: (resolution.transport == SnapTransport::Rest).then(|| {
+                candidate
+                    .metadata
+                    .get(SNAP_SOCKET_KEY)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(snapd_socket_path)
+            }),
+            fallback_reason: resolution.fallback_reason,
+        }),
+        None => Err(snap_resolution_unavailable_error(
+            backend,
+            candidate,
+            &resolution,
+        )),
     }
-    Ok(info)
+}
+
+fn resolve_with_cli(
+    backend: &SnapBackend,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    candidate: &PackageCandidate,
+    fallback_reason: String,
+) -> AllpResult<SnapResolution> {
+    let snap = commands.get("snap").ok_or_else(|| {
+        AllpError::BackendNotDetected(format!(
+            "Snap REST exact resolution unavailable ({fallback_reason}); snap CLI fallback was not found"
+        ))
+    })?;
+    SnapCliFallbackService {
+        backend,
+        snap,
+        runner,
+        fallback_reason,
+    }
+    .resolve(candidate)
+}
+
+fn snap_find_command(snap: &Path, query: &str) -> NativeCommand {
+    NativeCommand::new(snap).args(["find", query])
+}
+
+pub fn snapd_socket_path() -> PathBuf {
+    std::env::var_os("ALLP_SNAPD_SOCKET")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/run/snapd.socket"))
+}
+
+fn snapd_error(backend: &SnapBackend, stage: &str, error: SnapdRestError) -> AllpError {
+    let code = match &error {
+        SnapdRestError::Daemon { status_code, .. } => Some(i32::from(*status_code)),
+        _ => None,
+    };
+    AllpError::CommandFailed {
+        backend: backend.display_name().to_owned(),
+        command: format!("snapd REST {stage}"),
+        code,
+        stderr: error.to_string(),
+    }
+}
+
+fn snapd_diagnostic_command(method: &str, path: &str, socket: &Path) -> (NativeCommand, String) {
+    (
+        NativeCommand::new("snapd-rest").args([method, path]),
+        format!("{method} http://localhost{path} via {}", socket.display()),
+    )
+}
+
+fn snap_resolution_status_command(
+    commands: &CommandMap,
+    candidate: &PackageCandidate,
+) -> AllpResult<(NativeCommand, String)> {
+    let package_id = normalize_snap_package_id(&candidate.package_id)?;
+    if candidate
+        .metadata
+        .get(SNAP_TRANSPORT_KEY)
+        .map_or(true, |transport| transport == SnapTransport::Rest.as_str())
+    {
+        let socket = candidate
+            .metadata
+            .get(SNAP_SOCKET_KEY)
+            .map(PathBuf::from)
+            .unwrap_or_else(snapd_socket_path);
+        let path = format!("/v2/find?name={}", percent_encode(&package_id));
+        return Ok(snapd_diagnostic_command("GET", &path, &socket));
+    }
+    let snap = commands.get("snap").ok_or_else(|| {
+        AllpError::BackendNotDetected("snap CLI fallback executable was not found".to_owned())
+    })?;
+    let command = NativeCommand::new(snap).args(["info", package_id.as_str()]);
+    let display = render_native_command(&command);
+    Ok((command, display))
+}
+
+fn parse_snapd_candidate(
+    result: &Value,
+    socket_path: &Path,
+) -> Result<SnapCandidate, SnapdRestError> {
+    let canonical_name = result
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| {
+            SnapdRestError::UnrecognizedResponse(
+                "snapd discovery candidate did not include a name".to_owned(),
+            )
+        })?
+        .to_owned();
+    let mut notes = Vec::new();
+    if let Some(confinement) = result.get("confinement").and_then(Value::as_str) {
+        notes.push(confinement.to_owned());
+    }
+    Ok(SnapCandidate {
+        canonical_name,
+        discovery_version: result
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        discovery_publisher: parse_snapd_publisher(result.get("publisher")),
+        discovery_summary: result
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        discovery_notes: notes,
+        availability: SnapAvailability::Discovered,
+        resolved: None,
+        transport: SnapTransport::Rest,
+        fallback_reason: None,
+        socket_path: Some(socket_path.to_path_buf()),
+    })
+}
+
+fn parse_snapd_info(
+    result: &Value,
+    raw_output: &str,
+    fallback_name: &str,
+) -> Result<SnapInfo, SnapdRestError> {
+    let name = result
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(fallback_name)
+        .to_owned();
+    let channels = parse_snapd_channels(result.get("channels"));
+    let confinement = result
+        .get("confinement")
+        .and_then(Value::as_str)
+        .map(SnapConfinement::parse)
+        .and_then(SnapConfinement::known)
+        .or_else(|| {
+            channels
+                .iter()
+                .find_map(|channel| channel.confinement.known())
+        })
+        .unwrap_or(SnapConfinement::Unknown);
+    let mut architectures = parse_snapd_architectures(result.get("architectures"));
+    for channel in result
+        .get("channels")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|channels| channels.values())
+    {
+        if let Some(architecture) = channel.get("architecture").and_then(Value::as_str) {
+            if !architectures.iter().any(|current| current == architecture) {
+                architectures.push(architecture.to_owned());
+            }
+        }
+    }
+    Ok(SnapInfo {
+        name,
+        title: result
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        summary: result
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        description: result
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        version: result
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        publisher: parse_snapd_publisher(result.get("publisher")),
+        confinement,
+        channels,
+        architectures,
+        raw_output: raw_output.to_owned(),
+        validation_warning: None,
+        installed: None,
+    })
+}
+
+fn parse_snapd_publisher(value: Option<&Value>) -> Option<SnapPublisher> {
+    let value = value?;
+    if let Some(name) = value.as_str() {
+        return Some(normalize_snap_publisher(name));
+    }
+    let publisher = value.as_object()?;
+    let name = publisher
+        .get("display-name")
+        .or_else(|| publisher.get("username"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_owned);
+    let verification = match publisher
+        .get("validation")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+    {
+        "verified" | "starred" => SnapPublisherVerification::Verified,
+        "unproven" | "unverified" => SnapPublisherVerification::Unverified,
+        _ => SnapPublisherVerification::Unknown,
+    };
+    Some(SnapPublisher { name, verification })
+}
+
+fn parse_snapd_channels(value: Option<&Value>) -> Vec<SnapChannel> {
+    let Some(channels) = value.and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    channels
+        .iter()
+        .map(|(name, details)| SnapChannel {
+            name: name.clone(),
+            risk: SnapChannelRisk::parse(name),
+            version: details
+                .get("version")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            confinement: details
+                .get("confinement")
+                .and_then(Value::as_str)
+                .map(SnapConfinement::parse)
+                .unwrap_or(SnapConfinement::Unknown),
+            available: !details.is_null(),
+        })
+        .collect()
+}
+
+fn parse_snapd_architectures(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flat_map(|architectures| architectures.iter())
+        .filter_map(|architecture| {
+            architecture
+                .as_str()
+                .or_else(|| architecture.get("name").and_then(Value::as_str))
+        })
+        .map(str::to_ascii_lowercase)
+        .collect()
 }
 
 fn snap_info_command(snap: &Path, candidate: &PackageCandidate) -> AllpResult<NativeCommand> {
@@ -745,6 +1586,48 @@ fn strip_ansi_escape_sequences(value: &str) -> String {
         output.push(character);
     }
     output
+}
+
+fn parse_snap_find(output: &str) -> Vec<SnapCandidate> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("Name ") || line.starts_with("No matching") {
+                return None;
+            }
+            let columns = line.split_whitespace().collect::<Vec<_>>();
+            if columns.len() < 4 {
+                return None;
+            }
+
+            let notes = columns
+                .get(3)
+                .filter(|value| !matches!(**value, "-" | "—"))
+                .map(|value| {
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            Some(SnapCandidate {
+                canonical_name: columns[0].to_owned(),
+                discovery_version: columns.get(1).map(|value| (*value).to_owned()),
+                discovery_publisher: columns.get(2).map(|value| normalize_snap_publisher(value)),
+                discovery_summary: (columns.len() > 4).then(|| columns[4..].join(" ")),
+                discovery_notes: notes,
+                availability: SnapAvailability::Discovered,
+                resolved: None,
+                transport: SnapTransport::Cli,
+                fallback_reason: None,
+                socket_path: None,
+            })
+        })
+        .collect()
 }
 
 fn parse_snap_info(output: &str, fallback_name: &str) -> AllpResult<SnapInfo> {
@@ -853,6 +1736,7 @@ fn parse_snap_info(output: &str, fallback_name: &str) -> AllpResult<SnapInfo> {
             .unwrap_or_default(),
         raw_output: output.to_owned(),
         validation_warning: None,
+        installed: None,
     })
 }
 
@@ -915,7 +1799,11 @@ fn parse_snap_architectures(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn validate_snap_architecture(info: &SnapInfo) -> AllpResult<()> {
+fn validate_snap_architecture(
+    backend: &SnapBackend,
+    candidate: &PackageCandidate,
+    info: &SnapInfo,
+) -> AllpResult<()> {
     if info.architectures.is_empty() {
         return Ok(());
     }
@@ -928,15 +1816,17 @@ fn validate_snap_architecture(info: &SnapInfo) -> AllpResult<()> {
         return Ok(());
     }
 
-    Err(AllpError::ValidationFailed {
-        backend: "Snap".to_owned(),
-        message: format!(
+    Err(snap_unavailable_message(
+        backend,
+        candidate,
+        SnapAvailability::Unavailable,
+        format!(
             "Snap \"{}\" is not available for architecture {}. Available architectures: {}",
             info.name,
             current,
             info.architectures.join(", ")
         ),
-    })
+    ))
 }
 
 fn current_snap_architecture() -> String {
@@ -951,9 +1841,21 @@ fn current_snap_architecture() -> String {
     .to_owned()
 }
 
-fn select_snap_install_channel(info: &SnapInfo) -> AllpResult<Option<SnapChannel>> {
+fn select_snap_install_channel(
+    backend: &SnapBackend,
+    candidate: &PackageCandidate,
+    info: &SnapInfo,
+) -> AllpResult<Option<SnapChannel>> {
     if info.channels.is_empty() {
-        return Ok(None);
+        return Err(snap_unavailable_message(
+            backend,
+            candidate,
+            SnapAvailability::Unavailable,
+            format!(
+                "Snap \"{}\" has no installable channels in exact metadata.",
+                info.name
+            ),
+        ));
     }
 
     let stable_channels = info
@@ -1054,9 +1956,15 @@ fn parse_snap_list_entry(output: &str, package_id: &str) -> Option<InstalledSnap
 
 fn resolve_snap_candidate(
     candidate: &PackageCandidate,
-    info: SnapInfo,
+    validated: ValidatedSnap,
     selected_channel: Option<SnapChannel>,
 ) -> PackageCandidate {
+    let ValidatedSnap {
+        info,
+        transport,
+        socket_path,
+        fallback_reason,
+    } = validated;
     let mut resolved = candidate.clone();
     resolved.package_id = info.name.clone();
     resolved.display_name = info.title.clone().unwrap_or_else(|| info.name.clone());
@@ -1074,6 +1982,20 @@ fn resolve_snap_candidate(
     resolved.scope = Some("system".to_owned());
     resolved.metadata = snap_candidate_metadata(&info, selected_channel.as_ref());
     resolved
+        .metadata
+        .insert(SNAP_TRANSPORT_KEY.to_owned(), transport.as_str().to_owned());
+    if let Some(socket_path) = socket_path {
+        resolved.metadata.insert(
+            SNAP_SOCKET_KEY.to_owned(),
+            socket_path.display().to_string(),
+        );
+    }
+    if let Some(reason) = fallback_reason {
+        resolved
+            .metadata
+            .insert(SNAP_FALLBACK_REASON_KEY.to_owned(), reason);
+    }
+    resolved
 }
 
 fn snap_candidate_metadata(
@@ -1081,6 +2003,10 @@ fn snap_candidate_metadata(
     selected_channel: Option<&SnapChannel>,
 ) -> BTreeMap<String, String> {
     let mut metadata = BTreeMap::new();
+    metadata.insert(
+        SNAP_AVAILABILITY_KEY.to_owned(),
+        SnapAvailability::Available.as_str().to_owned(),
+    );
     metadata.insert("snap.canonical_name".to_owned(), info.name.clone());
     metadata.insert(
         "snap.confinement".to_owned(),
@@ -1158,6 +2084,121 @@ fn snap_plan_details(candidate: &PackageCandidate) -> Vec<(String, String)> {
     details
 }
 
+fn snapd_install_plan(
+    backend: &SnapBackend,
+    candidate: &PackageCandidate,
+) -> AllpResult<ExecutionPlan> {
+    let socket = candidate
+        .metadata
+        .get(SNAP_SOCKET_KEY)
+        .map(PathBuf::from)
+        .unwrap_or_else(snapd_socket_path);
+    let channel = candidate
+        .metadata
+        .get("snap.channel")
+        .cloned()
+        .ok_or_else(|| AllpError::CandidateUnavailable {
+            backend: backend.display_name().to_owned(),
+            message: "Snap exact metadata did not select an installable channel".to_owned(),
+        })?;
+    let classic = candidate
+        .metadata
+        .get("snap.confinement")
+        .is_some_and(|value| value.eq_ignore_ascii_case("classic"));
+    let executable = std::env::current_exe().map_err(AllpError::Io)?;
+    let mut command = NativeCommand::new(executable).args([
+        "internal-snapd-install",
+        "--socket",
+        socket.to_string_lossy().as_ref(),
+        "--name",
+        candidate.package_id.as_str(),
+        "--channel",
+        channel.as_str(),
+    ]);
+    if classic {
+        command = command.arg("--classic");
+    }
+    let mut details = snap_plan_details(candidate);
+    details.push(("Transport".to_owned(), "snapd REST API".to_owned()));
+    details.push((
+        "Request".to_owned(),
+        format!(
+            "POST http://localhost/v2/snaps/{} via {}",
+            percent_encode(&candidate.package_id),
+            socket.display()
+        ),
+    ));
+    Ok(ExecutionPlan {
+        backend_id: backend.id().to_owned(),
+        backend_name: backend.display_name().to_owned(),
+        operation: OperationKind::Install,
+        action: "Install Snap application through snapd".to_owned(),
+        package_id: Some(candidate.package_id.clone()),
+        source: candidate.source.clone(),
+        scope: candidate.scope.clone(),
+        details,
+        command,
+        privilege: PrivilegeRequirement::RootRequired,
+        requires_root: true,
+        interactive: false,
+    })
+}
+
+pub fn run_snapd_install(
+    socket: &Path,
+    name: &str,
+    channel: &str,
+    classic: bool,
+) -> AllpResult<()> {
+    let name = normalize_snap_package_id(name)?;
+    if channel.trim().is_empty() || channel.chars().any(char::is_control) {
+        return Err(AllpError::InvalidInput(
+            "Snap install channel is invalid".to_owned(),
+        ));
+    }
+    let backend = SnapBackend;
+    let service = SnapdRestService {
+        backend: &backend,
+        client: SnapdClient::new(socket),
+    };
+    let change_id = service.install(SnapInstallRequest {
+        name,
+        channel: channel.to_owned(),
+        classic,
+    })?;
+    let started = Instant::now();
+    let timeout = Duration::from_secs(10 * 60);
+    let mut previous_status = String::new();
+    loop {
+        if started.elapsed() >= timeout {
+            return Err(AllpError::Timeout(format!(
+                "snapd change {} did not finish within {} seconds",
+                change_id.0,
+                timeout.as_secs()
+            )));
+        }
+        let change = service.change(&change_id)?;
+        if change.status != previous_status {
+            println!("snapd change {}: {}", change_id.0, change.status);
+            previous_status = change.status.clone();
+        }
+        if change.ready {
+            if change.status == "Done" && change.error.is_none() {
+                return Ok(());
+            }
+            return Err(AllpError::CommandFailed {
+                backend: backend.display_name().to_owned(),
+                command: format!("GET /v2/changes/{}", change_id.0),
+                code: None,
+                stderr: change
+                    .error
+                    .unwrap_or_else(|| format!("snapd change ended with status {}", change.status)),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
 fn snap_info_extra(info: &SnapInfo) -> Vec<(String, String)> {
     let mut extra = Vec::new();
     if let Some(publisher) = &info.publisher {
@@ -1216,42 +2257,71 @@ fn snap_validation_start_error(backend: &SnapBackend, snap: &Path, error: AllpEr
     }
 }
 
-fn snap_validation_capture_error(
+fn snap_resolution_unavailable_error(
     backend: &SnapBackend,
-    command: &NativeCommand,
-    error: AllpError,
+    candidate: &PackageCandidate,
+    resolution: &SnapResolution,
 ) -> AllpError {
-    AllpError::ValidationFailed {
+    let package = candidate.package_id.as_str();
+    let native_error = resolution
+        .native_error
+        .as_deref()
+        .unwrap_or("exact Snap metadata is unavailable");
+    let mut message = format!(
+        "The package was returned by Snap search, but exact installable\nmetadata is not available for this system.\n\nPackage: {package}\nSearch status: Found\nInstall status: {}\nNative error: {native_error}",
+        match resolution.availability {
+            SnapAvailability::Stale => "Stale",
+            SnapAvailability::BackendError => "BackendError",
+            _ => "Unavailable",
+        }
+    );
+    message.push_str(&format!(
+        "\nResolution command: {}",
+        resolution.display_command
+    ));
+    if let Some(output) = &resolution.output {
+        message.push_str(&format!(
+            "\nResolution exit code: {}",
+            output
+                .code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unavailable".to_owned())
+        ));
+    }
+    if let Some(status) = resolution.rest_status {
+        message.push_str(&format!("\nResolution HTTP status: {status}"));
+    }
+    message.push_str(&format!(
+        "\nResolution transport: {}",
+        resolution.transport.as_str()
+    ));
+    if let Some(reason) = &resolution.fallback_reason {
+        message.push_str(&format!("\nCLI fallback reason: {reason}"));
+    }
+
+    AllpError::CandidateUnavailable {
         backend: backend.display_name().to_owned(),
-        message: format!(
-            "  Command: {}\n  Exit code: unavailable\n  Error: {error}",
-            render_native_command(command)
-        ),
+        message,
     }
 }
 
-fn snap_validation_failed_error(
+fn snap_unavailable_message(
     backend: &SnapBackend,
-    command: &NativeCommand,
-    output: &CommandOutput,
+    candidate: &PackageCandidate,
+    availability: SnapAvailability,
+    native_error: String,
 ) -> AllpError {
-    let mut message = format!(
-        "  Command: {}\n  Exit code: {}\n",
-        render_native_command(command),
-        output
-            .code
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "unavailable".to_owned())
-    );
-    if let Some(signal) = output.signal {
-        message.push_str(&format!("  Signal: {signal}\n"));
-    }
-    message.push_str(&format!("  Duration: {}ms\n", output.duration.as_millis()));
-    message.push_str(&format!("  Error: {}", snap_error_text(output)));
-
-    AllpError::ValidationFailed {
+    let package = candidate.package_id.as_str();
+    AllpError::CandidateUnavailable {
         backend: backend.display_name().to_owned(),
-        message,
+        message: format!(
+            "The package was returned by Snap search, but exact installable\nmetadata is not available for this system.\n\nPackage: {package}\nSearch status: Found\nInstall status: {}\nNative error: {native_error}",
+            match availability {
+                SnapAvailability::Stale => "Stale",
+                SnapAvailability::BackendError => "BackendError",
+                _ => "Unavailable",
+            }
+        ),
     }
 }
 
@@ -1300,21 +2370,131 @@ fn output_message(output: &CommandOutput) -> String {
 
 fn print_snap_diagnostics(
     _backend: &SnapBackend,
-    snap: &Path,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    candidate: &PackageCandidate,
+) {
+    let discovery_query = candidate
+        .metadata
+        .get(SNAP_DISCOVERY_QUERY_KEY)
+        .map(String::as_str)
+        .unwrap_or(candidate.package_id.as_str());
+
+    println!("\nSnap diagnostics\n");
+    let transport = candidate
+        .metadata
+        .get(SNAP_TRANSPORT_KEY)
+        .map(String::as_str)
+        .unwrap_or(SnapTransport::Rest.as_str());
+    if transport == SnapTransport::Rest.as_str() {
+        let socket = candidate
+            .metadata
+            .get(SNAP_SOCKET_KEY)
+            .map(PathBuf::from)
+            .unwrap_or_else(snapd_socket_path);
+        let client = SnapdClient::new(&socket);
+        let discovery_path = format!("/v2/find?q={}&scope=wide", percent_encode(discovery_query));
+        let exact_path = format!("/v2/find?name={}", percent_encode(&candidate.package_id));
+        println!("Transport:");
+        println!("  snapd REST API");
+        println!("Socket:");
+        println!("  {}", socket.display());
+        println!();
+        print_snapd_diagnostic_request("Discovery", &client, &discovery_path);
+        println!();
+        let state = print_snapd_diagnostic_request("Exact resolution", &client, &exact_path);
+        println!();
+        println!("Candidate state:");
+        println!("  {}", state.as_str());
+    } else if let Some(snap) = commands.get("snap") {
+        let discovery_command = snap_find_command(snap, discovery_query);
+        let exact_command = match snap_info_command(snap, candidate) {
+            Ok(command) => command,
+            Err(error) => {
+                println!("Unable to construct Snap CLI diagnostics: {error}");
+                return;
+            }
+        };
+        println!("Transport:");
+        println!("  Snap CLI fallback");
+        println!("Executable:");
+        println!("  {}", snap.display());
+        if let Some(reason) = candidate.metadata.get(SNAP_FALLBACK_REASON_KEY) {
+            println!("Fallback reason:");
+            println!("  {reason}");
+        }
+        let _ = print_snap_cli_diagnostic_request("Discovery", runner, &discovery_command);
+        println!();
+        println!("Exact resolution command:");
+        println!("  {}", render_native_command(&exact_command));
+        let state = print_snap_cli_diagnostic_request("Resolution", runner, &exact_command);
+        println!();
+        println!("Candidate state:");
+        println!("  {}", state.as_str());
+    } else {
+        println!("Snap CLI fallback executable is unavailable.");
+    }
+    println!();
+    println!("Architecture:");
+    println!("  {}", current_snap_architecture());
+}
+
+fn print_snapd_diagnostic_request(
+    label: &str,
+    client: &SnapdClient,
+    path: &str,
+) -> SnapAvailability {
+    println!("{label} request:");
+    println!("  GET http://localhost{path}");
+    match client.get(path) {
+        Ok(response) => {
+            println!("{label} status:");
+            println!(
+                "  HTTP {} / snapd {}",
+                response.http_status, response.status_code
+            );
+            println!("{label} response:");
+            println!("  {}", indent_block(&bounded_block(&response.raw_body)));
+            SnapAvailability::Available
+        }
+        Err(SnapdRestError::Daemon {
+            status_code,
+            kind,
+            message,
+            raw_body,
+        }) => {
+            println!("{label} status:");
+            println!("  snapd {status_code}");
+            println!("Error kind:");
+            println!("  {}", kind.as_deref().unwrap_or("unknown"));
+            println!("Error:");
+            println!("  {message}");
+            println!("{label} response:");
+            println!("  {}", indent_block(&bounded_block(&raw_body)));
+            if status_code == 404 && kind.as_deref() == Some("snap-not-found") {
+                SnapAvailability::Unavailable
+            } else {
+                SnapAvailability::BackendError
+            }
+        }
+        Err(error) => {
+            println!("{label} error:");
+            println!("  {error}");
+            SnapAvailability::BackendError
+        }
+    }
+}
+
+fn print_snap_cli_diagnostic_request(
+    label: &str,
     runner: &dyn ProcessRunner,
     command: &NativeCommand,
-) {
-    println!("\nSnap diagnostics\n");
-    println!("Executable:");
-    println!("  {}", snap.to_string_lossy());
-    println!();
-    println!("Command:");
+) -> SnapAvailability {
+    println!("{label} command:");
     println!("  {}", render_native_command(command));
-
     match runner.capture(command) {
         Ok(output) => {
-            println!();
-            println!("Exit code:");
+            println!("{label} exit code:");
             println!(
                 "  {}",
                 output
@@ -1323,27 +2503,27 @@ fn print_snap_diagnostics(
                     .unwrap_or_else(|| "unavailable".to_owned())
             );
             if let Some(signal) = output.signal {
-                println!();
-                println!("Signal:");
+                println!("{label} signal:");
                 println!("  {signal}");
             }
-            println!();
-            println!("stdout:");
+            println!("{label} stdout:");
             println!("  {}", indent_block(&bounded_block(&output.stdout)));
-            println!();
-            println!("stderr:");
+            println!("{label} stderr:");
             println!("  {}", indent_block(&bounded_block(&output.stderr)));
+            if output.success {
+                SnapAvailability::Available
+            } else if classify_snap_error(&output_message(&output))
+                == Some(SnapErrorKind::PackageNotFound)
+            {
+                SnapAvailability::Unavailable
+            } else {
+                SnapAvailability::BackendError
+            }
         }
         Err(error) => {
-            println!();
-            println!("Exit code:");
-            println!("  <not started>");
-            println!();
-            println!("stdout:");
-            println!("  <empty>");
-            println!();
-            println!("stderr:");
-            println!("  Unable to start Snap diagnostics: {error}");
+            println!("{label} error:");
+            println!("  {error}");
+            SnapAvailability::BackendError
         }
     }
 }
@@ -1456,14 +2636,17 @@ fn parse_snap_refresh_status(stdout: &str, stderr: &str) -> Option<(OperationSta
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_snap_error, normalize_snap_package_id, parse_snap_info, parse_snap_list_entry,
-        parse_snap_refresh_status, select_snap_install_channel, snap_info_command,
-        validate_snap_candidate, SnapBackend, SnapConfinement, SnapErrorKind,
-        SnapPublisherVerification,
+        classify_snap_error, normalize_snap_package_id, parse_snap_change, parse_snap_find,
+        parse_snap_info, parse_snap_list_entry, parse_snap_refresh_status, parse_snapd_info,
+        select_snap_install_channel, snap_info_command, snap_install_request_body,
+        validate_snap_candidate, SnapBackend, SnapCandidate, SnapChange, SnapChangeId,
+        SnapCliFallbackService, SnapConfinement, SnapErrorKind, SnapInstallRequest,
+        SnapPublisherVerification, SnapService, SnapWideSearch, SNAP_AVAILABILITY_KEY,
+        SNAP_DISCOVERY_NOTES_KEY, SNAP_FALLBACK_REASON_KEY, SNAP_TRANSPORT_KEY,
     };
     use crate::domain::{
-        AllpError, AllpResult, BackendCategory, ExecutionPlan, MatchKind, OperationStatus,
-        PackageCandidate, PackageDomain,
+        AllpError, AllpResult, BackendCategory, ExecutionPlan, MatchKind, NativeCommand,
+        OperationStatus, PackageCandidate, PackageDomain,
     };
     use crate::execution::{CommandOutput, ProcessRunner, ProcessStatus};
     use std::io;
@@ -1512,7 +2695,7 @@ mod tests {
             publisher.verification,
             SnapPublisherVerification::Unverified
         );
-        let channel = select_snap_install_channel(&info)
+        let channel = select_snap_install_channel(&SnapBackend, &candidate("strict-app"), &info)
             .expect("stable channel should select")
             .expect("channel should exist");
         assert_eq!(channel.name, "latest/stable");
@@ -1526,7 +2709,8 @@ mod tests {
         )
         .expect("fixture should parse");
 
-        let error = select_snap_install_channel(&info).expect_err("edge-only should be blocked");
+        let error = select_snap_install_channel(&SnapBackend, &candidate("edge-only"), &info)
+            .expect_err("edge-only should be blocked");
         assert!(error.to_string().contains("no stable channel"));
     }
 
@@ -1595,6 +2779,255 @@ mod tests {
     }
 
     #[test]
+    fn snapd_install_body_adds_classic_only_when_required() {
+        let strict = snap_install_request_body(&SnapInstallRequest {
+            name: "strict-app".to_owned(),
+            channel: "latest/stable".to_owned(),
+            classic: false,
+        });
+        assert_eq!(strict["action"], "install");
+        assert_eq!(strict["channel"], "latest/stable");
+        assert!(strict.get("classic").is_none());
+
+        let classic = snap_install_request_body(&SnapInstallRequest {
+            name: "classic-app".to_owned(),
+            channel: "latest/stable".to_owned(),
+            classic: true,
+        });
+        assert_eq!(classic["classic"], true);
+    }
+
+    #[test]
+    fn snapd_exact_metadata_preserves_install_relevant_fields() {
+        let result = serde_json::json!({
+            "name": "pycharm",
+            "title": "PyCharm",
+            "summary": "Python IDE",
+            "version": "2026.1.4",
+            "publisher": {
+                "display-name": "JetBrains",
+                "validation": "verified"
+            },
+            "confinement": "classic",
+            "architectures": [{"name": "amd64"}],
+            "channels": {
+                "latest/stable": {
+                    "version": "2026.1.4",
+                    "architecture": "amd64",
+                    "confinement": "classic"
+                },
+                "latest/beta": {
+                    "version": "2026.2-beta",
+                    "architecture": "amd64",
+                    "confinement": "classic"
+                }
+            }
+        });
+
+        let info = parse_snapd_info(&result, "raw snapd response", "fallback")
+            .expect("valid snapd metadata should parse");
+
+        assert_eq!(info.name, "pycharm");
+        assert_eq!(info.confinement, SnapConfinement::Classic);
+        assert_eq!(info.architectures, vec!["amd64"]);
+        assert_eq!(
+            info.publisher.unwrap().verification,
+            SnapPublisherVerification::Verified
+        );
+        assert!(info
+            .channels
+            .iter()
+            .any(|channel| channel.name == "latest/stable" && channel.available));
+    }
+
+    #[test]
+    fn snapd_change_parsing_recognizes_terminal_success_and_failure() {
+        let done = parse_snap_change(&serde_json::json!({"status":"Done","ready":true}));
+        assert!(done.ready);
+        assert_eq!(done.status, "Done");
+        assert!(done.error.is_none());
+
+        let failed = parse_snap_change(
+            &serde_json::json!({"status":"Error","ready":true,"err":"store failed"}),
+        );
+        assert!(failed.ready);
+        assert_eq!(failed.error.as_deref(), Some("store failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapd_discovery_and_exact_not_found_are_separate_rest_requests() {
+        use super::{SnapAvailability, SnapdRestService};
+        use std::{
+            fs,
+            io::{Read, Write},
+            os::unix::net::UnixListener,
+            sync::{Arc, Mutex},
+            thread,
+        };
+
+        let socket = std::env::temp_dir().join(format!(
+            "allp-snap-service-{}-{:?}.sock",
+            std::process::id(),
+            thread::current().id()
+        ));
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).expect("fake snapd socket should bind");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_requests = Arc::clone(&requests);
+        let server = thread::spawn(move || {
+            let bodies = [
+                r#"{"type":"sync","status-code":200,"status":"OK","result":[{"name":"pycharm","version":"2026.1.4","confinement":"classic"}]}"#,
+                r#"{"type":"error","status-code":404,"status":"Not Found","result":{"message":"snap not found","kind":"snap-not-found","value":"pycharm"}}"#,
+            ];
+            for (index, body) in bodies.iter().enumerate() {
+                let (mut stream, _) = listener.accept().expect("client should connect");
+                let mut request = [0u8; 4096];
+                let count = stream.read(&mut request).expect("request should be read");
+                let request = String::from_utf8_lossy(&request[..count]);
+                server_requests
+                    .lock()
+                    .expect("requests lock")
+                    .push(request.lines().next().unwrap_or_default().to_owned());
+                let status = if index == 0 {
+                    "200 OK"
+                } else {
+                    "404 Not Found"
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .expect("response should be written");
+            }
+        });
+
+        let backend = SnapBackend;
+        let service = SnapdRestService {
+            backend: &backend,
+            client: super::SnapdClient::with_timeout(&socket, std::time::Duration::from_secs(2)),
+        };
+        let discovered = service
+            .search("pycharm")
+            .expect("REST discovery should work");
+        assert_eq!(discovered.candidates.len(), 1);
+        let candidate = discovered
+            .candidates
+            .into_iter()
+            .next()
+            .expect("candidate")
+            .into_package_candidate(&backend, "pycharm");
+        let resolution = service
+            .resolve(&candidate)
+            .expect("authoritative REST 404 should be structured");
+        assert_eq!(resolution.availability, SnapAvailability::Unavailable);
+        assert_eq!(resolution.rest_status, Some(404));
+        assert!(resolution.fallback_reason.is_none());
+
+        server.join().expect("fake snapd should stop");
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests[0], "GET /v2/find?q=pycharm&scope=wide HTTP/1.1");
+        assert_eq!(requests[1], "GET /v2/find?name=pycharm HTTP/1.1");
+        fs::remove_file(socket).expect("fake socket should be removed");
+    }
+
+    #[test]
+    fn snapd_style_service_and_cli_fallback_produce_equivalent_discovery_candidates() {
+        struct SearchRunner {
+            stdout: String,
+        }
+
+        impl ProcessRunner for SearchRunner {
+            fn capture(&self, command: &NativeCommand) -> AllpResult<CommandOutput> {
+                assert_eq!(
+                    command
+                        .args
+                        .iter()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>(),
+                    vec!["find".to_owned(), "pycharm".to_owned()]
+                );
+                Ok(CommandOutput {
+                    success: true,
+                    code: Some(0),
+                    signal: None,
+                    duration: std::time::Duration::from_millis(1),
+                    stdout: self.stdout.clone(),
+                    stderr: String::new(),
+                })
+            }
+
+            fn execute(&self, _plan: &ExecutionPlan) -> AllpResult<ProcessStatus> {
+                unreachable!("discovery should not execute plans")
+            }
+        }
+
+        struct StaticSnapdService {
+            candidates: Vec<SnapCandidate>,
+        }
+
+        impl SnapService for StaticSnapdService {
+            fn search(&self, _query: &str) -> AllpResult<SnapWideSearch> {
+                Ok(SnapWideSearch {
+                    candidates: self.candidates.clone(),
+                })
+            }
+
+            fn resolve(&self, _candidate: &PackageCandidate) -> AllpResult<super::SnapResolution> {
+                unreachable!("this test only compares discovery")
+            }
+
+            fn install(&self, _request: SnapInstallRequest) -> AllpResult<SnapChangeId> {
+                unreachable!("this test only compares discovery")
+            }
+
+            fn change(&self, _id: &SnapChangeId) -> AllpResult<SnapChange> {
+                unreachable!("this test only compares discovery")
+            }
+        }
+
+        let stdout = "Name       Version   Publisher   Notes    Summary\npycharm    2026.1.4  jetbrains✓  classic  PyCharm\n";
+        let runner = SearchRunner {
+            stdout: stdout.to_owned(),
+        };
+        let cli = SnapCliFallbackService {
+            backend: &SnapBackend,
+            snap: std::path::Path::new("/usr/bin/snap"),
+            runner: &runner,
+            fallback_reason: "test fallback".to_owned(),
+        };
+        let snapd = StaticSnapdService {
+            candidates: parse_snap_find(stdout),
+        };
+
+        let cli_candidate = cli
+            .search("pycharm")
+            .expect("cli search should parse")
+            .candidates
+            .remove(0)
+            .into_package_candidate(&SnapBackend, "pycharm");
+        let snapd_candidate = snapd
+            .search("pycharm")
+            .expect("snapd search should parse")
+            .candidates
+            .remove(0)
+            .into_package_candidate(&SnapBackend, "pycharm");
+
+        assert_eq!(cli_candidate.package_id, snapd_candidate.package_id);
+        assert_eq!(cli_candidate.version, snapd_candidate.version);
+        assert_eq!(cli_candidate.source, snapd_candidate.source);
+        assert_eq!(
+            cli_candidate.metadata.get(SNAP_AVAILABILITY_KEY),
+            snapd_candidate.metadata.get(SNAP_AVAILABILITY_KEY)
+        );
+        assert_eq!(
+            cli_candidate.metadata.get(SNAP_DISCOVERY_NOTES_KEY),
+            snapd_candidate.metadata.get(SNAP_DISCOVERY_NOTES_KEY)
+        );
+    }
+
+    #[test]
     fn spawn_failure_is_classified_as_validation_start_failure() {
         struct FailingRunner;
 
@@ -1616,7 +3049,7 @@ mod tests {
 
         let error = validate_snap_candidate(
             &SnapBackend,
-            std::path::Path::new("/usr/bin/snap"),
+            &commands(),
             &FailingRunner,
             &candidate("pycharm"),
         )
@@ -1654,18 +3087,18 @@ mod tests {
 
         let error = validate_snap_candidate(
             &SnapBackend,
-            std::path::Path::new("/usr/bin/snap"),
+            &commands(),
             &TimeoutRunner,
             &candidate("pycharm"),
         )
         .expect_err("timeout should be classified");
 
-        let AllpError::ValidationFailed { backend, message } = error else {
-            panic!("expected ValidationFailed");
+        let AllpError::CandidateUnavailable { backend, message } = error else {
+            panic!("expected CandidateUnavailable");
         };
         assert_eq!(backend, "Snap");
         assert!(message.contains("snap info pycharm"));
-        assert!(message.contains("Exit code: unavailable"));
+        assert!(message.contains("Install status: BackendError"));
         assert!(message.contains("native command timed out"));
     }
 
@@ -1683,6 +3116,15 @@ mod tests {
     }
 
     fn candidate(package_id: &str) -> PackageCandidate {
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert(
+            SNAP_TRANSPORT_KEY.to_owned(),
+            super::SnapTransport::Cli.as_str().to_owned(),
+        );
+        metadata.insert(
+            SNAP_FALLBACK_REASON_KEY.to_owned(),
+            "test CLI fallback".to_owned(),
+        );
         PackageCandidate {
             backend_id: "snap".to_owned(),
             backend_name: "Snap".to_owned(),
@@ -1702,7 +3144,13 @@ mod tests {
                 PackageDomain::Universal,
                 "universal application",
             ),
-            metadata: Default::default(),
+            metadata,
         }
+    }
+
+    fn commands() -> crate::backends::CommandMap {
+        let mut commands = crate::backends::CommandMap::new();
+        commands.insert("snap".to_owned(), "/usr/bin/snap".into());
+        commands
     }
 }

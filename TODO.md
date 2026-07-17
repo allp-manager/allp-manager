@@ -6,6 +6,7 @@ Implementation tasks live here. Product direction and larger milestones live in 
 
 - [x] Update repository URL in `Cargo.toml`
 - [x] Revalidate Snap install candidates with `snap info` before plan construction
+- [x] Treat Snap `snap find` rows as discovery candidates until exact resolution succeeds
 - [x] Add classic-confinement Snap install plans
 - [x] Normalize decorated Snap publishers into publisher name plus verification state
 - [x] Add repository-specific ignore rules and untrack generated command logs
@@ -13,7 +14,19 @@ Implementation tasks live here. Product direction and larger milestones live in 
 - [x] Refresh English and Persian README documentation
 - [x] Add source install/reinstall/uninstall Makefile workflow
 - [x] Add local-only release prepare/finalize workflow with Git hook
+- [x] Add tag-triggered GitHub Release workflow and release-title metadata
 - [x] Add temp-repository tests for release automation safety
+
+## Completed In 0.3.4
+
+- [x] Add cross-platform platform context and central executable capability registry
+- [x] Add structured backend requirements and Linux bootstrap providers
+- [x] Use snapd REST for primary discovery, exact resolution, installation, and change monitoring
+- [x] Keep CLI Snap fallback reasoned and block fallback after authoritative REST not-found
+- [x] Model Flatpak executable/remotes independently and require explicit Flathub setup
+- [x] Exclude failed backends and discard cached results during alternative routing
+- [x] Add trusted GitHub self-update with manifest target selection, SHA-256, rollback, and guarded relaunch
+- [x] Add `allp doctor`, target-specific CI/release assets, and release-manifest generation
 
 ## Remaining Implementation Work
 
@@ -67,7 +80,7 @@ Implementation tasks live here. Product direction and larger milestones live in 
 
 - [ ] Add an interactive Snap channel chooser
   - Priority: P1
-  - Reason: v0.3.3 blocks ambiguous or non-stable Snap channels instead of silently choosing; a future UX should let users choose stable tracks and explicitly confirm riskier channels.
+  - Reason: v0.3.4 blocks ambiguous or non-stable Snap channels instead of silently choosing; a future UX should let users choose stable tracks and explicitly confirm riskier channels.
   - Module: `src/backends/universal/snap.rs`, CLI prompts
   - Target: 0.4
 
@@ -77,7 +90,7 @@ Implementation tasks live here. Product direction and larger milestones live in 
   - Module: documentation, release metadata
   - Target: 0.4
 
-## Explicit Non-Goals For 0.3.3
+## Explicit Non-Goals For 0.3.4
 
 - GUI or TUI mode
 - Plugin marketplace

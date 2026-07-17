@@ -138,7 +138,16 @@ release_draft_notes_path() {
     printf 'release/RELEASE_NOTES_v%s.md\n' "$version"
 }
 
+release_title_path() {
+    local version="$1"
+    printf 'release/RELEASE_TITLE_v%s.txt\n' "$version"
+}
+
 release_dist_notes_path() {
     local version="$1"
     printf '%s/RELEASE_NOTES_v%s.md\n' "${DIST_DIR:-dist}" "$version"
+}
+
+release_manifest_path() {
+    printf '%s/allp-release-manifest.json\n' "${DIST_DIR:-dist}"
 }

@@ -1,9 +1,17 @@
+pub mod alternatives;
 pub mod app;
 pub mod backends;
 pub mod bootstrap;
+pub mod capabilities;
 pub mod cli;
+pub mod diagnostics;
 pub mod discovery;
 pub mod domain;
 pub mod execution;
 pub mod identity;
 pub mod operations;
+pub mod platform;
+pub mod release;
+pub mod requirements;
+pub mod self_update;
+pub mod state;

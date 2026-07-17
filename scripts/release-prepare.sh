@@ -210,6 +210,15 @@ SHA256: _generated during finalization_
 EOF
 }
 
+write_release_title() {
+    local version="$1"
+    local title
+
+    title="$(release_title_path "$version")"
+    mkdir -p "$(dirname "$title")"
+    printf 'Allp v%s — Modular Backend Recovery and Secure Self-Update\n' "$version" >"$title"
+}
+
 write_marker() {
     local version="$1"
     local bump="$2"
@@ -234,6 +243,7 @@ main() {
     local comparison
     local today
     local name
+    local resume="false"
 
     release_cd_root
 
@@ -259,8 +269,15 @@ main() {
 
     release_validate_semver "$target"
     comparison="$(release_semver_cmp "$target" "$current")"
-    if [ "$comparison" != "1" ]; then
+    if [ "$comparison" = "-1" ]; then
         release_die "target version $target must be greater than current version $current"
+    fi
+    if [ "$comparison" = "0" ]; then
+        [ -n "$explicit" ] || release_die "target version $target must be greater than current version $current"
+        [ -s "$(release_title_path "$target")" ] || release_die "cannot resume v$target without its release title"
+        [ -s "$(release_draft_notes_path "$target")" ] || release_die "cannot resume v$target without its release notes"
+        grep -q "^## \[$target\]" CHANGELOG.md || release_die "cannot resume v$target without its changelog section"
+        resume="true"
     fi
 
     if release_tag_exists "v$target"; then
@@ -269,12 +286,17 @@ main() {
 
     today="$(date '+%Y-%m-%d')"
 
-    printf 'Preparing Allp v%s from v%s\n' "$target" "$current"
-    write_cargo_version "$target"
-    "$CARGO_BIN" check --all-targets
-    replace_version_in_docs "$current" "$target"
-    update_changelog "$target" "$today"
-    write_release_notes_draft "$target"
+    if [ "$resume" = "true" ]; then
+        printf 'Resuming Allp v%s release preparation after an interrupted quality gate\n' "$target"
+    else
+        printf 'Preparing Allp v%s from v%s\n' "$target" "$current"
+        write_cargo_version "$target"
+        "$CARGO_BIN" check --all-targets
+        replace_version_in_docs "$current" "$target"
+        update_changelog "$target" "$today"
+        write_release_title "$target"
+        write_release_notes_draft "$target"
+    fi
 
     printf '%s\n' 'Running full quality gate before writing release marker...'
     "$MAKE_BIN" quality

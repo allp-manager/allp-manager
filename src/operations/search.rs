@@ -9,7 +9,11 @@ use crate::{
     identity::resolver,
     operations::OperationContext,
 };
-use std::{collections::BTreeMap, sync::mpsc, thread};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::mpsc,
+    thread,
+};
 
 const DEFAULT_LIMIT: usize = 25;
 const RELATED_LIMIT_PER_BACKEND: usize = 5;
@@ -76,12 +80,22 @@ pub fn gather_with_policy(
     query: &str,
     policy: SearchPolicy,
 ) -> crate::domain::AllpResult<SearchReport> {
+    gather_with_policy_excluding(context, query, policy, &HashSet::new())
+}
+
+pub fn gather_with_policy_excluding(
+    context: &OperationContext<'_>,
+    query: &str,
+    policy: SearchPolicy,
+    excluded_backends: &HashSet<String>,
+) -> crate::domain::AllpResult<SearchReport> {
     let mut candidates = bootstrap::candidates_for_query(
         query,
         policy.required_capability,
         policy.scope,
         context.backend_filter,
     );
+    candidates.retain(|candidate| !backend_is_excluded(&candidate.backend_id, excluded_backends));
     let eligible = match context.eligible_backends() {
         Ok(backends) => backends,
         Err(_) if !candidates.is_empty() => Vec::new(),
@@ -90,7 +104,8 @@ pub fn gather_with_policy(
     let eligible: Vec<_> = eligible
         .into_iter()
         .filter(|runtime| {
-            runtime.backend.has_capability(Capability::Search)
+            !backend_is_excluded(runtime.backend.id(), excluded_backends)
+                && runtime.backend.has_capability(Capability::Search)
                 && policy
                     .required_capability
                     .map(|capability| runtime.backend.has_capability(capability))
@@ -102,7 +117,7 @@ pub fn gather_with_policy(
         .cloned()
         .collect();
 
-    if eligible.is_empty() && candidates.is_empty() {
+    if eligible.is_empty() && candidates.is_empty() && excluded_backends.is_empty() {
         return Err(AllpError::UnsupportedOperation {
             backend: context
                 .backend_filter
@@ -113,7 +128,7 @@ pub fn gather_with_policy(
     }
 
     let mut issues = Vec::new();
-    let mut backend_summaries = initial_backend_summaries(context, policy);
+    let mut backend_summaries = initial_backend_summaries(context, policy, excluded_backends);
 
     if !eligible.is_empty() {
         let spinner = Spinner::start(
@@ -200,6 +215,7 @@ pub fn gather_with_policy(
 fn initial_backend_summaries(
     context: &OperationContext<'_>,
     policy: SearchPolicy,
+    excluded_backends: &HashSet<String>,
 ) -> Vec<SearchBackendSummary> {
     context
         .discovery
@@ -207,21 +223,28 @@ fn initial_backend_summaries(
         .iter()
         .filter(|entry| detection_entry_matches_policy(entry, context.backend_filter, policy))
         .map(|entry| {
-            let (state, message) = match entry.state {
-                DetectionState::Ready => (SearchBackendState::Available, None),
-                DetectionState::NotFound => (
-                    SearchBackendState::Unavailable,
-                    Some("executable not found".to_owned()),
-                ),
-                _ => (
-                    SearchBackendState::Unavailable,
-                    Some(
-                        entry
-                            .message
-                            .clone()
-                            .unwrap_or_else(|| entry.state.label().to_ascii_lowercase()),
+            let (state, message) = if backend_is_excluded(&entry.backend_id, excluded_backends) {
+                (
+                    SearchBackendState::Skipped,
+                    Some("excluded after failed exact resolution".to_owned()),
+                )
+            } else {
+                match entry.state {
+                    DetectionState::Ready => (SearchBackendState::Available, None),
+                    DetectionState::NotFound => (
+                        SearchBackendState::Unavailable,
+                        Some("executable not found".to_owned()),
                     ),
-                ),
+                    _ => (
+                        SearchBackendState::Unavailable,
+                        Some(
+                            entry
+                                .message
+                                .clone()
+                                .unwrap_or_else(|| entry.state.label().to_ascii_lowercase()),
+                        ),
+                    ),
+                }
             };
             SearchBackendSummary {
                 backend_id: entry.backend_id.clone(),
@@ -232,6 +255,12 @@ fn initial_backend_summaries(
             }
         })
         .collect()
+}
+
+fn backend_is_excluded(backend_id: &str, excluded_backends: &HashSet<String>) -> bool {
+    excluded_backends
+        .iter()
+        .any(|excluded| excluded.eq_ignore_ascii_case(backend_id))
 }
 
 fn detection_entry_matches_policy(

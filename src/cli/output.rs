@@ -1,4 +1,5 @@
 use crate::{
+    diagnostics::DoctorReport,
     discovery::{DetectionState, DiscoveryReport},
     domain::{
         BackendCategory, BackendIssue, ExecutionPlan, InstalledPackage, MatchKind,
@@ -6,6 +7,7 @@ use crate::{
         RuntimePrivilegeContext, SearchReport, SearchScope,
     },
     execution::{render_execution_plan_with_context, render_native_argv, render_native_command},
+    self_update::{SelfUpdateCheck, UpdateAvailability},
 };
 use serde::Serialize;
 use std::{
@@ -38,6 +40,178 @@ impl Renderer {
     }
     pub fn spinner_enabled(&self) -> bool {
         self.color && !self.json
+    }
+
+    pub fn phase(&self, label: &str) {
+        if !self.json {
+            println!("\n{}", self.heading(label));
+        }
+    }
+
+    pub fn doctor(&self, report: &DoctorReport) {
+        if self.json {
+            self.render_json(report);
+            return;
+        }
+        println!("{}", self.heading("Allp Doctor"));
+        println!("\nPlatform");
+        println!("  OS: {}", report.platform.os.label());
+        if let Some(distribution) = &report.platform.distribution {
+            println!(
+                "  Distribution: {} ({})",
+                distribution.name, distribution.id
+            );
+        }
+        println!("  Architecture: {}", report.platform.architecture.as_str());
+        println!(
+            "  libc: {}",
+            report
+                .platform
+                .libc
+                .map(|libc| libc.as_str())
+                .unwrap_or("not applicable")
+        );
+        println!("  WSL: {}", yes_no(report.platform.is_wsl));
+        println!("  Container: {}", yes_no(report.platform.is_container));
+        println!("  Current user: {}", report.platform.current_user.name);
+        println!("  Root: {}", yes_no(report.platform.is_root));
+        if let Some(user) = &report.platform.original_user {
+            println!("  Original user: {}", user.name);
+        }
+        println!("\nAllp");
+        println!("  Version: {}", report.allp_version);
+        println!("  Path: {}", report.platform.current_executable.display());
+        println!(
+            "  Path writable: {}",
+            yes_no(report.platform.executable_writable)
+        );
+        if let Some(owner) = &report.platform.executable_owner {
+            println!("  Path owner: {}", owner.name);
+        }
+        println!(
+            "  Release target: {}",
+            report
+                .compatible_release_target
+                .as_deref()
+                .unwrap_or("unsupported")
+        );
+        println!("  Update source: {}", report.github_repository);
+        println!(
+            "  Update source status: {}",
+            report.github_update_source_status
+        );
+        println!("\nPaths");
+        println!("  Cache: {}", report.platform.cache_dir.display());
+        println!("  State: {}", report.platform.state_dir.display());
+        println!("  Config: {}", report.platform.config_dir.display());
+        println!("\nSnap");
+        println!("  Socket: {}", report.snap_socket.path);
+        println!("  Exists: {}", yes_no(report.snap_socket.exists));
+        println!(
+            "  Reachable: {}",
+            report
+                .snap_socket
+                .reachable
+                .map(yes_no)
+                .unwrap_or("not tested")
+        );
+        if let Some(reason) = &report.snap_socket.reason {
+            println!("  Reason: {reason}");
+        }
+        println!("\nFlatpak");
+        println!("  Status: {}", report.flatpak.status);
+        println!("  Configured remotes: {}", report.flatpak.remotes.len());
+        for remote in &report.flatpak.remotes {
+            println!(
+                "    {}{}",
+                remote.name,
+                remote
+                    .url
+                    .as_ref()
+                    .map(|url| format!(" · {url}"))
+                    .unwrap_or_default()
+            );
+        }
+        if let Some(reason) = &report.flatpak.reason {
+            println!("  Reason: {reason}");
+        }
+        println!("\nExecutables");
+        for executable in &report.executables {
+            println!(
+                "  {:<10} {:<12} {}",
+                executable.name,
+                executable.status,
+                executable.path.as_deref().unwrap_or("not found")
+            );
+        }
+        println!("\nBackends");
+        for backend in &report.backends {
+            println!(
+                "  {:<12} {}{}",
+                backend.backend_name,
+                backend.state.label(),
+                backend
+                    .message
+                    .as_ref()
+                    .map(|message| format!(" · {message}"))
+                    .unwrap_or_default()
+            );
+        }
+    }
+
+    pub fn self_update_check(&self, check: &SelfUpdateCheck) {
+        if self.json {
+            #[derive(Serialize)]
+            struct JsonCheck<'a> {
+                current_version: String,
+                status: &'a str,
+                available_version: Option<String>,
+                target: &'a Option<String>,
+                asset: Option<&'a str>,
+                install_path: String,
+                message: &'a Option<String>,
+            }
+            self.render_json(&JsonCheck {
+                current_version: check.current_version.to_string(),
+                status: update_availability_label(check.availability),
+                available_version: check
+                    .release
+                    .as_ref()
+                    .map(|release| release.version.to_string()),
+                target: &check.target,
+                asset: check.asset.as_ref().map(|asset| asset.archive.as_str()),
+                install_path: check.install_path.display().to_string(),
+                message: &check.message,
+            });
+            return;
+        }
+        match check.availability {
+            UpdateAvailability::Available => {
+                let release = check.release.as_ref().expect("available release");
+                let asset = check.asset.as_ref().expect("available asset");
+                println!("{}", self.heading("Allp Update Available"));
+                println!("\nCurrent version:\n  {}", check.current_version);
+                println!("\nAvailable version:\n  {}", release.version);
+                println!(
+                    "\nTarget:\n  {}",
+                    check.target.as_deref().unwrap_or("unsupported")
+                );
+                println!("\nAsset:\n  {}", asset.archive);
+                println!("\nInstall path:\n  {}", check.install_path.display());
+            }
+            UpdateAvailability::UpToDate => {
+                println!("Allp {} is up to date.", check.current_version);
+            }
+            UpdateAvailability::Offline => {
+                println!("Allp self-update check skipped in offline mode.");
+            }
+            UpdateAvailability::UnsupportedTarget | UpdateAvailability::UpdaterTooOld => {
+                println!(
+                    "Allp self-update unavailable: {}",
+                    check.message.as_deref().unwrap_or("unsupported release")
+                );
+            }
+        }
     }
 
     #[cfg(test)]
@@ -371,12 +545,23 @@ impl Renderer {
         self.grouped_candidates(candidates, scope);
     }
 
-    pub fn preflight_stage(&self, stage: &str, command: &NativeCommand, verbose: bool) {
+    pub fn preflight_stage(
+        &self,
+        stage: &str,
+        command: &NativeCommand,
+        display_command: Option<&str>,
+        verbose: bool,
+    ) {
         if self.json {
             return;
         }
         println!("\n{} {stage}", self.info_style("●"));
-        println!("  Command: {}", render_native_command(command));
+        println!(
+            "  Command: {}",
+            display_command
+                .map(str::to_owned)
+                .unwrap_or_else(|| render_native_command(command))
+        );
         if verbose {
             println!("  Argv: {}", render_native_argv(command));
         }
@@ -411,7 +596,7 @@ impl Renderer {
                     index + 1,
                     self.bold(&candidate.backend_name),
                     candidate.package_id,
-                    candidate.identity.label(),
+                    candidate_label(candidate),
                     version
                 );
                 println!(
@@ -433,6 +618,9 @@ impl Renderer {
                 }
                 if candidate.display_name != candidate.package_id {
                     println!("    Name: {}", candidate.display_name);
+                }
+                if candidate.backend_id == "snap" {
+                    render_snap_candidate_metadata(candidate);
                 }
                 if let Some(remote) = candidate.metadata.get("flatpak.remote") {
                     println!("    Remote: {remote}");
@@ -490,6 +678,14 @@ impl Renderer {
                     } else {
                         println!("{} {} unavailable", self.muted("○"), summary.backend_name);
                     }
+                }
+                crate::domain::SearchBackendState::Skipped => {
+                    println!(
+                        "{} {} skipped · {}",
+                        self.muted("○"),
+                        summary.backend_name,
+                        summary.message.as_deref().unwrap_or("excluded")
+                    );
                 }
                 crate::domain::SearchBackendState::Available => {
                     println!("{} {} available", self.muted("○"), summary.backend_name);
@@ -1142,11 +1338,101 @@ fn title_case(value: &str) -> String {
     }
 }
 
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+fn update_availability_label(availability: UpdateAvailability) -> &'static str {
+    match availability {
+        UpdateAvailability::Offline => "offline",
+        UpdateAvailability::UpToDate => "up_to_date",
+        UpdateAvailability::Available => "available",
+        UpdateAvailability::UnsupportedTarget => "unsupported_target",
+        UpdateAvailability::UpdaterTooOld => "updater_too_old",
+    }
+}
+
 fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
     if count == 1 {
         singular
     } else {
         plural
+    }
+}
+
+fn candidate_label(candidate: &PackageCandidate) -> &str {
+    if candidate.backend_id == "snap"
+        && candidate
+            .metadata
+            .get("snap.availability")
+            .is_some_and(|value| value == "discovered")
+    {
+        if candidate.match_kind == MatchKind::Exact {
+            "Exact search match"
+        } else {
+            "Search match"
+        }
+    } else {
+        candidate.identity.label()
+    }
+}
+
+fn render_snap_candidate_metadata(candidate: &PackageCandidate) {
+    let Some(availability) = candidate.metadata.get("snap.availability") else {
+        return;
+    };
+    match availability.as_str() {
+        "discovered" => {
+            if candidate.match_kind == MatchKind::Exact {
+                println!("    Exact search-name match · availability not yet verified");
+            } else {
+                println!("    Search match · availability not yet verified");
+            }
+            if let Some(version) = candidate.metadata.get("snap.discovery.version") {
+                println!("    discovery version: {version}");
+            }
+            if let Some(publisher) = candidate.metadata.get("snap.discovery.publisher") {
+                let verification = candidate
+                    .metadata
+                    .get("snap.discovery.publisher_verification")
+                    .map(|value| match value.as_str() {
+                        "verified" => " ✓",
+                        "unverified" => "",
+                        _ => " ?",
+                    })
+                    .unwrap_or("");
+                println!("    publisher: {publisher}{verification}");
+            }
+            if let Some(notes) = candidate.metadata.get("snap.discovery.notes") {
+                println!("    notes: {notes}");
+            }
+            println!("    availability: not yet verified");
+        }
+        "available" => {
+            println!("    Available");
+            if let Some(channel) = candidate.metadata.get("snap.channel") {
+                println!("    channel: {channel}");
+            }
+            if let Some(confinement) = candidate.metadata.get("snap.confinement") {
+                println!("    confinement: {confinement}");
+            }
+            if let Some(architectures) = candidate.metadata.get("snap.architectures") {
+                println!("    architecture: {architectures}");
+            }
+        }
+        "unavailable" | "stale" => {
+            println!("    Unavailable on this system");
+            println!("    search match exists, but installable metadata could not be resolved");
+        }
+        "backend_error" => {
+            println!("    Snap backend error");
+            println!("    exact installable metadata could not be resolved");
+        }
+        _ => {}
     }
 }
 

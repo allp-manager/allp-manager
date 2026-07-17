@@ -37,12 +37,14 @@ pub struct InstallPreflightWarning {
 pub struct InstallPreflightStatus {
     pub stage: String,
     pub command: NativeCommand,
+    pub display_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallPreflightRecovery {
     RetryValidation,
     RetrySearch,
+    TryAlternativeInstallers,
     Cancelled,
 }
 
@@ -95,6 +97,21 @@ pub trait Backend: Send + Sync {
         _query: &str,
     ) -> AllpResult<Vec<PackageCandidate>> {
         Err(self.unsupported("search"))
+    }
+
+    fn plan_search_prerequisite(
+        &self,
+        _commands: &CommandMap,
+    ) -> AllpResult<Option<ExecutionPlan>> {
+        Ok(None)
+    }
+
+    fn verify_search_prerequisite(
+        &self,
+        _commands: &CommandMap,
+        _runner: &dyn ProcessRunner,
+    ) -> AllpResult<bool> {
+        Ok(false)
     }
 
     fn list_installed(

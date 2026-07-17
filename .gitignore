@@ -7,6 +7,9 @@
 
 # Local command output and logs
 *.log
+cargo-check.log
+FILES.txt
+ALLP_CODEX_*.md
 
 # Temporary and backup files
 *.tmp
@@ -47,12 +50,12 @@ id_ed25519*
 tmp/
 
 # Locally generated packages and archives
-*.crate
-*.deb
-*.rpm
-*.AppImage
-*.dmg
-*.msi
-*.exe
-*.tar.gz
-*.zip
+/*.crate
+/*.deb
+/*.rpm
+/*.AppImage
+/*.dmg
+/*.msi
+/*.exe
+/*.tar.gz
+/*.zip

@@ -33,6 +33,21 @@ Python and Node registry packages may be malicious or abandoned. Allp does not i
 
 Mutating native stdin, stdout, and stderr are inherited directly. Allp does not repaint package-manager transactions.
 
+## Bootstrap And Remotes
+
+Installing an executable, enabling a service, adding a remote, changing configuration, and elevating privilege are separate plans. No prerequisite is installed silently. `--yes --allow-bootstrap` is required for non-interactive bootstrap; exact commands remain visible.
+
+## Self-Update
+
+- Repository identity is a trusted constant, not a user URL.
+- Metadata and downloads are HTTPS-only with bounded time, redirects, and size.
+- Release tag/version and manifest identity must agree.
+- Asset selection matches platform target; the first arbitrary asset is never used.
+- Every binary archive is checked against manifest SHA-256 before extraction.
+- Unsafe paths, links, foreign URLs, and staged-version mismatch are rejected.
+- Replacement keeps a rollback backup until post-install verification succeeds.
+- State files contain channel/ETag/version timestamps only, never credentials.
+
 ## Non-Goals
 
 Allp does not provide:

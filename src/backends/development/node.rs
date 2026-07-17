@@ -15,9 +15,11 @@ use crate::{
 use serde_json::Value;
 use std::{
     env, fs,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 pub struct NodeBackend;
 
@@ -301,20 +303,28 @@ fn directory_writable_by_current_user(path: &Path) -> bool {
     if !metadata.is_dir() {
         return false;
     }
-    let mode = metadata.mode();
-    let (uid, gid) = current_effective_ids();
-    if uid == Some(0) {
-        return true;
+    #[cfg(unix)]
+    {
+        let mode = metadata.mode();
+        let (uid, gid) = current_effective_ids();
+        if uid == Some(0) {
+            return true;
+        }
+        if uid.is_some_and(|uid| metadata.uid() == uid) {
+            return mode & 0o200 != 0;
+        }
+        if gid.is_some_and(|gid| metadata.gid() == gid) {
+            return mode & 0o020 != 0;
+        }
+        mode & 0o002 != 0
     }
-    if uid.is_some_and(|uid| metadata.uid() == uid) {
-        return mode & 0o200 != 0;
+    #[cfg(not(unix))]
+    {
+        !metadata.permissions().readonly()
     }
-    if gid.is_some_and(|gid| metadata.gid() == gid) {
-        return mode & 0o020 != 0;
-    }
-    mode & 0o002 != 0
 }
 
+#[cfg(unix)]
 fn current_effective_ids() -> (Option<u32>, Option<u32>) {
     let Ok(status) = fs::read_to_string("/proc/self/status") else {
         return (None, None);

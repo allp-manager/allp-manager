@@ -7,7 +7,8 @@ pub use args::{Cli, Commands};
 pub use output::Renderer;
 pub use prompt::{
     confirm_conflicting_identity, confirm_execution, confirm_fuzzy_candidate, select_candidate,
-    select_installed, select_installer, select_package_candidate, select_search_scope,
-    should_page_candidate_selection, ConfirmationRequest,
+    select_installed, select_installer, select_no_alternative_action, select_package_candidate,
+    select_search_scope, should_page_candidate_selection, AlternativeNoMatchAction,
+    ConfirmationRequest,
 };
 pub use spinner::Spinner;

@@ -5,21 +5,17 @@ use crate::{
         RuntimePrivilegeContext,
     },
 };
-use std::{env, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{env, fs, path::Path, process::Command};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 pub fn is_effective_root() -> bool {
     runtime_context().is_root()
 }
 
 pub fn runtime_context() -> RuntimePrivilegeContext {
-    let Ok(status) = fs::read_to_string("/proc/self/status") else {
-        return RuntimePrivilegeContext::NormalUser;
-    };
-
-    let effective_uid = status.lines().find_map(|line| {
-        let values = line.strip_prefix("Uid:")?;
-        values.split_whitespace().nth(1)?.parse::<u32>().ok()
-    });
+    let effective_uid = effective_uid();
 
     if effective_uid != Some(0) {
         return RuntimePrivilegeContext::NormalUser;
@@ -40,6 +36,30 @@ pub fn runtime_context() -> RuntimePrivilegeContext {
     }
 
     RuntimePrivilegeContext::RootDirect
+}
+
+#[cfg(unix)]
+fn effective_uid() -> Option<u32> {
+    if let Ok(status) = fs::read_to_string("/proc/self/status") {
+        if let Some(uid) = status.lines().find_map(|line| {
+            let values = line.strip_prefix("Uid:")?;
+            values.split_whitespace().nth(1)?.parse::<u32>().ok()
+        }) {
+            return Some(uid);
+        }
+    }
+    Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|value| value.trim().parse().ok())
+}
+
+#[cfg(not(unix))]
+fn effective_uid() -> Option<u32> {
+    None
 }
 
 pub fn prepare_command(
@@ -112,16 +132,24 @@ pub fn prepare_command_with_context(
 }
 
 fn home_for_user(name: &str) -> Option<String> {
-    let passwd = fs::read_to_string("/etc/passwd").ok()?;
-    passwd.lines().find_map(|line| {
-        let mut fields = line.split(':');
-        let username = fields.next()?;
-        if username != name {
-            return None;
-        }
-        let home = fields.nth(4)?;
-        (!home.is_empty()).then(|| home.to_owned())
-    })
+    #[cfg(not(unix))]
+    {
+        let _ = name;
+        return env::var("USERPROFILE").ok();
+    }
+    #[cfg(unix)]
+    {
+        let passwd = fs::read_to_string("/etc/passwd").ok()?;
+        passwd.lines().find_map(|line| {
+            let mut fields = line.split(':');
+            let username = fields.next()?;
+            if username != name {
+                return None;
+            }
+            let home = fields.nth(4)?;
+            (!home.is_empty()).then(|| home.to_owned())
+        })
+    }
 }
 
 fn validate_elevated_executable(path: &Path) -> AllpResult<()> {
@@ -140,12 +168,15 @@ fn validate_elevated_executable(path: &Path) -> AllpResult<()> {
         )));
     }
 
-    let mode = metadata.permissions().mode();
-    if mode & 0o022 != 0 {
-        return Err(AllpError::InvalidInput(format!(
-            "refusing to elevate group/world-writable executable path: {}",
-            path.display()
-        )));
+    #[cfg(unix)]
+    {
+        let mode = metadata.permissions().mode();
+        if mode & 0o022 != 0 {
+            return Err(AllpError::InvalidInput(format!(
+                "refusing to elevate group/world-writable executable path: {}",
+                path.display()
+            )));
+        }
     }
 
     Ok(())

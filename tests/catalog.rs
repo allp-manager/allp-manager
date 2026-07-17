@@ -39,8 +39,9 @@ fn builtin_backend_ids_are_unique() {
             backend.id()
         );
         assert!(
-            !backend.command_requirements().is_empty(),
-            "{} has no command requirements",
+            !backend.command_requirements().is_empty()
+                || !backend.optional_command_requirements().is_empty(),
+            "{} has no required or optional command requirements",
             backend.id()
         );
     }

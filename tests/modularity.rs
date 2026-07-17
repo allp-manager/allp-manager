@@ -122,6 +122,7 @@ fn generic_search_accepts_a_new_backend_without_operation_changes() {
         dry_run: false,
         no_interactive: true,
         yes: false,
+        allow_bootstrap: false,
         verbose: 0,
         backend_filter: None,
         search_scope: None,

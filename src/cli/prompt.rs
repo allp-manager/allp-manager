@@ -6,6 +6,59 @@ use std::io::{self, IsTerminal, Write};
 
 const FALLBACK_PAGE_SIZE: usize = 10;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AlternativeNoMatchAction {
+    ConfigureFlatpak,
+    SearchAnother(String),
+    UnrestrictedSearch,
+    ShowDiagnostics,
+    Cancelled,
+}
+
+pub fn select_no_alternative_action(
+    can_configure_flatpak: bool,
+    no_interactive: bool,
+) -> AllpResult<AlternativeNoMatchAction> {
+    if no_interactive {
+        return Err(AllpError::NonInteractiveSelectionRequired);
+    }
+    loop {
+        println!();
+        if can_configure_flatpak {
+            println!("[1] Configure a Flatpak remote");
+        } else {
+            println!("[1] Configure a Flatpak remote (unavailable)");
+        }
+        println!("[2] Search using another name");
+        println!("[3] Return to unrestricted search");
+        println!("[4] Show diagnostics");
+        println!("[0] Cancel");
+        let input = prompt_line(
+            "Choose an action [1-4, 0 to cancel]: ",
+            "input closed before an alternative action was selected",
+        )?;
+        match input.as_str() {
+            "1" if can_configure_flatpak => return Ok(AlternativeNoMatchAction::ConfigureFlatpak),
+            "1" => eprintln!("Flatpak cannot be configured in the current state."),
+            "2" => {
+                let query = prompt_line(
+                    "Search name: ",
+                    "input closed before another search name was entered",
+                )?;
+                if query.is_empty() {
+                    eprintln!("Search name cannot be blank.");
+                } else {
+                    return Ok(AlternativeNoMatchAction::SearchAnother(query));
+                }
+            }
+            "3" => return Ok(AlternativeNoMatchAction::UnrestrictedSearch),
+            "4" => return Ok(AlternativeNoMatchAction::ShowDiagnostics),
+            "0" => return Ok(AlternativeNoMatchAction::Cancelled),
+            _ => eprintln!("Please enter 1, 2, 3, 4, or 0."),
+        }
+    }
+}
+
 pub fn select_candidate(
     candidates: &[PackageCandidate],
     no_interactive: bool,
@@ -405,7 +458,7 @@ fn print_candidate_line(index: usize, candidate: &PackageCandidate) {
         index + 1,
         candidate.backend_name,
         candidate.package_id,
-        candidate.identity.label(),
+        prompt_candidate_label(candidate),
         candidate.version.as_deref().unwrap_or("unknown")
     );
     let source = candidate.source.as_deref().unwrap_or("unknown source");
@@ -416,6 +469,31 @@ fn print_candidate_line(index: usize, candidate: &PackageCandidate) {
     );
     if let Some(description) = &candidate.description {
         println!("    {description}");
+    }
+    if candidate.backend_id == "snap"
+        && candidate
+            .metadata
+            .get("snap.availability")
+            .is_some_and(|value| value == "discovered")
+    {
+        println!("    availability: not yet verified");
+    }
+}
+
+fn prompt_candidate_label(candidate: &PackageCandidate) -> &str {
+    if candidate.backend_id == "snap"
+        && candidate
+            .metadata
+            .get("snap.availability")
+            .is_some_and(|value| value == "discovered")
+    {
+        if candidate.match_kind == MatchKind::Exact {
+            "Exact search match"
+        } else {
+            "Search match"
+        }
+    } else {
+        candidate.identity.label()
     }
 }
 

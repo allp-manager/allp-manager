@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use serde_json::Value;
 use std::{
     fs,
@@ -47,6 +49,12 @@ fn run_allp_in_with_env(
         .args(args)
         .current_dir(current_dir)
         .env("PATH", path)
+        .env("ALLP_DISABLE_STANDARD_PATHS", "1")
+        .env("ALLP_SELF_UPDATE_TEST_OFFLINE", "1")
+        .env("ALLP_SNAPD_SOCKET", path.join("missing-snapd.socket"))
+        .env("XDG_CACHE_HOME", path.join("xdg-cache"))
+        .env("XDG_STATE_HOME", path.join("xdg-state"))
+        .env("XDG_CONFIG_HOME", path.join("xdg-config"))
         .env("NO_COLOR", "1");
     for (key, value) in envs {
         command.env(key, value);
@@ -63,6 +71,12 @@ fn run_allp_pty(path: &Path, args: &[&str], input: &str) -> Output {
     let mut child = Command::new("/usr/bin/script")
         .args(["-qfec", &command_line, "/dev/null"])
         .env("PATH", path)
+        .env("ALLP_DISABLE_STANDARD_PATHS", "1")
+        .env("ALLP_SELF_UPDATE_TEST_OFFLINE", "1")
+        .env("ALLP_SNAPD_SOCKET", path.join("missing-snapd.socket"))
+        .env("XDG_CACHE_HOME", path.join("xdg-cache"))
+        .env("XDG_STATE_HOME", path.join("xdg-state"))
+        .env("XDG_CONFIG_HOME", path.join("xdg-config"))
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -78,6 +92,21 @@ fn run_allp_pty(path: &Path, args: &[&str], input: &str) -> Output {
     child
         .wait_with_output()
         .expect("script child should complete")
+}
+
+fn run_allp_with_live_self_update(path: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_allp"))
+        .args(args)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("PATH", path)
+        .env("ALLP_DISABLE_STANDARD_PATHS", "1")
+        .env("ALLP_SNAPD_SOCKET", path.join("missing-snapd.socket"))
+        .env("XDG_CACHE_HOME", path.join("xdg-cache"))
+        .env("XDG_STATE_HOME", path.join("xdg-state"))
+        .env("XDG_CONFIG_HOME", path.join("xdg-config"))
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("allp subprocess should run")
 }
 
 fn shell_quote(value: &str) -> String {
@@ -188,6 +217,33 @@ if [ "$#" -gt 2 ]; then
 fi
 printf '%s\n' 'git	1.0' 'code	2.0'
 "#,
+    );
+}
+
+fn install_fake_flatpak_bootstrap_provider(dir: &Path, marker: &Path) {
+    install_fake_apt(dir, marker, 0, 0);
+    install_fake_sudo_marker(dir, marker);
+    let marker = marker.display();
+    let flatpak = dir.join("flatpak");
+    write_executable(
+        dir,
+        "apt-get",
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "install" ] && [ "$2" = "flatpak" ]; then
+  printf '%s\n' 'bootstrap-flatpak' >> '{marker}'
+  printf '%s\n' '#!/bin/sh' \
+    'if [ "$1" = "--version" ]; then printf "%s\\n" "Flatpak 1.14.0"; exit 0; fi' \
+    'if [ "$1" = "remotes" ]; then printf "%s\\n" "remotes-probed" >> "{marker}"; exit 0; fi' \
+    'if [ "$1" = "remote-add" ]; then printf "%s\\n" "remote-added" >> "{marker}"; exit 0; fi' \
+    'exit 0' > '{flatpak}'
+  /bin/chmod 755 '{flatpak}'
+  exit 0
+fi
+exit 0
+"#,
+            flatpak = flatpak.display()
+        ),
     );
 }
 
@@ -1383,6 +1439,25 @@ fn snap_search_publisher_verification_is_normalized() {
         result["metadata"]["snap.publisher_verification"],
         "verified"
     );
+    assert_eq!(result["metadata"]["snap.availability"], "discovered");
+    assert_eq!(result["metadata"]["snap.discovery.query"], "pycharm");
+}
+
+#[test]
+fn snap_discovery_rows_are_not_rendered_as_installable_exact_packages() {
+    let dir = temp_dir("snap-discovery-rendering");
+    install_fake_snap_catalog(&dir, &dir.join("executed"));
+
+    let output = run_allp(&dir, &["search", "pycharm", "--from", "snap", "--no-color"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("Exact search match"));
+    assert!(out.contains("Exact search-name match · availability not yet verified"));
+    assert!(out.contains("discovery version: 2026.1.4"));
+    assert!(out.contains("publisher: JetBrains ✓"));
+    assert!(out.contains("availability: not yet verified"));
+    assert!(!out.contains("Exact package name"));
 }
 
 #[test]
@@ -1487,13 +1562,47 @@ fn snap_stale_search_result_is_blocked_before_install() {
 
     assert_eq!(output.status.code(), Some(7));
     let err = stderr(&output);
-    assert!(err.contains("Snap validation failed"));
-    assert!(err.contains("Command:"));
+    assert!(err.contains("Snap candidate unavailable"));
+    assert!(err.contains("Search status: Found"));
+    assert!(err.contains("Install status: Unavailable"));
+    assert!(err.contains("Resolution command:"));
     assert!(err.contains("snap info stale-snap"));
-    assert!(err.contains("Exit code: 1"));
+    assert!(err.contains("Resolution exit code: 1"));
     assert!(err.contains("error: snap \"stale-snap\" not found"));
     assert!(!err.contains("invalid input"));
     assert!(!marker.exists(), "stale result must not execute install");
+}
+
+#[test]
+fn snap_unavailable_result_does_not_invoke_sudo_or_install() {
+    let dir = temp_dir("snap-unavailable-no-sudo");
+    let marker = dir.join("executed");
+    let sudo_marker = dir.join("sudo-called");
+    install_fake_snap_catalog(&dir, &marker);
+    install_fake_sudo_marker(&dir, &sudo_marker);
+
+    let output = run_allp(
+        &dir,
+        &[
+            "install",
+            "stale-snap",
+            "--from",
+            "snap",
+            "--yes",
+            "--no-color",
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(7));
+    assert!(stderr(&output).contains("Snap candidate unavailable"));
+    assert!(
+        !marker.exists(),
+        "unavailable snap must not execute install"
+    );
+    assert!(
+        !sudo_marker.exists(),
+        "unavailable snap must not request sudo"
+    );
 }
 
 #[test]
@@ -1592,9 +1701,10 @@ fn snap_interactive_selection_prompts_before_validation_failure() {
     assert!(out[..validation_index].ends_with('\n'));
     assert!(out.contains("Command:"));
     assert!(out.contains("snap info stale-snap"));
-    assert!(out.contains("✖ Snap validation failed"));
+    assert!(out.contains("✖ Snap candidate unavailable"));
     assert!(out.contains("[1] Search again"));
-    assert!(out.contains("[2] Show Snap diagnostics"));
+    assert!(out.contains("[2] Try another installer"));
+    assert!(out.contains("[3] Show Snap diagnostics"));
     assert!(out.contains("[0] Cancel"));
     assert!(!out.contains("invalid input"));
     assert!(
@@ -1649,7 +1759,7 @@ fn snap_validation_actions_support_retry_diagnostics_and_cancel() {
             "--dry-run",
             "--no-color",
         ],
-        "1\n2\n0\n",
+        "1\n3\n0\n",
     );
     assert!(
         diagnostics.status.success(),
@@ -1660,12 +1770,18 @@ fn snap_validation_actions_support_retry_diagnostics_and_cancel() {
     assert!(out.contains("error: snap \"stale-snap\" not found"));
     assert!(out.contains("Snap diagnostics"));
     assert!(out.contains("Executable:"));
-    assert!(out.contains("Command:"));
-    assert!(out.contains("Exit code:"));
-    assert!(out.contains("stdout:"));
-    assert!(out.contains("stderr:"));
+    assert!(out.contains("Discovery command:"));
+    assert!(out.contains("Discovery exit code:"));
+    assert!(out.contains("Discovery stdout:"));
+    assert!(out.contains("Discovery stderr:"));
+    assert!(out.contains("Exact resolution command:"));
+    assert!(out.contains("Resolution exit code:"));
+    assert!(out.contains("Resolution stdout:"));
+    assert!(out.contains("Resolution stderr:"));
+    assert!(out.contains("Candidate state:"));
     assert!(out.contains("[1] Retry validation"));
     assert!(out.contains("[2] Search again"));
+    assert!(out.contains("[3] Try another installer"));
 
     let retry = run_allp_pty(
         &dir,
@@ -1691,6 +1807,41 @@ fn snap_validation_actions_support_retry_diagnostics_and_cancel() {
         !marker.exists(),
         "validation actions must not execute install"
     );
+}
+
+#[test]
+fn snap_try_another_installer_searches_other_backends_without_silent_selection() {
+    let dir = temp_dir("snap-try-another-installer");
+    let snap_marker = dir.join("snap-install");
+    let flatpak_marker = dir.join("flatpak-commands");
+    install_fake_snap_catalog(&dir, &snap_marker);
+    install_fake_flatpak_with_marker(&dir, &flatpak_marker);
+
+    let output = run_allp_pty(
+        &dir,
+        &[
+            "install",
+            "telegram",
+            "--from",
+            "snap",
+            "--dry-run",
+            "--no-color",
+        ],
+        "1\n2\n0\n",
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    let out = normalized_stdout(&output);
+    assert!(out.contains("[2] Try another installer"));
+    assert!(out.contains("org.telegram.desktop"));
+    assert!(out.contains("Select a package"));
+    assert!(
+        !snap_marker.exists(),
+        "Try another installer must not execute Snap install"
+    );
+    let flatpak_commands =
+        fs::read_to_string(flatpak_marker).expect("flatpak search should be attempted");
+    assert!(flatpak_commands.contains("search telegram"));
 }
 
 #[test]
@@ -1739,10 +1890,10 @@ fn snap_validation_failure_reports_stderr_stdout_signal_and_parse_errors() {
     );
     assert_eq!(stderr_failure.status.code(), Some(7));
     let err = stderr(&stderr_failure);
-    assert!(err.contains("Snap validation failed"));
-    assert!(err.contains("Command:"));
+    assert!(err.contains("Snap candidate unavailable"));
+    assert!(err.contains("Resolution command:"));
     assert!(err.contains("snap info fail-stderr"));
-    assert!(err.contains("Exit code: 2"));
+    assert!(err.contains("Resolution exit code: 2"));
     assert!(err.contains("native stderr validation failure"));
 
     let stdout_failure = run_allp(
@@ -1758,8 +1909,8 @@ fn snap_validation_failure_reports_stderr_stdout_signal_and_parse_errors() {
     );
     assert_eq!(stdout_failure.status.code(), Some(7));
     let err = stderr(&stdout_failure);
-    assert!(err.contains("Snap validation failed"));
-    assert!(err.contains("Exit code: 3"));
+    assert!(err.contains("Snap candidate unavailable"));
+    assert!(err.contains("Resolution exit code: 3"));
     assert!(err.contains("native stdout validation failure"));
 
     let signal_failure = run_allp(
@@ -1775,9 +1926,8 @@ fn snap_validation_failure_reports_stderr_stdout_signal_and_parse_errors() {
     );
     assert_eq!(signal_failure.status.code(), Some(7));
     let err = stderr(&signal_failure);
-    assert!(err.contains("Snap validation failed"));
-    assert!(err.contains("Exit code: unavailable"));
-    assert!(err.contains("Signal:"));
+    assert!(err.contains("Snap candidate unavailable"));
+    assert!(err.contains("Resolution exit code: unavailable"));
     assert!(err.contains("terminated by signal"));
 
     let parse_failure = run_allp(
@@ -1820,23 +1970,26 @@ fn snap_diagnostics_include_command_exit_code_stdout_and_stderr() {
             "--dry-run",
             "--no-color",
         ],
-        "1\n2\n0\n",
+        "1\n3\n0\n",
     );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let out = normalized_stdout(&output);
     assert!(out.contains("Snap diagnostics"));
     assert!(out.contains("Executable:"));
-    assert!(out.contains("Command:"));
+    assert!(out.contains("Discovery command:"));
+    assert!(out.contains("Exact resolution command:"));
     assert!(out.contains("snap info fail-stderr"));
-    assert!(out.contains("Exit code:"));
+    assert!(out.contains("Resolution exit code:"));
     assert!(out.contains("2"));
-    assert!(out.contains("stdout:"));
+    assert!(out.contains("Resolution stdout:"));
     assert!(out.contains("<empty>"));
-    assert!(out.contains("stderr:"));
+    assert!(out.contains("Resolution stderr:"));
     assert!(out.contains("native stderr validation failure"));
+    assert!(out.contains("Candidate state:"));
     assert!(out.contains("[1] Retry validation"));
     assert!(out.contains("[2] Search again"));
+    assert!(out.contains("[3] Try another installer"));
     assert!(out.contains("[0] Cancel"));
     assert!(!marker.exists(), "diagnostics must not execute install");
 }
@@ -2158,6 +2311,151 @@ fn update_dry_run_json_is_clean_and_executes_zero_commands() {
 }
 
 #[test]
+fn self_update_offline_check_is_structured_and_persists_no_credentials() {
+    let dir = temp_dir("self-update-offline");
+    let output = run_allp(
+        &dir,
+        &["self-update", "--offline", "--check-only", "--json"],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let json: Value =
+        serde_json::from_slice(&output.stdout).expect("self-update JSON should parse");
+    assert_eq!(json["status"], "offline");
+    let state_path = dir.join("xdg-state/allp/self-update.json");
+    let state = fs::read_to_string(state_path).expect("self-update state should be persisted");
+    assert!(state.contains("update_channel"));
+    assert!(!state.to_ascii_lowercase().contains("token"));
+    assert!(!state.to_ascii_lowercase().contains("credential"));
+}
+
+#[test]
+fn update_skip_self_update_does_not_create_self_update_state() {
+    let dir = temp_dir("update-skip-self");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    let output = run_allp(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "apt",
+            "--skip-self-update",
+            "--dry-run",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("skipped by --skip-self-update"));
+    assert!(!dir.join("xdg-state/allp/self-update.json").exists());
+    assert!(!marker.exists());
+}
+
+#[test]
+fn update_self_only_offline_stops_before_backend_updates() {
+    let dir = temp_dir("update-self-only");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    let output = run_allp(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "apt",
+            "--self-only",
+            "--offline",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("offline mode"));
+    assert!(!marker.exists(), "--self-only must not update backends");
+}
+
+#[test]
+fn completed_self_update_guard_skips_second_check_and_continues_update() {
+    let dir = temp_dir("update-reexecution-guard");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    let output = run_allp_in_with_env(
+        &dir,
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["update", "--from", "apt", "--dry-run", "--no-color"],
+        &[("ALLP_SELF_UPDATE_COMPLETED", Path::new("1"))],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("already completed in this process chain"));
+    assert!(out.contains("Refresh package metadata"));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn completed_standalone_self_update_guard_does_not_reenter_update_check() {
+    let dir = temp_dir("self-update-reexecution-guard");
+    let output = run_allp_in_with_env(
+        &dir,
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["self-update", "--no-color"],
+        &[
+            ("ALLP_SELF_UPDATE_COMPLETED", Path::new("1")),
+            ("ALLP_SELF_UPDATE_VERSION", Path::new("0.3.4")),
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("completed in this process chain"));
+    let state = fs::read_to_string(dir.join("xdg-state/allp/self-update.json"))
+        .expect("deferred completion should update state");
+    assert!(state.contains("\"last_successful_version\": \"0.3.4\""));
+}
+
+#[test]
+fn self_update_network_failure_can_continue_backend_dry_run() {
+    let dir = temp_dir("update-network-failure");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    write_executable(
+        &dir,
+        "curl",
+        "#!/bin/sh\nprintf '%s\\n' 'network unavailable' >&2\nexit 7\n",
+    );
+    let output = run_allp_with_live_self_update(
+        &dir,
+        &["update", "--from", "apt", "--dry-run", "--no-color"],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(stderr(&output).contains("Allp self-update check failed"));
+    assert!(out.contains("Refresh package metadata"));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn self_only_network_failure_does_not_run_backends() {
+    let dir = temp_dir("self-only-network-failure");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    write_executable(
+        &dir,
+        "curl",
+        "#!/bin/sh\nprintf '%s\\n' 'network unavailable' >&2\nexit 7\n",
+    );
+    let output = run_allp_with_live_self_update(
+        &dir,
+        &["update", "--from", "apt", "--self-only", "--no-color"],
+    );
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("network unavailable"));
+    assert!(!marker.exists(), "failed --self-only must not run backends");
+}
+
+#[test]
 fn update_dry_run_shows_detected_and_selected_sets() {
     let dir = temp_dir("update-selected");
     let marker = dir.join("executed");
@@ -2236,6 +2534,86 @@ fn snap_and_flatpak_up_to_date_outputs_are_not_generic_completed() {
 }
 
 #[test]
+fn flatpak_missing_executable_bootstrap_is_planned_before_dry_run() {
+    let dir = temp_dir("flatpak-bootstrap-plan");
+    let marker = dir.join("executed");
+    install_fake_flatpak_bootstrap_provider(&dir, &marker);
+
+    let output = run_allp(
+        &dir,
+        &[
+            "install",
+            "org.telegram.desktop",
+            "--from",
+            "flatpak",
+            "--dry-run",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("Install required component flatpak"));
+    assert!(out.contains("apt-get install flatpak"));
+    assert!(!marker.exists(), "dry run must not bootstrap Flatpak");
+}
+
+#[test]
+fn yes_without_allow_bootstrap_does_not_install_missing_flatpak() {
+    let dir = temp_dir("flatpak-bootstrap-policy");
+    let marker = dir.join("executed");
+    install_fake_flatpak_bootstrap_provider(&dir, &marker);
+
+    let output = run_allp(
+        &dir,
+        &[
+            "install",
+            "org.telegram.desktop",
+            "--from",
+            "flatpak",
+            "--yes",
+            "--no-interactive",
+            "--no-color",
+        ],
+    );
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("--yes --allow-bootstrap"));
+    assert!(!marker.exists(), "--yes alone must not bootstrap Flatpak");
+}
+
+#[test]
+fn approved_flatpak_bootstrap_refreshes_capabilities_without_adding_flathub() {
+    let dir = temp_dir("flatpak-bootstrap-refresh");
+    let marker = dir.join("executed");
+    install_fake_flatpak_bootstrap_provider(&dir, &marker);
+
+    let output = run_allp(
+        &dir,
+        &[
+            "install",
+            "org.telegram.desktop",
+            "--from",
+            "flatpak",
+            "--yes",
+            "--allow-bootstrap",
+            "--no-interactive",
+            "--no-color",
+        ],
+    );
+
+    assert!(
+        !output.status.success(),
+        "no remote should leave no package result"
+    );
+    let actions = fs::read_to_string(&marker).expect("bootstrap actions should be recorded");
+    assert!(actions.contains("bootstrap-flatpak"));
+    assert!(actions.contains("remotes-probed"));
+    assert!(!actions.contains("remote-added"));
+    assert!(stderr(&output).contains("was not found"));
+}
+
+#[test]
 fn flatpak_unavailable_is_reported_in_combined_search_summary() {
     let dir = temp_dir("flatpak-unavailable-summary");
     let marker = dir.join("marker");
@@ -2309,7 +2687,7 @@ fn flatpak_telegram_result_is_included_in_combined_apps_search() {
     assert!(out.contains("Search Summary"));
     assert!(out.contains("Flatpak  1 result") || out.contains("Flatpak 1 result"));
     let commands = fs::read_to_string(marker).expect("flatpak commands should be recorded");
-    assert!(commands.contains("remotes --columns=name,url"));
+    assert!(commands.contains("remotes --columns=name,title,url,filter,options"));
     assert!(commands
         .contains("search telegram --columns=application,name,description,version,branch,remotes"));
 }

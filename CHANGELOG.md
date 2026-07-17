@@ -4,6 +4,39 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-18
+
+### Release Title
+
+Allp v0.3.4 — Modular Backend Recovery and Secure Self-Update
+
+### Added
+
+- Cross-platform platform context, shared capability registry, structured backend requirements, and APT/DNF/Pacman/Zypper/APK prerequisite providers.
+- Primary snapd REST discovery, exact resolution, installation requests, and asynchronous change monitoring, with reasoned CLI fallback.
+- Explicit Flatpak installed-without-remotes state and separately confirmed user-scoped Flathub setup.
+- Fresh alternative-installer routing that excludes failed backends and discards cached candidates.
+- Trusted GitHub self-update with stable/prerelease channels, strict SemVer, release manifests, target selection, ETags, SHA-256 verification, safe extraction, atomic rollback, Windows deferral, and guarded continuation.
+- `allp doctor`, platform-aware state paths, Linux/macOS/Windows CI coverage, target binary archives, and release-manifest generation.
+
+### Changed
+
+- `allp update` now has explicit self-update, platform refresh, planning, confirmation, execution, and summary phases, with skip/self-only/check-only/offline controls.
+- Prerequisite and remote mutations require separate approval; `--yes` alone cannot bootstrap them, while `--yes --allow-bootstrap` can approve a displayed plan.
+- Release CI now builds only advertised native targets and verifies every binary checksum and manifest entry before tag-only publication.
+
+### Fixed
+
+- A valid snapd `404 snap-not-found` is authoritative unavailable and cannot fall through to `snap info`, sudo, or installation.
+- Flatpak without remotes is no longer misreported as a package no-match state.
+- `Try another installer` no longer reuses or redisplays the failed Snap result.
+- Root-owned executable writability uses effective UID/group permissions, and replacement preserves mode/ownership with rollback.
+
+### Known Limitations
+
+- Snap stable-track selection remains conservative when multiple tracks require an explicit choice.
+- Existing GitHub releases without a valid target manifest cannot be consumed by automatic self-update.
+
 ## [0.3.3] - 2026-07-17
 
 ### Release Title
@@ -17,11 +50,14 @@ Allp v0.3.3 - Snap Validation and Repository Stabilization
 - Official Homebrew bootstrap candidate with an explicit native plan that downloads the official installer to a temp file before running it with `/bin/bash`.
 - Documentation for software identity, official bootstrap behavior, name collisions, Homebrew bootstrap, and the v0.3.3 test plan.
 - Snap install metadata validation through `snap info` after candidate selection.
+- Explicit Snap discovery and resolution states so `snap find` rows are treated as unverified discovery candidates until exact metadata resolves.
 - Canonical Snap package-name resolution, publisher verification normalization, channel metadata, architecture checks, and installed-state preflight.
+- Separate Snap diagnostics for wide discovery and exact resolution commands, including candidate state, stdout, stderr, and exit codes.
 - Classic-confinement Snap install plans, including `snap install <package> --classic` when metadata requires it.
 - Safe root `Makefile` targets for formatting, checking, testing, architecture checks, release build, quality gate, docs check, running, version, and Git status.
 - Source installation targets for `/usr/local/bin/allp`, user-local installs, reinstall/uninstall checks, and PATH diagnostics.
 - A local-only release workflow with `make hooks-install`, `make release-prepare`, post-commit release finalization, annotated local tags, source archives, checksums, and finalized local release notes.
+- Release title files, `make release-push`, and a tag-triggered GitHub Actions workflow for creating GitHub Releases only from pushed semantic-version tags.
 - Temporary-repository release automation tests that avoid creating tags or artifacts in the developer repository.
 - Repository-specific `.gitignore` coverage for build output, logs, temp files, editor state, local env files, secrets, caches, and generated packages.
 - Complete English and Persian README files for v0.3.3.
@@ -33,10 +69,11 @@ Allp v0.3.3 - Snap Validation and Repository Stabilization
 - `allp install Homebrew` no longer treats the unrelated npm package named `homebrew` as the Homebrew package manager.
 - npm global installs preflight the configured global prefix for current-user writability before real execution.
 - Snap search publishers such as `jetbrains**` are normalized into publisher name plus verification state instead of storing decoration as part of the publisher.
+- Snap search output now labels wide search results as discovery/search matches with availability not yet verified instead of installable exact package names.
 - Snap install plans now include release-relevant details such as software title, publisher, channel, confinement, and architectures when available.
 - Generated `cargo-check.log` is no longer tracked.
 - The crate repository URL now matches the real project remote.
-- Local release output under `dist/` and readiness markers under `.release-state/` are ignored while `.githooks/`, release drafts, scripts, documentation, and release metadata remain trackable.
+- Local release output under `dist/` and readiness markers under `.release-state/` are ignored while `.githooks/`, release titles, release-note drafts, scripts, documentation, and release metadata remain trackable.
 
 ### Fixed
 
@@ -44,6 +81,7 @@ Allp v0.3.3 - Snap Validation and Repository Stabilization
 - `--yes` does not bypass conflicting-identity confirmation.
 - DNF rpmdb failures and missing pip failures now produce targeted Allp diagnostics.
 - Raw `snap find` rows no longer become install plans directly.
+- Snap search rows that fail exact resolution are reported as unavailable candidates with search status, install status, and native error text.
 - PyCharm-like classic Snap packages now plan `snap install <package> --classic` after metadata validation.
 - Strict Snap packages no longer receive `--classic`.
 - Stale or unavailable Snap search results fail before execution with a targeted diagnostic.

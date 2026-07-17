@@ -85,13 +85,16 @@ Python and Node registry packages show source/registry separately from installer
 
 Snap install planning is metadata-gated:
 
-1. search results come from `snap find`;
-2. the selected candidate is revalidated with `snap info`;
-3. Allp uses the canonical `name`, not the display title;
-4. publisher decorations such as `**` are stored as verification state;
-5. architecture, stable channel, confinement, and installed state are inspected;
-6. classic confinement adds `--classic`;
-7. stale or unavailable results fail before any install child process starts.
+1. primary search uses snapd REST wide discovery and marks results as not yet verified;
+2. the selected candidate is resolved exactly with a separate snapd REST name request;
+3. exact resolution, not discovery, is the source of truth for installation;
+4. Allp uses the canonical `name`, not the display title;
+5. publisher decorations such as `**` are stored as verification state;
+6. architecture, stable channel, confinement, and installed state are inspected;
+7. classic confinement adds REST `"classic": true`, or CLI fallback `--classic`;
+8. stale or unavailable results fail before sudo, final confirmation, or any install child process starts.
+
+A recognized snapd `404 snap-not-found` is authoritative and cannot trigger `snap info`. CLI fallback is limited to explicit REST transport/compatibility failures and records the reason.
 
 If a Snap has no stable channel, or multiple stable tracks without a safe default, Allp refuses to silently choose candidate, beta, edge, or an arbitrary track.
 
@@ -118,9 +121,13 @@ allp update --from npm --target global --dry-run
 allp update --from pip --target environment --dry-run
 allp update --from pipx --target tools --dry-run
 allp update --from uv --target tools --dry-run
+allp update --skip-self-update
+allp update --self-only
+allp update --check-only
+allp update --offline
 ```
 
-Runs each detected backend's declared update action. Semantics are backend-owned and shown in the action label.
+Runs a guarded Allp self-update check, refreshes platform/capability state, then runs each detected backend's declared update action. Semantics are backend-owned and shown in the action label.
 
 Examples:
 
@@ -138,6 +145,8 @@ Examples:
 - uv tools update uses `uv tool upgrade --all`.
 
 Mutating backend operations run sequentially and continue after failures. Any failure returns exit code `8`.
+
+`--skip-self-update` bypasses only the GitHub phase. `--self-only` never runs backend updates. `--check-only` and `--dry-run` do not replace the Allp binary. `--offline` contacts neither GitHub nor backend remote sources.
 
 For real execution, Allp first renders the complete plan, explains child-only privilege elevation for root-required plans, and prompts once for the batch. `--no-interactive` cannot provide that confirmation; use `--dry-run`, run interactively, or provide fully resolved choices with `--yes`.
 
@@ -185,3 +194,23 @@ First inspects installed inventories. If no installed match exists, it queries r
 Default info output is curated: backend, package ID, display name, version, installed state, important normalized fields such as architecture/homepage when available, source, scope, artifact type, and description.
 
 `--full` includes normalized extended metadata. `--raw` prints native backend info output when supported. `--json` returns the structured normalized model.
+
+## `doctor`
+
+```bash
+allp doctor
+allp doctor --json
+```
+
+Reports platform, user/privilege context, Allp ownership and writability, resolved executable paths, backend states, Snap socket, Flatpak remotes, trusted update source, release target, and data directories. It is read-only and does not print credentials.
+
+## `self-update`
+
+```bash
+allp self-update
+allp self-update --check-only
+allp self-update --offline
+allp self-update --update-channel prerelease
+```
+
+Checks only the trusted official GitHub repository. Compatible assets are selected from the signed-by-checksum release manifest by OS, architecture, libc, and target. Verification, replacement, rollback, Windows deferral, and guarded re-execution are documented in [SELF_UPDATE.md](SELF_UPDATE.md).

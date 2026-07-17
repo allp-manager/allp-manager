@@ -2,9 +2,9 @@
 
 This roadmap describes direction, not a promise. Allp keeps native package managers as the source of truth.
 
-## Current Release: v0.3.3
+## Current Release: v0.3.4
 
-v0.3.3 is a public-alpha stabilization release with:
+v0.3.4 is a public-alpha foundation and recovery release with:
 
 - command-first CLI for `detect`, `search`, `install`, `remove`, `update`, `upgrade`, `list`, and `info`;
 - interactive search-scope selection;
@@ -24,8 +24,15 @@ v0.3.3 is a public-alpha stabilization release with:
 - experimental Node support for the npm registry with npm, pnpm, and Yarn;
 - software identity warnings for known name collisions;
 - Snap metadata revalidation before install planning, including canonical names, verified publishers, confinement, stable channels, architecture checks, and installed-state preflight;
+- snapd REST as the primary Snap transport, authoritative exact not-found handling, REST installation, and terminal change monitoring;
+- explicit Flatpak no-remotes state and separately confirmed Flathub setup;
+- structured prerequisite requirements, distro-family bootstrap providers, and `--allow-bootstrap` safety;
+- fresh alternative-installer routing with failed-backend exclusions;
+- secure official GitHub self-update with strict manifests, checksums, target selection, rollback, Windows deferral, and guarded continuation;
+- cross-platform platform/capability diagnostics through `allp doctor`;
+- target-specific Linux, macOS, and Windows release assets and manifest generation;
 - source installation through the root Makefile;
-- local-only release preparation/finalization with tracked release-note drafts, ignored local artifacts, annotated local tags, and temp-repository automation tests;
+- local release preparation/finalization with tracked release titles and notes, ignored local artifacts, annotated local tags, tag-triggered GitHub Releases, and temp-repository automation tests;
 - repository hygiene, Makefile workflow, and refreshed English/Persian documentation.
 
 ## Next Stabilization
@@ -42,8 +49,7 @@ v0.3.3 is a public-alpha stabilization release with:
 
 ## Future Commands
 
-- `doctor`
-- diagnostics/support bundle
+- redacted diagnostics/support bundle export
 - safe cleanup where native backends support it
 
 ## Future Development Ecosystems

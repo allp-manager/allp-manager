@@ -1,11 +1,16 @@
 use crate::{
+    alternatives::AlternativeSearchRequest,
     backends::{InstallPreflight, InstallPreflightRecovery},
     cli::{
         confirm_conflicting_identity, confirm_execution, confirm_fuzzy_candidate, select_installer,
-        select_package_candidate, should_page_candidate_selection, ConfirmationRequest,
+        select_no_alternative_action, select_package_candidate, should_page_candidate_selection,
+        AlternativeNoMatchAction, ConfirmationRequest,
     },
-    domain::{AllpError, AllpResult, Capability, MatchKind, PackageDomain, SearchScope},
-    execution::render_execution_plan_with_context,
+    domain::{
+        AllpError, AllpResult, Capability, MatchKind, PackageDomain, SearchBackendState,
+        SearchScope,
+    },
+    execution::{render_execution_plan_with_context, ProcessStatus},
     operations::{
         search::{self, SearchPolicy},
         validate_package_id, OperationContext,
@@ -14,16 +19,42 @@ use crate::{
 use std::time::Instant;
 
 pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
+    let mut active_backend_filter = context.backend_filter;
+    let mut current_query = package.to_owned();
+    let mut alternative_request: Option<AlternativeSearchRequest> = None;
+
     'search_again: loop {
-        let report = search::gather_with_policy(
-            context,
-            package,
-            SearchPolicy {
-                required_capability: Some(Capability::Install),
-                scope: context.search_scope.unwrap_or(SearchScope::AllSources),
-                ..SearchPolicy::default()
-            },
-        )?;
+        let search_context = OperationContext {
+            backends: context.backends,
+            discovery: context.discovery,
+            runner: context.runner,
+            renderer: context.renderer,
+            privilege_context: context.privilege_context,
+            dry_run: context.dry_run,
+            no_interactive: context.no_interactive,
+            yes: context.yes,
+            allow_bootstrap: context.allow_bootstrap,
+            verbose: context.verbose,
+            backend_filter: active_backend_filter,
+            search_scope: context.search_scope,
+            target: context.target,
+            root_context_notice_shown: context.root_context_notice_shown,
+        };
+        let policy = SearchPolicy {
+            required_capability: Some(Capability::Install),
+            scope: context.search_scope.unwrap_or(SearchScope::AllSources),
+            ..SearchPolicy::default()
+        };
+        let report = if let Some(request) = &alternative_request {
+            search::gather_with_policy_excluding(
+                &search_context,
+                &current_query,
+                policy,
+                &request.excluded_backends,
+            )?
+        } else {
+            search::gather_with_policy(&search_context, &current_query, policy)?
+        };
 
         for issue in &report.issues {
             context
@@ -32,14 +63,50 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         }
 
         if report.candidates.is_empty() {
-            return Err(AllpError::PackageNotFound(package.to_owned()));
+            if alternative_request.is_none() {
+                return Err(AllpError::PackageNotFound(current_query.clone()));
+            }
+            context.renderer.search(&report);
+            let can_configure_remote = report.backend_summaries.iter().any(|summary| {
+                summary.state == SearchBackendState::NoConfiguredRemotes
+                    && context.backends.get(&summary.backend_id).is_some()
+            });
+            loop {
+                match select_no_alternative_action(can_configure_remote, context.no_interactive)? {
+                    AlternativeNoMatchAction::ConfigureFlatpak => {
+                        configure_search_prerequisite(context, &report)?;
+                        continue 'search_again;
+                    }
+                    AlternativeNoMatchAction::SearchAnother(query) => {
+                        current_query = query;
+                        if let Some(request) = &mut alternative_request {
+                            request.query = current_query.clone();
+                        }
+                        continue 'search_again;
+                    }
+                    AlternativeNoMatchAction::UnrestrictedSearch => {
+                        active_backend_filter = context.backend_filter;
+                        alternative_request = None;
+                        current_query = package.to_owned();
+                        continue 'search_again;
+                    }
+                    AlternativeNoMatchAction::ShowDiagnostics => {
+                        context.renderer.search(&report);
+                    }
+                    AlternativeNoMatchAction::Cancelled => {
+                        context.renderer.info_message("Installation cancelled");
+                        context.renderer.plain_message("0 commands executed");
+                        return Ok(());
+                    }
+                }
+            }
         }
 
-        let selectable = if context.backend_filter.is_some() {
+        let selectable = if active_backend_filter.is_some() {
             let exact: Vec<_> = report
                 .candidates
                 .iter()
-                .filter(|candidate| candidate.package_id.eq_ignore_ascii_case(package))
+                .filter(|candidate| candidate.package_id.eq_ignore_ascii_case(&current_query))
                 .cloned()
                 .collect();
             if exact.len() == 1 {
@@ -64,12 +131,12 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         {
             context
                 .renderer
-                .install_sources(package, scope, &selectable);
+                .install_sources(&current_query, scope, &selectable);
         }
         let preferred_identity_index = preferred_official_identity_index(&selectable);
         if selectable.len() > 1 && context.no_interactive && preferred_identity_index.is_none() {
             return Err(AllpError::AmbiguousSelection(install_ambiguity_message(
-                package,
+                &current_query,
                 &selectable,
                 context.dry_run,
             )));
@@ -92,7 +159,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         {
             confirm_fuzzy_candidate(context.no_interactive)?;
         }
-        if let Some(filter) = context.backend_filter {
+        if let Some(filter) = active_backend_filter {
             if candidate
                 .installers
                 .iter()
@@ -119,6 +186,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
                     context.renderer.preflight_stage(
                         &status.stage,
                         &status.command,
+                        status.display_command.as_deref(),
                         context.verbose > 0,
                     );
                 }
@@ -166,7 +234,20 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
                             context.no_interactive,
                         )? {
                             InstallPreflightRecovery::RetryValidation => continue,
-                            InstallPreflightRecovery::RetrySearch => continue 'search_again,
+                            InstallPreflightRecovery::RetrySearch => {
+                                active_backend_filter = context.backend_filter;
+                                alternative_request = None;
+                                current_query = package.to_owned();
+                                continue 'search_again;
+                            }
+                            InstallPreflightRecovery::TryAlternativeInstallers => {
+                                active_backend_filter = None;
+                                let mut request = AlternativeSearchRequest::new(&current_query);
+                                request.software_identity = Some(candidate.identity.clone());
+                                request.exclude(candidate.backend_id.clone());
+                                alternative_request = Some(request);
+                                continue 'search_again;
+                            }
                             InstallPreflightRecovery::Cancelled => {
                                 context.renderer.info_message("Installation cancelled");
                                 context.renderer.plain_message("0 commands executed");
@@ -233,6 +314,86 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         }
         return execute_install(context, plan, selected_runtime);
     }
+}
+
+fn configure_search_prerequisite(
+    context: &OperationContext<'_>,
+    report: &crate::domain::SearchReport,
+) -> AllpResult<()> {
+    let summary = report
+        .backend_summaries
+        .iter()
+        .find(|summary| summary.state == SearchBackendState::NoConfiguredRemotes)
+        .ok_or_else(|| {
+            AllpError::InvalidInput("no configurable search prerequisite is available".to_owned())
+        })?;
+    let runtime = context.backend(&summary.backend_id)?;
+    let plan = runtime
+        .backend
+        .plan_search_prerequisite(&runtime.commands)?
+        .ok_or_else(|| AllpError::UnsupportedOperation {
+            backend: runtime.backend.display_name().to_owned(),
+            operation: "configure search prerequisite".to_owned(),
+        })?;
+    context
+        .renderer
+        .planned_operations(std::slice::from_ref(&plan), context.privilege_context);
+    if context.dry_run {
+        return Err(AllpError::InvalidInput(
+            "dry run stopped before changing Flatpak remote configuration".to_owned(),
+        ));
+    }
+    let confirmed = confirm_execution(
+        context.no_interactive,
+        context.yes && context.allow_bootstrap,
+        ConfirmationRequest {
+            prompt: "Add this Flatpak remote?".to_owned(),
+            default_yes: false,
+            non_interactive_hint: "Remote configuration requires explicit approval. Use --yes --allow-bootstrap after reviewing the plan."
+                .to_owned(),
+        },
+    )?;
+    if !confirmed {
+        return Err(AllpError::InvalidInput(
+            "Flatpak remote configuration cancelled".to_owned(),
+        ));
+    }
+    let status = context.runner.execute(&plan)?;
+    ensure_configuration_succeeded(context, &plan, status)?;
+    if !runtime
+        .backend
+        .verify_search_prerequisite(&runtime.commands, context.runner)?
+    {
+        return Err(AllpError::InvalidInput(format!(
+            "{} configuration command succeeded, but capability refresh could not verify the required remote",
+            runtime.backend.display_name()
+        )));
+    }
+    context.renderer.success_message(&format!(
+        "{} search prerequisite configured and verified.",
+        runtime.backend.display_name()
+    ));
+    Ok(())
+}
+
+fn ensure_configuration_succeeded(
+    context: &OperationContext<'_>,
+    plan: &crate::domain::ExecutionPlan,
+    status: ProcessStatus,
+) -> AllpResult<()> {
+    if status.success {
+        return Ok(());
+    }
+    Err(AllpError::CommandFailed {
+        backend: plan.backend_name.clone(),
+        command: render_execution_plan_with_context(plan, context.privilege_context),
+        code: status.code,
+        stderr: if status.stderr.trim().is_empty() {
+            status.stdout
+        } else {
+            status.stderr
+        },
+    })
 }
 
 fn execute_install(

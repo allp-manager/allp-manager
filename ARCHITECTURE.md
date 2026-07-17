@@ -1,6 +1,6 @@
 # Allp Architecture
 
-Allp is a transparent orchestration layer over package managers already installed on the system. It does not resolve dependencies, maintain a package database, download artifacts itself, or replace native package-manager behavior.
+Allp is a transparent orchestration layer over package managers already installed on the system. It does not resolve package dependencies, maintain a package database, or replace native package-manager behavior. The only Allp-owned artifact download is the verified official self-update path.
 
 ## Core Rules
 
@@ -17,6 +17,8 @@ Allp is a transparent orchestration layer over package managers already installe
 
 ```text
 CLI
+  -> PlatformContext
+  -> CapabilityRegistry / RequirementSet
   -> app bootstrap
   -> BackendDiscovery
   -> DetectedBackendSet
@@ -24,6 +26,13 @@ CLI
   -> backend query or ExecutionPlan
   -> renderer
   -> process runner
+```
+
+The self-update flow is separate:
+
+```text
+GitHubReleaseSource -> ReleaseManifest -> staged verification
+  -> platform replacement -> rollback/post-check -> guarded re-execution
 ```
 
 `main.rs` only parses CLI arguments, calls the app bootstrap, and maps errors to stable alpha exit codes.
@@ -48,6 +57,22 @@ Pure shared models:
 - reports, issues, operation statuses, errors, and exit codes
 
 Domain code does not know native package-manager command syntax.
+
+### `platform`, `capabilities`, and `requirements`
+
+`PlatformContext` normalizes OS/distribution family, architecture/libc, WSL/container state, users, platform data paths, and the current executable's ownership/writability. `CapabilityRegistry` resolves shared executable capabilities once per operation. Backends expose structured requirement sets, including sockets, services, remotes, permissions, and network needs.
+
+### `bootstrap`
+
+Prerequisite installation is separate from the operation that requested it. APT, DNF, Pacman, Zypper, and APK providers map known requirements to immutable plans. Executable installation, service enablement, remote addition, configuration changes, and elevation are distinct mutations. Verification refreshes capabilities before the original operation can continue.
+
+### `alternatives`
+
+Alternative routing carries an explicit excluded-backend set. A failed exact Snap result can be excluded before fresh workers run, preventing cached Snap candidates from reappearing. Unrestricted search clears the exclusion and starts again.
+
+### `self_update`, `release`, `state`, and `diagnostics`
+
+Self-update owns the trusted GitHub source, strict SemVer checks, manifest target selection, checksum/archive/binary verification, replacement, rollback, and guarded relaunch. `state` writes channel/ETag/update state atomically in the platform directory. `diagnostics` combines platform, capabilities, backend state, Snap socket, Flatpak remotes, and release-target information for `allp doctor`.
 
 ### `discovery`
 
@@ -82,7 +107,7 @@ Backends do not spawn mutating processes.
 
 Backends may expose raw native info output through `raw_info`; default CLI info remains curated unless the user asks for `--raw`.
 
-Backends may also perform read-only install-planning preflight. Snap uses this hook to revalidate a selected `snap find` result with `snap info`, replace it with the canonical package name, normalize publisher verification, inspect confinement/channel/architecture metadata, check installed state, and only then return a candidate that generic install planning can render.
+Backends may also perform read-only install-planning preflight. Snap uses this hook for separate exact resolution through snapd REST, with a reasoned CLI fallback only when REST transport/compatibility permits it. It replaces the discovery row with canonical metadata before generic install planning can render a plan.
 
 Backends can declare optional command requirements. Python uses this to detect pip, pipx, and uv as installer choices while keeping PyPI as the registry/source. Node uses it to detect pnpm and Yarn while keeping the npm registry as the source.
 

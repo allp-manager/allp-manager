@@ -45,6 +45,11 @@ allp update --dry-run
 allp update --scope dev --target all --dry-run
 allp update --from npm --target project --dry-run
 allp update --from pipx --target tools --dry-run
+allp update --skip-self-update
+allp update --self-only
+allp update --check-only
+allp update --offline
+allp update --update-channel prerelease
 
 allp upgrade
 allp upgrade --from apt
@@ -69,6 +74,14 @@ allp install black --from pipx --dry-run
 allp search typescript --from node
 allp install typescript --from pnpm --dry-run
 allp search git --from brew
+
+allp doctor
+allp doctor --json
+
+allp self-update
+allp self-update --check-only
+allp self-update --offline
+allp self-update --update-channel prerelease
 ```
 
 `--from` accepts backend IDs and documented aliases. Examples: `python`, `pypi`, `pip`, `pipx`, `uv`, `node`, `npm`, `pnpm`, `yarn`, `brew`, `homebrew`, and `linuxbrew`.
@@ -83,7 +96,7 @@ allp search git --from brew
 
 Allp never silently chooses between meaningful candidates across ecosystems.
 
-Snap install candidates have an additional validation step after selection. A raw `snap find` row is never an install plan. Allp revalidates with `snap info`, resolves the canonical package name, publisher verification, confinement, architecture availability, channels, stable availability, and installed state, then builds the immutable plan. Classic snaps include `--classic` only when metadata requires it.
+Snap install candidates use a two-stage flow. The primary transport performs wide discovery with snapd REST `GET /v2/find?q=<query>&scope=wide`; that candidate is display-only. After selection, authoritative exact resolution uses `GET /v2/find?name=<canonical-name>`. A recognized `404 snap-not-found` is unavailable and never triggers CLI fallback. CLI `snap find`/`snap info` fallback is limited to socket, connection, unsupported-endpoint, or unrecognized-response failures and records its reason. Exact metadata resolves canonical name, publisher verification, confinement, architecture, channels, stable availability, and installed state. Unavailable or incompatible results stop before sudo or install. REST classic installation includes `"classic": true`; CLI fallback includes `--classic` only when exact metadata requires it.
 
 For install selection, every result has a stable global number. Large interactive result sets use the built-in selector:
 
@@ -98,7 +111,7 @@ Enter       select the highlighted/first visible result where supported
 
 Non-TTY and JSON output never start the interactive selector.
 
-Mutating commands support `--yes` / `-y`. This bypasses only Allp's final confirmation prompt after all package, installer, scope, and target choices are resolved. It never adds native auto-confirm flags and never bypasses ambiguity, PEP 668, Homebrew root protection, ownership checks, or registry safety checks.
+Mutating commands support `--yes` / `-y`. This bypasses only Allp's ordinary final confirmation prompt after all package, installer, scope, and target choices are resolved. It never adds native auto-confirm flags, bypasses ambiguity or ownership/registry safety, or approves prerequisite/repository changes. Non-interactive bootstrap requires `--yes --allow-bootstrap` after the plan is displayed.
 
 Development maintenance supports `--target`:
 
@@ -108,6 +121,12 @@ Development maintenance supports `--target`:
 - `environment`
 - `tools`
 - `all`
+
+## Self-Update And Doctor
+
+`allp update` checks the trusted official GitHub release source before backend updates unless `--skip-self-update`, `--offline`, or the guarded same-process-chain completion marker applies. `--self-only` stops after that phase. `--check-only` and dry run cannot replace the binary. Unsupported targets leave the installed binary unchanged and ordinary updates can continue.
+
+`allp doctor` is read-only. It reports normalized platform, capability, Snap, Flatpak, backend, install-path, update-source, and data-directory state without exposing credentials.
 
 ## Stable Exit Codes
 

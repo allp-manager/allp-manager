@@ -4,11 +4,10 @@
 
 > One CLI for the package managers already on your machine.
 
-Allp is a transparent package-manager orchestrator for Linux. It discovers native tools such as APT, Pacman, DNF, Flatpak, Snap, Homebrew/Linuxbrew, Python installers, and Node installers, then shows the exact native command before anything mutates the system.
+Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, Flatpak, Snap, Homebrew/Linuxbrew, Python installers, and Node installers, then shows the exact native command or local API request before anything mutates the system.
 
-Current version: **0.3.3**
+Current version: **0.3.4**
 Maturity: **public alpha**
-Release title: **Allp v0.3.3 - Snap Validation and Repository Stabilization**
 
 ## Why Allp Exists
 
@@ -25,7 +24,7 @@ Core principles:
 
 ## Supported Systems
 
-Allp targets Linux and Linux-like environments where the relevant native package managers are already installed. Homebrew support covers Linuxbrew behavior in this release; macOS validation remains experimental.
+The platform layer detects Linux distributions and package-manager families, macOS, Windows, WSL, containers, architecture, libc, users, executable ownership, and platform data directories. Package orchestration is maturest on Linux. Homebrew/macOS remains experimental; Windows currently supports compilation, diagnostics, release-target selection, and deferred self-replacement, but does not advertise Linux-only Snap or Flatpak backends.
 
 ## Backends
 
@@ -139,9 +138,16 @@ Allp does not add nested sudo. Root-required system plans run directly, and user
 
 `--yes` bypasses only Allp's final confirmation after choices are resolved. It never adds native `-y`, `--assumeyes`, or equivalent flags.
 
-## Snap Validation
+## Snap Discovery And Resolution
 
-Snap install planning no longer trusts raw `snap find` rows. After a Snap result is selected, Allp runs `snap info <candidate>` and resolves:
+Snap uses the local snapd REST API through `/run/snapd.socket` when it is reachable. Wide discovery and exact resolution are separate:
+
+```text
+GET /v2/find?q=<encoded-query>&scope=wide
+GET /v2/find?name=<encoded-canonical-name>
+```
+
+A discovery row is never an installation plan. After selection, exact resolution verifies:
 
 - canonical package name and display title;
 - publisher and verification state;
@@ -149,17 +155,33 @@ Snap install planning no longer trusts raw `snap find` rows. After a Snap result
 - architecture availability;
 - tracks and channels;
 - stable-channel availability;
-- installed state via `snap list <canonical-name>`.
+- installed state.
 
-Classic confinement is added only when metadata requires it:
+An authoritative snapd `404` with `kind: snap-not-found` means unavailable. It is not a transport error and never falls through to `snap info`. Allp stops before sudo or installation, and `Try another installer` performs a fresh search with Snap excluded and cached Snap results discarded.
+
+CLI fallback is allowed only when the socket is absent or denied, connection fails, an endpoint is unsupported, or the response is not recognizable as snapd. The concrete fallback reason is kept in diagnostics. CLI exact resolution uses an argv vector equivalent to `snap info <name>`; successful exit status remains success even if stderr contains a warning.
+
+REST installation sends `POST /v2/snaps/<name>`, includes `"classic": true` only for classic confinement, and polls `/v2/changes/<id>` until a terminal state. A change ID alone is not success. CLI fallback adds `--classic` only when metadata requires it:
 
 ```bash
 allp install pycharm --from snap --dry-run
-# planned native command includes:
+# when CLI fallback is active, the native plan includes:
 snap install pycharm --classic
 ```
 
-Strict snaps do not receive `--classic`. If no stable channel exists, or multiple stable tracks exist without a safe default, Allp stops instead of silently choosing candidate, beta, or edge. A dedicated interactive channel chooser is still a known limitation of this alpha.
+Strict snaps do not receive `--classic`. If no stable channel exists, or multiple stable tracks exist without a safe default, Allp stops instead of silently choosing candidate, beta, edge, or an arbitrary track.
+
+## Flatpak And Prerequisites
+
+Flatpak distinguishes four states: not installed, installed without remotes, installed with remotes, and backend error. Remote detection uses:
+
+```bash
+flatpak remotes --columns=name,title,url,filter,options
+```
+
+No remotes means no searchable catalog; it is not reported as "no package match." Allp can offer a separate, user-scoped Flathub plan using the exact remote name and URL. It never adds Flathub automatically. `--yes` alone cannot bootstrap an executable, enable a service, or add a remote; unattended approval requires both `--yes --allow-bootstrap`, after the full plan is printed.
+
+Missing Flatpak or Snap executables can be planned through structured APT, DNF, Pacman, Zypper, or APK bootstrap providers where a mapping is known. After an approved install, Allp refreshes capability and backend detection and continues only if the requirement is verified. Flatpak results preserve application ID, branch, remote, version, name, and description, and installation uses the remote plus application ID.
 
 ## Python And Node
 
@@ -197,6 +219,27 @@ allp update --dry-run --json
 
 Human logs are not mixed into JSON stdout.
 
+## Update, Self-Update, And Doctor
+
+`allp update` checks the trusted repository `Aliazadi-1776/allp` before ordinary backend metadata updates unless disabled. Its phases cover self-update, platform/capability refresh, backend planning, confirmation, execution, and summary.
+
+```bash
+allp doctor
+allp self-update --check-only
+allp self-update --offline
+allp update --check-only
+allp update --skip-self-update
+allp update --self-only
+allp update --offline
+allp update --update-channel prerelease
+```
+
+Stable is the default channel; prerelease selection is explicit and persisted. Release metadata must contain `allp-release-manifest.json`. Allp strictly compares semantic versions, selects an asset by OS, architecture, libc, executable format, and target, and refuses unsupported targets.
+
+Downloads are HTTPS-only, bounded by redirects, time, and size, restricted to the exact official repository/tag/asset, and verified with SHA-256 before safe extraction. The staged binary must report the expected version. Linux and macOS replacement uses same-directory staging, a rollback backup, post-install verification, and minimal elevation for non-writable installations. Windows uses a verified deferred helper. A guarded relaunch continues `allp update` once without entering an update loop. Offline mode contacts neither GitHub nor backend remote sources.
+
+`allp doctor` reports platform, users, install path ownership/writability, executable paths, backend states, Snap socket reachability, Flatpak remotes, trusted update source, release target, and cache/state/config paths without printing tokens or unrelated environment data.
+
 ## Makefile Workflow
 
 The root Makefile keeps development, installation, and local release work in
@@ -214,6 +257,7 @@ make build
 make release
 make quality
 make run ARGS="search git"
+make doctor
 make version
 make git-status
 make docs-check
@@ -230,8 +274,9 @@ operations, commit, push, tag, publish, or hide failures.
 
 ## Local Release Workflow
 
-The release workflow is local by design. It does not push, publish a GitHub
-Release, or upload assets.
+The release workflow is explicit. Local preparation never pushes, publishes a
+GitHub Release, or uploads assets. A GitHub Release is created only after a
+semantic-version tag such as `v0.3.4` is pushed.
 
 Run once per clone:
 
@@ -248,7 +293,8 @@ make release-prepare VERSION=0.3.4
 ```
 
 `release-prepare` updates the package version, Cargo.lock through Cargo,
-CHANGELOG, README version references, and a tracked draft such as
+CHANGELOG, README version references, a tracked release title such as
+`release/RELEASE_TITLE_v0.3.4.txt`, and a tracked draft such as
 `release/RELEASE_NOTES_v0.3.4.md`, then runs `make quality`. It writes an
 ignored readiness marker only after that quality gate passes.
 
@@ -273,6 +319,15 @@ state and `make release-workflow-test` to run the temp-repository automation
 tests. VS Code task examples live in `contrib/vscode/tasks.json` because
 `.vscode/` is editor-local and ignored.
 
+When the local release tag is ready, run `make release-push` explicitly. It
+verifies the release commit, annotated tag, and tag target, then pushes the
+current branch and matching tag. The tag-only GitHub Actions workflow creates
+the GitHub Release from the prepared title and notes. It builds and tests
+Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64 binaries;
+uploads their archives and checksums; creates the exact-tag source archive; and
+generates and verifies `allp-release-manifest.json`. It refuses an existing
+conflicting release.
+
 ## Troubleshooting
 
 | Symptom | What to do |
@@ -281,23 +336,27 @@ tests. VS Code task examples live in `contrib/vscode/tasks.json` because
 | DNF/RPM database error | Check rpmdb permissions or repair the RPM database before retrying. |
 | Missing pip, pipx, or uv | Run `allp detect --verbose` and install/configure the missing Python tool intentionally. |
 | npm global permission issue | Fix npm prefix ownership or use a user-owned Node manager; Allp will not sudo npm globals. |
-| Flatpak user/system mismatch | Use `allp list --from flatpak` and choose the installed scope. |
-| Snap metadata failure | Run `snap info <name>` and `allp search <name> --from snap --all`; stale search rows are blocked before install. |
-| Snap classic failure | Use the validated Allp plan; classic snaps include `--classic` only after `snap info` proves it. |
+| Flatpak has no remotes | Run `allp doctor`; review and explicitly approve the offered Flathub user-remote plan if desired. |
+| Snap exact result unavailable | Run `allp doctor` and Snap diagnostics. A valid REST `snap-not-found` is authoritative. |
+| Snap CLI fallback | Diagnostics show why REST was unavailable and the exact CLI argv/output. |
+| Self-update unavailable | Use `allp self-update --check-only -v`; unsupported targets leave the installed binary unchanged. |
 
 ## Security Model
 
-Allp stores commands as program plus argument vector and never executes package-manager work through `sh -c`. Native package output is data, not trusted code. Dry runs do not execute installers. Allp does not store sudo passwords, collect telemetry, or add native confirmation flags.
+Allp stores commands as program plus argument vector and never executes package-manager work through `sh -c`. Native package output is data, not trusted code. Dry runs do not execute installers. Bootstrap actions are separate plans. Self-update rejects foreign repositories, unsafe asset names, malformed manifests, checksum mismatches, archive traversal, and staged-version mismatches. State files contain no credentials. Allp does not store sudo passwords, collect telemetry, or add native confirmation flags.
 
 Read [SECURITY.md](SECURITY.md) for reporting and alpha limitations.
 
 ## Architecture
 
 ```text
-CLI -> discovery -> operation -> backend parser/planner -> renderer -> process runner
+CLI -> platform/capabilities -> requirements -> discovery -> operation -> backend -> execution
+                                      |             |             |
+                                  bootstrap     alternatives   diagnostics
+CLI -> self_update -> release manifest -> verified replacement -> guarded re-execution
 ```
 
-Backends own native command syntax and parsers. Generic operations coordinate capabilities, selection, confirmation, and execution plans. The runner owns direct process execution, output streaming, sudo handling, and original-user de-escalation.
+Backends own native syntax, REST/CLI transport details, and parsers. Generic operations coordinate capabilities, selection, alternatives, confirmation, and immutable plans. Bootstrap providers are independent of the backend that needs them. The runner owns direct process execution, output streaming, sudo handling, and original-user de-escalation.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [docs/BACKEND_CONTRACT.md](docs/BACKEND_CONTRACT.md), and [docs/PRIVILEGE_MODEL.md](docs/PRIVILEGE_MODEL.md).
 
@@ -322,18 +381,19 @@ Keep backend-specific parsing and flags inside backend modules. Add fixtures for
 
 ## Roadmap
 
-Near-term work is broader real-distro validation, richer parser fixtures, diagnostics/doctor support, and a safer Snap channel-selection UX. Future ecosystems such as Cargo, Composer, Go, RubyGems, Maven/Gradle, and GUI/TUI modes are not implemented in 0.3.3.
+Near-term work is broader real-distro validation, richer parser fixtures, an interactive Snap channel chooser, and deeper signal/trusted-path testing. Future ecosystems such as Cargo, Composer, Go, RubyGems, Maven/Gradle, and GUI/TUI modes are not implemented in 0.3.4.
 
 See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-0.3.3 stabilizes Snap install planning, repository hygiene, release documentation, and the Makefile workflow. See [CHANGELOG.md](CHANGELOG.md).
+Version `0.3.4` adds snapd REST resolution/install monitoring, explicit Flatpak remote handling, prerequisite providers, alternative routing, secure self-update, diagnostics, and target-specific release assets. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Known Limitations
 
 - Allp is public alpha software and not security-audited.
 - Snap multiple-track selection is conservative and may require native `snap` commands for explicit channel choice.
+- Existing GitHub releases without a valid manifest and matching binary asset cannot self-update automatically.
 - Experimental backends need broader validation on real distributions and host setups.
 - Python and Node project-scope policies remain intentionally cautious.
 - Signal forwarding and deeper trusted-path validation remain future hardening work.

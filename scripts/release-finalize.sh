@@ -33,10 +33,12 @@ require_release_commit_message() {
 require_clean_release_files() {
     local version="$1"
     local draft
+    local title
     local status
 
     draft="$(release_draft_notes_path "$version")"
-    status="$(git status --porcelain -- Cargo.toml Cargo.lock CHANGELOG.md README.md README.fa.md "$draft")"
+    title="$(release_title_path "$version")"
+    status="$(git status --porcelain -- Cargo.toml Cargo.lock CHANGELOG.md README.md README.fa.md "$draft" "$title")"
     if [ -n "$status" ]; then
         printf '%s\n' "$status" >&2
         release_die "release files have uncommitted changes"
@@ -46,14 +48,17 @@ require_clean_release_files() {
 require_commit_contains_release_files() {
     local version="$1"
     local draft
+    local title
     local files
 
     draft="$(release_draft_notes_path "$version")"
+    title="$(release_title_path "$version")"
     files="$(git show --format= --name-only HEAD)"
 
     printf '%s\n' "$files" | grep -qx 'Cargo.toml' || release_die "release commit must include Cargo.toml"
     printf '%s\n' "$files" | grep -qx 'CHANGELOG.md' || release_die "release commit must include CHANGELOG.md"
     printf '%s\n' "$files" | grep -qx "$draft" || release_die "release commit must include $draft"
+    printf '%s\n' "$files" | grep -qx "$title" || release_die "release commit must include $title"
 }
 
 require_lockfile_matches_version() {
@@ -84,6 +89,7 @@ validate_archive() {
     local archive="$1"
     local prefix="$2"
     local bad_paths
+    local required_path
 
     if ! tar -tzf "$archive" | awk -v prefix="$prefix" 'index($0, prefix) != 1 { bad = 1 } END { exit bad }'; then
         release_die "archive entries do not all use prefix $prefix"
@@ -94,6 +100,12 @@ validate_archive() {
         printf '%s\n' "$bad_paths" >&2
         release_die "archive contains ignored or local-only paths"
     fi
+
+    for required_path in Cargo.toml Cargo.lock README.md README.fa.md CHANGELOG.md LICENSE src/ docs/ scripts/ tests/; do
+        if ! tar -tzf "$archive" | awk -v prefix="$prefix" -v required="$required_path" '$0 == prefix required || index($0, prefix required) == 1 { found = 1 } END { exit !found }'; then
+            release_die "archive is missing required path $required_path"
+        fi
+    done
 }
 
 create_archive() {
