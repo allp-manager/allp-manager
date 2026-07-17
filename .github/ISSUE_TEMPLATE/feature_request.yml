@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose an improvement that preserves Allp's transparent orchestration model.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: transparency
+    attributes:
+      label: Transparency and native command impact
+      description: Does this hide a source choice, emulate package-manager behavior, or change native output?
+    validations:
+      required: true

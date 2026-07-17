@@ -1,0 +1,196 @@
+    Updating crates.io index
+     Locking 28 packages to latest compatible versions
+ Downloading crates ...
+  Downloaded zmij v1.0.22
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+    Checking utf8parse v0.2.2
+    Checking is_terminal_polyfill v1.70.2
+    Checking anstyle-query v1.1.5
+    Checking anstyle v1.0.14
+   Compiling zmij v1.0.22
+    Checking colorchoice v1.0.5
+    Checking anstyle-parse v1.0.0
+    Checking clap_lex v1.1.0
+    Checking strsim v0.11.1
+   Compiling serde_json v1.0.150
+    Checking anstream v1.0.0
+   Compiling heck v0.5.0
+   Compiling serde v1.0.228
+    Checking itoa v1.0.18
+    Checking memchr v2.8.3
+    Checking clap_builder v4.6.0
+   Compiling syn v2.0.118
+   Compiling clap_derive v4.6.1
+   Compiling serde_derive v1.0.228
+    Checking clap v4.6.1
+    Checking allp v0.1.0-alpha.1 (/home/wrench/Desktop/allp)
+error[E0592]: duplicate definitions with name `info`
+   --> src/cli/output.rs:247:5
+    |
+158 |     pub fn info(&self, info: &PackageInfo) {
+    |     -------------------------------------- other definition for `info`
+...
+247 |     fn info(&self, value: &str) -> String { self.style(value, "36") }
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ duplicate definitions for `info`
+
+error[E0308]: mismatched types
+   --> src/cli/output.rs:69:51
+    |
+ 69 |             println!("{} Detected: {}", self.info("ℹ"), ready.join(", "));
+    |                                              ---- ^^^ expected `&PackageInfo`, found `&str`
+    |                                              |
+    |                                              arguments to this method are incorrect
+    |
+    = note: expected reference `&PackageInfo`
+               found reference `&'static str`
+note: method defined here
+   --> src/cli/output.rs:158:12
+    |
+158 |     pub fn info(&self, info: &PackageInfo) {
+    |            ^^^^        ------------------
+
+error[E0277]: `()` doesn't implement `std::fmt::Display`
+  --> src/cli/output.rs:69:41
+   |
+69 |             println!("{} Detected: {}", self.info("ℹ"), ready.join(", "));
+   |                       --                ^^^^^^^^^^^^^^ `()` cannot be formatted with the default formatter
+   |                       |
+   |                       required by this formatting parameter
+   |
+   = help: the trait `std::fmt::Display` is not implemented for `()`
+   = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+
+error[E0277]: the size for values of type `[InstalledPackage]` cannot be known at compilation time
+   --> src/cli/output.rs:119:30
+    |
+119 |             self.render_json(packages);
+    |                  ----------- ^^^^^^^^ doesn't have a size known at compile-time
+    |                  |
+    |                  required by a bound introduced by this call
+    |
+    = help: the trait `Sized` is not implemented for `[InstalledPackage]`
+note: required by an implicit `Sized` bound in `Renderer::render_json`
+   --> src/cli/output.rs:29:24
+    |
+ 29 |     pub fn render_json<T: Serialize>(&self, value: &T) {
+    |                        ^ required by the implicit `Sized` requirement on this type parameter in `Renderer::render_json`
+help: consider relaxing the implicit `Sized` restriction
+    |
+ 29 |     pub fn render_json<T: Serialize + ?Sized>(&self, value: &T) {
+    |                                     ++++++++
+
+error[E0277]: the size for values of type `[InstalledPackage]` cannot be known at compilation time
+   --> src/cli/output.rs:143:30
+    |
+143 |             self.render_json(packages);
+    |                  ----------- ^^^^^^^^ doesn't have a size known at compile-time
+    |                  |
+    |                  required by a bound introduced by this call
+    |
+    = help: the trait `Sized` is not implemented for `[InstalledPackage]`
+note: required by an implicit `Sized` bound in `Renderer::render_json`
+   --> src/cli/output.rs:29:24
+    |
+ 29 |     pub fn render_json<T: Serialize>(&self, value: &T) {
+    |                        ^ required by the implicit `Sized` requirement on this type parameter in `Renderer::render_json`
+help: consider relaxing the implicit `Sized` restriction
+    |
+ 29 |     pub fn render_json<T: Serialize + ?Sized>(&self, value: &T) {
+    |                                     ++++++++
+
+error[E0308]: mismatched types
+   --> src/cli/output.rs:201:39
+    |
+201 |         println!("\n{} {}", self.info("ℹ"), self.bold(&plan.backend_name));
+    |                                  ---- ^^^ expected `&PackageInfo`, found `&str`
+    |                                  |
+    |                                  arguments to this method are incorrect
+    |
+    = note: expected reference `&PackageInfo`
+               found reference `&'static str`
+note: method defined here
+   --> src/cli/output.rs:158:12
+    |
+158 |     pub fn info(&self, info: &PackageInfo) {
+    |            ^^^^        ------------------
+
+error[E0277]: `()` doesn't implement `std::fmt::Display`
+   --> src/cli/output.rs:201:29
+    |
+201 |         println!("\n{} {}", self.info("ℹ"), self.bold(&plan.backend_name));
+    |                     --      ^^^^^^^^^^^^^^ `()` cannot be formatted with the default formatter
+    |                     |
+    |                     required by this formatting parameter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `()`
+    = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+
+error[E0308]: mismatched types
+   --> src/cli/output.rs:220:69
+    |
+220 |                 crate::domain::OperationStatus::DryRun => self.info("ℹ"),
+    |                                                                ---- ^^^ expected `&PackageInfo`, found `&str`
+    |                                                                |
+    |                                                                arguments to this method are incorrect
+    |
+    = note: expected reference `&PackageInfo`
+               found reference `&'static str`
+note: method defined here
+   --> src/cli/output.rs:158:12
+    |
+158 |     pub fn info(&self, info: &PackageInfo) {
+    |            ^^^^        ------------------
+
+error[E0308]: `match` arms have incompatible types
+   --> src/cli/output.rs:220:59
+    |
+216 |               let marker = match record.status {
+    |  __________________________-
+217 | |                 crate::domain::OperationStatus::Success => self.success("✔"),
+    | |                                                            ----------------- this is found to be of type `std::string::String`
+218 | |                 crate::domain::OperationStatus::Failed => self.error("✖"),
+    | |                                                           --------------- this is found to be of type `std::string::String`
+219 | |                 crate::domain::OperationStatus::Skipped => self.warning("⚠"),
+    | |                                                            ----------------- this is found to be of type `std::string::String`
+220 | |                 crate::domain::OperationStatus::DryRun => self.info("ℹ"),
+    | |                                                           ^^^^^^^^^^^^^^ expected `String`, found `()`
+221 | |             };
+    | |_____________- `match` arms have incompatible types
+
+error[E0499]: cannot borrow `lines` as mutable more than once at a time
+  --> src/backends/system/pacman.rs:46:85
+   |
+46 | ...tion = lines.peek().filter(|line| line.starts_with(' ')).map(|_| lines.next().un...
+   |           -----                                             --- ^^^ ----- second borrow occurs due to use of `lines` in closure
+   |           |                                                 |   |
+   |           |                                                 |   second mutable borrow occurs here
+   |           first mutable borrow occurs here                  first borrow later used by call
+
+error[E0382]: borrow of partially moved value: `plan`
+  --> src/operations/install.rs:60:44
+   |
+59 |             backend: plan.backend_name,
+   |                      ----------------- value partially moved here
+60 |             command: render_execution_plan(&plan),
+   |                                            ^^^^^ value borrowed here after partial move
+   |
+   = note: partial move occurs because `plan.backend_name` has type `std::string::String`, which does not implement the `Copy` trait
+
+error[E0382]: borrow of partially moved value: `plan`
+  --> src/operations/remove.rs:64:44
+   |
+63 |             backend: plan.backend_name,
+   |                      ----------------- value partially moved here
+64 |             command: render_execution_plan(&plan),
+   |                                            ^^^^^ value borrowed here after partial move
+   |
+   = note: partial move occurs because `plan.backend_name` has type `std::string::String`, which does not implement the `Copy` trait
+
+Some errors have detailed explanations: E0277, E0308, E0382, E0499, E0592.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `allp` (lib) due to 12 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `allp` (lib test) due to 12 previous errors

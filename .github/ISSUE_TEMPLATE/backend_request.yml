@@ -1,0 +1,39 @@
+name: Backend request
+description: Propose support for another package manager.
+title: "[Backend]: "
+labels: [backend]
+body:
+  - type: input
+    id: manager
+    attributes:
+      label: Package manager
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - System
+        - Universal application
+        - Development ecosystem
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: commands
+    attributes:
+      label: Native commands and capabilities
+      description: Include detect, search, install, remove, update, upgrade, list, and info commands where supported.
+    validations:
+      required: true
+  - type: textarea
+    id: structured
+    attributes:
+      label: Machine-readable output
+      description: Does the manager provide JSON, XML, or stable column output?
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and privilege behavior
+      description: Explain project, user, global, system, or virtual-environment behavior.
