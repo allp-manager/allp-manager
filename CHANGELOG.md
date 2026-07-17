@@ -4,11 +4,11 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
-## [0.3.3] - 2026-07-15
+## [0.3.3] - 2026-07-17
 
 ### Release Title
 
-Allp v0.3.3 - Official Software Resolution
+Allp v0.3.3 - Snap Validation and Repository Stabilization
 
 ### Added
 
@@ -16,6 +16,15 @@ Allp v0.3.3 - Official Software Resolution
 - Curated canonical identity catalog for Homebrew, system package managers, universal app managers, Python tools, and Node tools.
 - Official Homebrew bootstrap candidate with an explicit native plan that downloads the official installer to a temp file before running it with `/bin/bash`.
 - Documentation for software identity, official bootstrap behavior, name collisions, Homebrew bootstrap, and the v0.3.3 test plan.
+- Snap install metadata validation through `snap info` after candidate selection.
+- Canonical Snap package-name resolution, publisher verification normalization, channel metadata, architecture checks, and installed-state preflight.
+- Classic-confinement Snap install plans, including `snap install <package> --classic` when metadata requires it.
+- Safe root `Makefile` targets for formatting, checking, testing, architecture checks, release build, quality gate, docs check, running, version, and Git status.
+- Source installation targets for `/usr/local/bin/allp`, user-local installs, reinstall/uninstall checks, and PATH diagnostics.
+- A local-only release workflow with `make hooks-install`, `make release-prepare`, post-commit release finalization, annotated local tags, source archives, checksums, and finalized local release notes.
+- Temporary-repository release automation tests that avoid creating tags or artifacts in the developer repository.
+- Repository-specific `.gitignore` coverage for build output, logs, temp files, editor state, local env files, secrets, caches, and generated packages.
+- Complete English and Persian README files for v0.3.3.
 
 ### Changed
 
@@ -23,12 +32,27 @@ Allp v0.3.3 - Official Software Resolution
 - Search and install output now labels identity relationships such as `Official installer`, `Exact package name`, and `Conflicting name`.
 - `allp install Homebrew` no longer treats the unrelated npm package named `homebrew` as the Homebrew package manager.
 - npm global installs preflight the configured global prefix for current-user writability before real execution.
+- Snap search publishers such as `jetbrains**` are normalized into publisher name plus verification state instead of storing decoration as part of the publisher.
+- Snap install plans now include release-relevant details such as software title, publisher, channel, confinement, and architectures when available.
+- Generated `cargo-check.log` is no longer tracked.
+- The crate repository URL now matches the real project remote.
+- Local release output under `dist/` and readiness markers under `.release-state/` are ignored while `.githooks/`, release drafts, scripts, documentation, and release metadata remain trackable.
 
 ### Fixed
 
 - npm `homebrew` is labeled as a conflicting exact-name match and requires separate default-No identity confirmation for real installation.
 - `--yes` does not bypass conflicting-identity confirmation.
 - DNF rpmdb failures and missing pip failures now produce targeted Allp diagnostics.
+- Raw `snap find` rows no longer become install plans directly.
+- PyCharm-like classic Snap packages now plan `snap install <package> --classic` after metadata validation.
+- Strict Snap packages no longer receive `--classic`.
+- Stale or unavailable Snap search results fail before execution with a targeted diagnostic.
+- Snap packages without stable availability, unsupported architecture metadata, or ambiguous stable tracks are blocked before normal install planning.
+
+### Known Limitations
+
+- Snap channel selection is conservative in v0.3.3; when multiple stable tracks need a human choice, Allp stops instead of silently selecting a channel.
+- Broader real Snap Store output coverage is still needed beyond the fake fixtures added for this stabilization pass.
 
 ## [0.3.2] - 2026-07-15
 

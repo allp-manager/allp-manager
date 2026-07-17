@@ -1,0 +1,9 @@
+name: edge-only
+title: Edge Only
+summary: No stable release
+publisher: Example
+version: 2.0
+confinement: strict
+architectures: amd64
+channels:
+  latest/edge: 2.0 2026-06-01 (20) 50MB strict

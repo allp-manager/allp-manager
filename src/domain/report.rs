@@ -14,6 +14,27 @@ pub struct SearchReport {
     pub complete: bool,
     pub candidates: Vec<PackageCandidate>,
     pub issues: Vec<BackendIssue>,
+    #[serde(skip)]
+    pub backend_summaries: Vec<SearchBackendSummary>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchBackendSummary {
+    pub backend_id: String,
+    pub backend_name: String,
+    pub state: SearchBackendState,
+    pub result_count: usize,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchBackendState {
+    Available,
+    Unavailable,
+    NoConfiguredRemotes,
+    SearchFailed,
+    ParsedResults,
+    NoMatches,
 }
 
 #[derive(Debug, Clone, Serialize)]

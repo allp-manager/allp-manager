@@ -126,6 +126,7 @@ pub struct ExecutionPlan {
     pub package_id: Option<String>,
     pub source: Option<String>,
     pub scope: Option<String>,
+    pub details: Vec<(String, String)>,
     pub command: NativeCommand,
     pub privilege: PrivilegeRequirement,
     pub requires_root: bool,

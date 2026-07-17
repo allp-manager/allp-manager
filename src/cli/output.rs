@@ -2,10 +2,10 @@ use crate::{
     discovery::{DetectionState, DiscoveryReport},
     domain::{
         BackendCategory, BackendIssue, ExecutionPlan, InstalledPackage, MatchKind,
-        MultiOperationReport, PackageCandidate, PackageInfo, ResultSection,
+        MultiOperationReport, NativeCommand, PackageCandidate, PackageInfo, ResultSection,
         RuntimePrivilegeContext, SearchReport, SearchScope,
     },
-    execution::render_execution_plan_with_context,
+    execution::{render_execution_plan_with_context, render_native_argv, render_native_command},
 };
 use serde::Serialize;
 use std::{
@@ -243,6 +243,9 @@ impl Renderer {
             if let Some(scope) = &plan.scope {
                 println!("   Target: {scope}");
             }
+            for (key, value) in &plan.details {
+                println!("   {key}: {value}");
+            }
             println!(
                 "   Command: {}",
                 render_execution_plan_with_context(plan, context)
@@ -334,6 +337,7 @@ impl Renderer {
                 issue.message
             );
         }
+        self.search_summary(report);
     }
 
     pub fn candidates(&self, candidates: &[PackageCandidate], scope: SearchScope) {
@@ -365,6 +369,27 @@ impl Renderer {
         self.result_counts(candidates, scope);
         self.selection_warnings(query, scope, candidates);
         self.grouped_candidates(candidates, scope);
+    }
+
+    pub fn preflight_stage(&self, stage: &str, command: &NativeCommand, verbose: bool) {
+        if self.json {
+            return;
+        }
+        println!("\n{} {stage}", self.info_style("●"));
+        println!("  Command: {}", render_native_command(command));
+        if verbose {
+            println!("  Argv: {}", render_native_argv(command));
+        }
+    }
+
+    pub fn preflight_warning(&self, title: &str, message: &str) {
+        if self.json || message.trim().is_empty() {
+            return;
+        }
+        println!("{title}:");
+        for line in message.trim().lines() {
+            println!("  {line}");
+        }
     }
 
     fn grouped_candidates(&self, candidates: &[PackageCandidate], scope: SearchScope) {
@@ -406,8 +431,68 @@ impl Renderer {
                 if let Some(warning) = &candidate.identity.warning {
                     println!("    warning: {warning}");
                 }
+                if candidate.display_name != candidate.package_id {
+                    println!("    Name: {}", candidate.display_name);
+                }
+                if let Some(remote) = candidate.metadata.get("flatpak.remote") {
+                    println!("    Remote: {remote}");
+                }
+                println!("    Type: {}", candidate.artifact_kind);
                 if let Some(description) = &candidate.description {
                     println!("    {}", description);
+                }
+            }
+        }
+    }
+
+    fn search_summary(&self, report: &SearchReport) {
+        if report.backend_summaries.is_empty() {
+            return;
+        }
+
+        println!("\n{}", self.heading("Search Summary"));
+        for summary in &report.backend_summaries {
+            match summary.state {
+                crate::domain::SearchBackendState::ParsedResults => {
+                    println!(
+                        "{} {:<8} {} {}",
+                        self.success("✔"),
+                        summary.backend_name,
+                        summary.result_count,
+                        plural(summary.result_count, "result", "results")
+                    );
+                }
+                crate::domain::SearchBackendState::NoMatches => {
+                    println!("{} {} · no matches", self.muted("○"), summary.backend_name);
+                }
+                crate::domain::SearchBackendState::NoConfiguredRemotes => {
+                    println!(
+                        "{} {} skipped · no configured remotes",
+                        self.muted("○"),
+                        summary.backend_name
+                    );
+                }
+                crate::domain::SearchBackendState::SearchFailed => {
+                    println!(
+                        "{} {} search failed · {}",
+                        self.error("✖"),
+                        summary.backend_name,
+                        summary.message.as_deref().unwrap_or("search failed")
+                    );
+                }
+                crate::domain::SearchBackendState::Unavailable => {
+                    if let Some(message) = &summary.message {
+                        println!(
+                            "{} {} unavailable · {message}",
+                            self.muted("○"),
+                            summary.backend_name
+                        );
+                    } else {
+                        println!("{} {} unavailable", self.muted("○"), summary.backend_name);
+                    }
+                }
+                crate::domain::SearchBackendState::Available => {
+                    println!("{} {} available", self.muted("○"), summary.backend_name);
                 }
             }
         }
@@ -608,6 +693,7 @@ impl Renderer {
                 package_id: &'a Option<String>,
                 source: &'a Option<String>,
                 scope: &'a Option<String>,
+                details: &'a [(String, String)],
                 native_command: String,
                 privilege: &'a str,
                 interactive: bool,
@@ -620,6 +706,7 @@ impl Renderer {
                 package_id: &plan.package_id,
                 source: &plan.source,
                 scope: &plan.scope,
+                details: &plan.details,
                 native_command: command,
                 privilege: plan.privilege.label(context),
                 interactive: plan.interactive,
@@ -1052,6 +1139,14 @@ fn title_case(value: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
+    if count == 1 {
+        singular
+    } else {
+        plural
     }
 }
 

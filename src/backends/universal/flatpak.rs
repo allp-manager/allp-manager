@@ -5,9 +5,10 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpResult, BackendCategory, BackendOperationRecord, Capability, DeveloperTarget,
-        ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand, OperationKind,
-        OperationStatus, PackageCandidate, PackageDomain, PackageInfo, PrivilegeRequirement,
+        AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
+        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
+        OperationKind, OperationStatus, PackageCandidate, PackageDomain, PackageInfo,
+        PrivilegeRequirement,
     },
     execution::{ProcessRunner, ProcessStatus},
 };
@@ -52,13 +53,24 @@ impl Backend for FlatpakBackend {
         query: &str,
     ) -> AllpResult<Vec<PackageCandidate>> {
         let flatpak = command_path(self, commands, "flatpak")?;
+        let remotes = capture_checked(
+            self,
+            runner,
+            NativeCommand::new(flatpak).args(["remotes", "--columns=name,url"]),
+        )?;
+        if parse_flatpak_remotes(&remotes).is_empty() {
+            return Err(AllpError::NoConfiguredRemotes {
+                backend: self.display_name().to_owned(),
+            });
+        }
+
         let output = capture_checked(
             self,
             runner,
             NativeCommand::new(flatpak).args([
                 "search",
-                "--columns=application,name,description,version,branch,remotes",
                 query,
+                "--columns=application,name,description,version,branch,remotes",
             ]),
         )?;
 
@@ -74,6 +86,11 @@ impl Backend for FlatpakBackend {
                 .get(1)
                 .cloned()
                 .unwrap_or_else(|| package_id.clone());
+            let remote = columns.get(5).cloned().filter(|value| !value.is_empty());
+            let mut metadata = std::collections::BTreeMap::new();
+            if let Some(remote) = &remote {
+                metadata.insert("flatpak.remote".to_owned(), remote.clone());
+            }
             let candidate_match = if package_id.eq_ignore_ascii_case(query)
                 || display_name.eq_ignore_ascii_case(query)
             {
@@ -90,11 +107,7 @@ impl Backend for FlatpakBackend {
                 display_name: display_name.clone(),
                 description: columns.get(2).cloned().filter(|value| !value.is_empty()),
                 version: columns.get(3).cloned().filter(|value| !value.is_empty()),
-                source: columns
-                    .get(5)
-                    .cloned()
-                    .filter(|value| !value.is_empty())
-                    .or_else(|| Some("configured Flatpak remotes".to_owned())),
+                source: remote.or_else(|| Some("configured Flatpak remotes".to_owned())),
                 installers: vec![self.display_name().to_owned()],
                 artifact_kind: "universal application".to_owned(),
                 scope: None,
@@ -104,6 +117,7 @@ impl Backend for FlatpakBackend {
                     PackageDomain::Universal,
                     "universal application",
                 ),
+                metadata,
             });
         }
 
@@ -237,6 +251,7 @@ impl Backend for FlatpakBackend {
             package_id: Some(candidate.package_id.clone()),
             source: candidate.source.clone(),
             scope: Some("User".to_owned()),
+            details: Vec::new(),
             command,
             privilege: PrivilegeRequirement::OriginalUserRequired,
             requires_root: false,
@@ -276,6 +291,7 @@ impl Backend for FlatpakBackend {
             package_id: Some(package.package_id.clone()),
             source: package.source.clone(),
             scope: package.scope.clone(),
+            details: Vec::new(),
             command,
             privilege,
             requires_root: privilege == PrivilegeRequirement::RootRequired,
@@ -356,6 +372,7 @@ fn flatpak_plan(
         package_id: None,
         source: Some("configured Flatpak remotes".to_owned()),
         scope: Some(scope.to_owned()),
+        details: Vec::new(),
         command: NativeCommand::new(program).args(["update", "--user"]),
         privilege,
         requires_root: false,
@@ -384,9 +401,28 @@ fn parse_flatpak_update_status(stdout: &str, stderr: &str) -> Option<(OperationS
     None
 }
 
+fn parse_flatpak_remotes(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let columns = split_tab_or_whitespace(line);
+            if columns.is_empty()
+                || columns[0].eq_ignore_ascii_case("Name")
+                || columns[0].trim().is_empty()
+            {
+                return None;
+            }
+            Some((
+                columns[0].clone(),
+                columns.get(1).cloned().unwrap_or_default(),
+            ))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_flatpak_update_status;
+    use super::{parse_flatpak_remotes, parse_flatpak_update_status};
     use crate::domain::OperationStatus;
 
     #[test]
@@ -397,5 +433,15 @@ mod tests {
 
         assert!(matches!(status, OperationStatus::UpToDate));
         assert_eq!(message, "nothing to do");
+    }
+
+    #[test]
+    fn parses_configured_remotes() {
+        let remotes = parse_flatpak_remotes("Name\tURL\nflathub\thttps://flathub.org/repo/\n");
+
+        assert_eq!(
+            remotes,
+            vec![("flathub".to_owned(), "https://flathub.org/repo/".to_owned())]
+        );
     }
 }

@@ -82,6 +82,8 @@ Backends do not spawn mutating processes.
 
 Backends may expose raw native info output through `raw_info`; default CLI info remains curated unless the user asks for `--raw`.
 
+Backends may also perform read-only install-planning preflight. Snap uses this hook to revalidate a selected `snap find` result with `snap info`, replace it with the canonical package name, normalize publisher verification, inspect confinement/channel/architecture metadata, check installed state, and only then return a candidate that generic install planning can render.
+
 Backends can declare optional command requirements. Python uses this to detect pip, pipx, and uv as installer choices while keeping PyPI as the registry/source. Node uses it to detect pnpm and Yarn while keeping the npm registry as the source.
 
 The catalog currently includes:
@@ -166,7 +168,7 @@ Read-only backend queries run with bounded concurrency.
 
 `update` and `upgrade` are backend-defined actions. Allp does not force equivalent semantics across managers.
 
-v0.1 policy:
+v0.3.3 policy:
 
 | Backend | Update | Upgrade |
 |---|---|---|

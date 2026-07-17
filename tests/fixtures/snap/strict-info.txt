@@ -1,0 +1,9 @@
+name: strict-app
+title: Strict App
+summary: Strictly confined app
+publisher: Example
+version: 1.0
+confinement: strict
+architectures: amd64
+channels:
+  latest/stable: 1.0 2026-06-01 (10) 50MB strict

@@ -96,6 +96,7 @@ fn backend_plan_construction_includes_action_and_argument_boundary() {
             PackageDomain::System,
             "system package",
         ),
+        metadata: Default::default(),
     };
 
     let plan = backend

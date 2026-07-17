@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$root" ] || exit 0
+cd "$root"
+
+marker=".release-state/release.env"
+[ -f "$marker" ] || exit 0
+
+subject="$(git log -1 --pretty=%s)"
+case "$subject" in
+    release:*)
+        exec scripts/release-finalize.sh --hook
+        ;;
+    *)
+        printf '%s\n' 'Allp release marker is present, but this commit is not a release commit; local release finalization skipped.'
+        ;;
+esac

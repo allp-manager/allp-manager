@@ -259,6 +259,7 @@ fn package_plan(backend: &SystemFamilyBackend, input: PackagePlanInput<'_>) -> E
         package_id: Some(input.package_id.to_owned()),
         source: input.source,
         scope: input.scope,
+        details: Vec::new(),
         command,
         privilege: PrivilegeRequirement::RootRequired,
         requires_root: true,
@@ -281,6 +282,7 @@ fn bulk_plan(
         package_id: None,
         source: Some(template.source.to_owned()),
         scope: Some("system".to_owned()),
+        details: Vec::new(),
         command: NativeCommand::new(program).args(template.args.iter().copied()),
         privilege: PrivilegeRequirement::RootRequired,
         requires_root: true,
@@ -368,6 +370,7 @@ fn parse_candidate_line(
             PackageDomain::System,
             "system package",
         ),
+        metadata: Default::default(),
     })
 }
 

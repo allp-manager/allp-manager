@@ -2,7 +2,7 @@ use crate::domain::{
     BackendCategory, DistributionRelationship, IdentityMetadata, NameMatchKind, SoftwareType,
 };
 use serde::Serialize;
-use std::{fmt, str::FromStr};
+use std::{collections::BTreeMap, fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -250,6 +250,8 @@ pub struct PackageCandidate {
     pub scope: Option<String>,
     pub match_kind: MatchKind,
     pub identity: IdentityMetadata,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
 }
 
 impl PackageCandidate {
@@ -398,6 +400,7 @@ mod tests {
             scope: None,
             match_kind: MatchKind::Exact,
             identity: PackageCandidate::infer_identity(MatchKind::Exact, domain, artifact_kind),
+            metadata: Default::default(),
         }
     }
 }

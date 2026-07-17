@@ -1,0 +1,2 @@
+Name           Version  Rev  Tracking     Publisher  Notes
+installed-app 1.0      10   latest/beta  Example    -

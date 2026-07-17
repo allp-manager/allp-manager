@@ -1135,6 +1135,7 @@ fn node_plan(
         package_id: None,
         source,
         scope,
+        details: Vec::new(),
         command,
         privilege: PrivilegeRequirement::OriginalUserRequired,
         requires_root: false,
@@ -1269,6 +1270,7 @@ fn candidate(
         scope: Some("global user tool".to_owned()),
         match_kind,
         identity: PackageCandidate::infer_identity(match_kind, PackageDomain::Node, "Node package"),
+        metadata: Default::default(),
     }
 }
 
@@ -1307,6 +1309,7 @@ fn plan(
         package_id,
         source: Some("npm registry".to_owned()),
         scope: Some("global user tool".to_owned()),
+        details: Vec::new(),
         command,
         privilege: PrivilegeRequirement::OriginalUserRequired,
         requires_root: false,

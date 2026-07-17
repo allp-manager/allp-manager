@@ -98,6 +98,7 @@ impl Backend for PacmanBackend {
                     PackageDomain::System,
                     "system package",
                 ),
+                metadata: Default::default(),
             });
         }
 
@@ -283,6 +284,7 @@ fn plan<const N: usize>(
         package_id: spec.package_id,
         source: spec.source,
         scope: spec.scope,
+        details: Vec::new(),
         command: NativeCommand::new(program).args(spec.args),
         privilege: PrivilegeRequirement::RootRequired,
         requires_root: true,

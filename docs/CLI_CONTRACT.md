@@ -33,6 +33,7 @@ allp install chatgpt --scope all
 allp install git --from apt --dry-run
 allp install git --from apt --yes
 allp install git --no-interactive
+allp install pycharm --from snap --dry-run
 
 allp remove git
 allp remove git --from apt
@@ -81,6 +82,8 @@ allp search git --from brew
 `--from` is more precise than `--scope` and selects a backend, source, ecosystem, or installer. Incompatible combinations, such as `--scope dev --from apt`, are rejected with a CLI error. Without `--from` or `--scope`, interactive search and install ask the user to choose exactly one of: Apps and tools, Developer ecosystems, All sources.
 
 Allp never silently chooses between meaningful candidates across ecosystems.
+
+Snap install candidates have an additional validation step after selection. A raw `snap find` row is never an install plan. Allp revalidates with `snap info`, resolves the canonical package name, publisher verification, confinement, architecture availability, channels, stable availability, and installed state, then builds the immutable plan. Classic snaps include `--classic` only when metadata requires it.
 
 For install selection, every result has a stable global number. Large interactive result sets use the built-in selector:
 

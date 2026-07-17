@@ -88,6 +88,7 @@ impl Backend for DnfBackend {
                     PackageDomain::System,
                     "system package",
                 ),
+                metadata: Default::default(),
             });
         }
 
@@ -303,6 +304,7 @@ fn make_plan(backend: &DnfBackend, program: &std::path::Path, spec: PlanSpec) ->
         package_id: spec.package_id,
         source: spec.source,
         scope: spec.scope,
+        details: Vec::new(),
         command: NativeCommand::new(program).args(spec.args),
         privilege: PrivilegeRequirement::RootRequired,
         requires_root: true,

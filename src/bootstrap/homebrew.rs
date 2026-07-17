@@ -58,6 +58,7 @@ pub fn candidate() -> PackageCandidate {
             SoftwareType::PackageManager,
             DistributionRelationship::OfficialInstaller,
         ),
+        metadata: Default::default(),
     }
 }
 
@@ -71,6 +72,7 @@ pub fn plan_install() -> crate::domain::AllpResult<ExecutionPlan> {
         package_id: Some("homebrew".to_owned()),
         source: Some(INSTALLER_URL.to_owned()),
         scope: Some("current user; installer may request sudo for its own setup".to_owned()),
+        details: Vec::new(),
         command: NativeCommand::new("/bin/bash").arg("-c").arg(script),
         privilege: PrivilegeRequirement::OriginalUserRequired,
         requires_root: false,

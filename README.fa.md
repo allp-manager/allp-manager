@@ -1,131 +1,123 @@
 # Allp
 
-[English](README.md)
+[English](README.md) | [فارسی](README.fa.md)
 
-> یک CLI برای Package Managerهای Native لینوکس؛ بدون عملیات مخفی.
+> یک CLI شفاف برای Package Managerهایی که همین حالا روی سیستم شما نصب هستند.
 
-Allp یک Package Manager جدید نیست. Allp ابزارهای موجود مثل APT، Pacman، DNF، Flatpak، Snap، Homebrew، ابزارهای Python و ابزارهای Node را در هر اجرا تشخیص می‌دهد، نتیجه‌ها را کوچک و قابل انتخاب نشان می‌دهد، دستور Native را قبل از اجرا چاپ می‌کند و همان دستور را مستقیم اجرا می‌کند.
+Allp Package Manager تازه ای نیست. Allp ابزارهایی مثل APT، Pacman، DNF، Flatpak، Snap، Homebrew/Linuxbrew، ابزارهای Python و ابزارهای Node را کشف می کند، نتیجه ها را قابل انتخاب نشان می دهد، و قبل از هر تغییر، دستور Native دقیق را چاپ می کند.
 
-## وضعیت
+نسخه فعلی: **0.3.3**
+سطح بلوغ: **Public Alpha**
+عنوان انتشار: **Allp v0.3.3 - Snap Validation and Repository Stabilization**
 
-این نسخه یک کاندید Alpha عمومی برای v0.3.3 است.
+## چرا Allp وجود دارد
 
-عنوان انتشار: **Allp v0.3.3 — Official Software Resolution**.
+نرم افزار در لینوکس فقط در یک جا نیست: بخشی در مخزن های سیستم، بخشی در Flatpak یا Snap، بخشی در Homebrew، و بخشی در اکوسیستم های Python و Node قرار دارد. Allp برای این منابع یک سطح فرمان واحد می سازد، اما Native Package Managerها را مخفی یا جایگزین نمی کند.
 
-Backendهای هدف این Alpha:
+اصل های پروژه:
 
-- APT
-- Pacman
-- DNF / DNF5
-- Zypper، APK، XBPS، Portage، eopkg و swupd به صورت Experimental
-- Flatpak
-- Snap
-- Homebrew / Linuxbrew به صورت Experimental
-- Python: PyPI همراه pip، pipx و uv به صورت Experimental
-- Node.js: npm registry همراه npm، pnpm و Yarn به صورت Experimental
+- Package Managerهای Native منبع حقیقت باقی می مانند.
+- قبل از هر عملیات تغییردهنده، دستور Native دقیق نمایش داده می شود.
+- اجرای مخفی با Shell pipeline انجام نمی شود.
+- وقتی چند Source معنی دار وجود دارد، انتخاب Source صریح است.
+- Backendها بر اساس Capability کار می کنند، نه حدس زدن رفتار.
+- مدیریت privilege متمرکز است و فقط برای Child Process اعمال می شود.
 
-Cargo، Composer، Go و اکوسیستم‌های دیگر هنوز خارج از Scope این فاز هستند.
+## سیستم ها و Backendها
 
-## نمونه سریع
+Allp برای لینوکس و محیط های Linux-like طراحی شده است. Homebrew در این نسخه بیشتر با نگاه Linuxbrew اعتبارسنجی شده و macOS هنوز Experimental است.
+
+| Source | وضعیت | Search | Install | Remove | Update | Upgrade | List | Info |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| APT | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
+| Pacman | Stable alpha | بله | بله | بله | خیر | بله | بله | بله |
+| DNF / DNF5 | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
+| Flatpak | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
+| Snap | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
+| Zypper، APK، XBPS، Portage، eopkg، swupd | Experimental | بله | ترکیبی | ترکیبی | ترکیبی | ترکیبی | ترکیبی | ترکیبی |
+| Homebrew / Linuxbrew | Experimental | بله | بله | بله | بله | بله | بله | بله |
+| Python: PyPI با pip، pipx و uv | Experimental | بله | بله | بله | بله | بله | بله | بله |
+| Node: npm registry با npm، pnpm و Yarn | Experimental | بله | بله | بله | بله | بله | بله | بله |
+
+جزئیات بیشتر در [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md) آمده است.
+
+## نصب و ساخت
+
+ساخت از سورس:
+
+```bash
+git clone https://github.com/Aliazadi-1776/allp.git
+cd allp
+cargo build --release
+./target/release/allp --version
+```
+
+نصب global باینری release:
+
+```bash
+make install
+allp --version
+allp update && allp upgrade
+```
+
+`make install` باینری release را می سازد و آن را به
+`/usr/local/bin/allp` نصب می کند. برای همین کپی فایل از `sudo install` استفاده
+می شود. برای نصب user-local بدون sudo:
+
+```bash
+make install-user
+```
+
+نیازمندی ها:
+
+- Rust 1.74 یا جدیدتر
+- Cargo
+- Package Managerهای Native که می خواهید Allp آن ها را پیدا کند
+- `sudo` فقط برای Child Processهایی که واقعا Root لازم دارند
+
+استفاده از Binary منتشرشده:
 
 ```bash
 allp detect
 allp search git
-allp install git --dry-run
-allp update --dry-run
 ```
 
-## شکل CLI
-
-شکل رسمی دستورها Command-first است:
-
-```text
-allp <command> [arguments] [options]
-```
-
-نمونه‌ها:
+## شروع سریع
 
 ```bash
-allp search git --limit 10
-allp search git --scope apps
-allp search openai --scope dev
-allp search git --exact
+allp detect
+allp search git
+allp install git
+allp install git --dry-run
+allp install pycharm
+allp update
+allp upgrade
+allp update --scope dev
+allp search git --json
+```
+
+برای انتخاب دقیق Backend از `--from` استفاده کنید:
+
+```bash
 allp install git --from apt --dry-run
-allp install git --scope all --dry-run
-allp remove git --from apt --dry-run
-allp update --scope dev --target all --dry-run
-allp update --from npm --target project --dry-run
-allp update --from pipx --target tools --dry-run
+allp install pycharm --from snap --dry-run
 allp install black --from pipx --dry-run
 allp install typescript --from pnpm --dry-run
-allp list --from apt --json
-allp info git --from apt --json
-allp info git --from apt --full
 ```
 
-## Search
+## Search و انتخاب تعاملی
 
-نتایج جست‌وجو سه سطح دارند:
+اگر برای `search` یا `install` گزینه های `--from` و `--scope` داده نشود، Allp در Terminal تعاملی یکی از سه Scope را می پرسد:
 
-- `Exact`
-- `Related`
-- `Fuzzy`
+- `apps`: Packageهای سیستم، Universal applicationها و Homebrew
+- `dev`: اکوسیستم های Python و Node
+- `all`: همه Sourceهای قابل استفاده
 
-به صورت پیش‌فرض همه Matchهای Exact نمایش داده می‌شوند، برای هر Backend حداکثر پنج Match مرتبط نشان داده می‌شود، و خروجی قابل مشاهده حداکثر ۲۵ مورد است. Matchهای ضعیف Fuzzy فقط با `--all` نمایش داده می‌شوند.
+نتیجه ها با سه برچسب نمایش داده می شوند: `Exact`، `Related` و `Fuzzy`. Matchهای Exact همیشه نمایش داده می شوند، Related برای هر Backend محدود است، و Fuzzy فقط با `--all` دیده می شود.
 
-Allp هیچ وقت Related را معادل همان نرم‌افزار فرض نمی‌کند.
+در انتخاب های بزرگ، شماره ها ثابت می مانند. Space صفحه بعد، `b` صفحه قبل، `/` فیلتر، عدد انتخاب مستقیم، Enter انتخاب نتیجه Highlight شده یا اولین نتیجه قابل مشاهده، و `q` یا Escape لغو است.
 
-اگر یک نام در چند اکوسیستم پیدا شود، مثلا APT، Homebrew، Python و Node، Allp هیچ‌کدام را بی‌صدا انتخاب نمی‌کند.
-
-`--scope` یک انتخاب گسترده است:
-
-- `--scope apps`: اپلیکیشن‌ها و ابزارها؛ شامل Packageهای سیستمی، Universal applicationها و Homebrew
-- `--scope dev`: اکوسیستم‌های توسعه؛ شامل Python / PyPI و Node.js / npm registry
-- `--scope all`: همه Sourceها با ترتیب System Packages، Universal Applications و Developer Ecosystems
-
-`--from` دقیق‌تر است و Backend، Source، Ecosystem یا Installer را مشخص می‌کند. در Terminal تعاملی، اگر `--from` و `--scope` داده نشود، Allp دقیقا سه انتخاب نشان می‌دهد: Apps and tools، Developer ecosystems و All sources.
-
-برای Install، همه نتیجه‌ها شماره Global و ثابت دارند. وقتی نتیجه زیاد باشد، Selector تعاملی استفاده می‌شود: Space برای صفحه بعد، `b` برای صفحه قبل، عدد برای انتخاب مستقیم، `/` برای Filter، Enter برای نتیجه Highlight شده یا اولین نتیجه قابل مشاهده، و `q` یا Escape برای لغو. در خروجی non-TTY و JSON این Selector فعال نمی‌شود.
-
-## Dry Run و sudo
-
-```bash
-allp install git --dry-run
-allp update --dry-run
-```
-
-در Dry Run، Detection و Planning انجام می‌شود اما Command تغییردهنده اجرا نمی‌شود.
-
-## تایید نهایی و `--yes`
-
-هر عملیات واقعی تغییردهنده بعد از نمایش Execution Plan به تایید نهایی Allp نیاز دارد؛ حتی اگر فقط یک نتیجه Exact پیدا شده باشد. Remove به صورت پیش‌فرض No است و Upgradeهای پرریسک هم پیش‌فرض No دارند.
-
-گزینه `--yes` یا `-y` فقط تایید نهایی خود Allp را رد می‌کند:
-
-```bash
-allp install git --from apt --yes
-allp update --from npm --target global --yes
-```
-
-این گزینه هیچ وقت فلگ‌هایی مثل `-y` یا `--assumeyes` را به Package Managerهای Native اضافه نمی‌کند و ابهام Package، انتخاب Installer/Target، حفاظت Homebrew، PEP 668 یا بررسی Ownership را دور نمی‌زند.
-
-## Update برای Python و Node
-
-`allp update` و `allp upgrade` هدف‌های Python و Node را هم کشف می‌کنند و برای هر هدف یا Plan عملیاتی می‌سازند یا دلیل دقیق Skip را نشان می‌دهند.
-
-نمونه‌ها:
-
-```bash
-allp update --scope dev --target all --dry-run
-allp update --from npm --target project --dry-run
-allp update --from pnpm --target workspace --dry-run
-allp update --from yarn --target project --dry-run
-allp update --from pip --target environment --dry-run
-allp update --from pipx --target tools --dry-run
-allp update --from uv --target tools --dry-run
-```
-
-Node از دستورهای Native مثل `npm update`، `npm update --global`، `pnpm update`، `pnpm update --latest` و دستور مناسب نسخه Yarn استفاده می‌کند و هیچ وقت `npx update` تولید نمی‌کند. Python خروجی JSON مربوط به pip outdated را inspect می‌کند، برای محیط فعال از `python -m pip install --upgrade ...` استفاده می‌کند، و `pipx upgrade-all` و `uv tool upgrade --all` را پشتیبانی می‌کند.
+## رفتار sudo و Root
 
 روش پیشنهادی:
 
@@ -133,28 +125,216 @@ Node از دستورهای Native مثل `npm update`، `npm update --global`، 
 allp update
 ```
 
-خود Allp را با `sudo` اجرا نکنید. Allp فقط Child Processهایی را که Root لازم دارند Elevate می‌کند.
+Allp معمولا باید با کاربر عادی اجرا شود. اگر یک Child Command دسترسی Root بخواهد، Allp بعد از نمایش Plan و گرفتن تایید، فقط همان Child را با `sudo --` اجرا می کند. Dry run هیچ وقت sudo را اجرا نمی کند.
 
-قبل از اجرای Child Processهایی که Root لازم دارند، Allp دستورهای Native را نشان می‌دهد، نیاز به Administrator Access را توضیح می‌دهد، و قبل از اجرای واقعی دستورهای تغییردهنده تایید نهایی می‌گیرد. Dry Run هیچ وقت sudo را اجرا نمی‌کند.
+اگر عمدا اجرا کنید:
 
-اگر Allp از قبل با sudo اجرا شده باشد، برای عملیات Root دوباره sudo اضافه نمی‌کند و عملیات User-scoped مثل Homebrew، Python و Node را با کاربر اصلی sudo اجرا می‌کند، اگر آن کاربر قابل تشخیص باشد.
+```bash
+sudo allp update
+```
 
-برای خروجی بزرگ `list` از Pager استفاده می‌شود. گزینه‌های `--filter`، `--limit` و `--no-pager` برای کنترل خروجی وجود دارند. خروجی پیش‌فرض `info` خلاصه و curated است؛ `--full` و `--raw` جزئیات بیشتر را نشان می‌دهند.
+Allp دوباره sudo اضافه نمی کند. عملیات Root مستقیم اجرا می شوند و عملیات user-scoped مثل Homebrew، Python، Node و Flatpak-user در صورت وجود `SUDO_USER` با کاربر اصلی اجرا می شوند.
 
-## مستندات
+گزینه `--yes` فقط تایید نهایی خود Allp را رد می کند. این گزینه هیچ وقت فلگ هایی مثل `-y` یا `--assumeyes` را به ابزار Native اضافه نمی کند.
 
-- [معماری](ARCHITECTURE.md)
-- [قرارداد CLI](docs/CLI_CONTRACT.md)
-- [معنای دستورها](docs/COMMANDS.md)
-- [قرارداد Backend](docs/BACKEND_CONTRACT.md)
-- [ماتریس قابلیت‌ها](docs/CAPABILITY_MATRIX.md)
-- [مدل تایید](docs/CONFIRMATION_MODEL.md)
-- [هویت نرم‌افزار](docs/SOFTWARE_IDENTITY.md)
-- [Bootstrap رسمی](docs/OFFICIAL_BOOTSTRAP.md)
-- [برخورد نام‌ها](docs/NAME_COLLISIONS.md)
-- [Update برای اکوسیستم‌های توسعه](docs/DEVELOPER_UPDATES.md)
-- [برنامه تست v0.3.2](docs/V0_3_2_TEST_PLAN.md)
-- [برنامه تست v0.3.3](docs/V0_3_3_TEST_PLAN.md)
-- [Bootstrap برای Homebrew](docs/HOMEBREW_BOOTSTRAP.md)
-- [Roadmap](ROADMAP.md)
-- [راهنمای افزودن Backend](docs/ADDING_BACKEND.md)
+## Snap، validation و classic confinement
+
+در نسخه 0.3.3 نتیجه خام `snap find` دیگر مستقیم به Plan نصب تبدیل نمی شود. بعد از انتخاب نتیجه Snap، Allp دستور `snap info <candidate>` را اجرا می کند و این موارد را resolve می کند:
+
+- نام canonical package و عنوان نمایشی؛
+- publisher و وضعیت verification؛
+- confinement؛
+- معماری های قابل استفاده؛
+- track و channel؛
+- وجود stable channel؛
+- وضعیت نصب با `snap list <canonical-name>`.
+
+اگر metadata بگوید confinement از نوع classic است، Plan شامل `--classic` می شود:
+
+```bash
+allp install pycharm --from snap --dry-run
+# native plan:
+snap install pycharm --classic
+```
+
+برای Snapهای strict، فلگ `--classic` اضافه نمی شود. اگر stable channel وجود نداشته باشد، یا چند stable track بدون default امن وجود داشته باشد، Allp نصب را متوقف می کند و silent choice انجام نمی دهد. انتخاب گر تعاملی channel هنوز از محدودیت های Alpha است.
+
+## Python و Node
+
+در Python، Source برابر PyPI است و pip، pipx و uv نقش Installer دارند. در Node، Source برابر npm registry است و npm، pnpm و Yarn نقش Installer دارند. صرفا مشابه بودن نام، یک package رجیستری را official نمی کند و Fuzzy matchهای Python/Node به صورت خودکار نصب نمی شوند.
+
+```bash
+allp search openai --from python
+allp install black --from pipx --dry-run
+allp search typescript --from node
+allp install typescript --from pnpm --dry-run
+allp update --scope dev --target all --dry-run
+```
+
+## Dry Run و JSON
+
+Dry run همچنان discovery، search، انتخاب، validation metadata و ساخت execution plan را انجام می دهد. فقط اجرای دستور Native تغییردهنده را رد می کند.
+
+```bash
+allp install git --dry-run
+allp install pycharm --from snap --dry-run
+allp update --dry-run
+```
+
+نمونه JSON:
+
+```bash
+allp detect --json
+allp search git --json
+allp list --json
+allp info git --json
+allp update --dry-run --json
+```
+
+خروجی انسانی با JSON stdout مخلوط نمی شود.
+
+## Makefile
+
+Makefile ریشه پروژه workflowهای توسعه، نصب و release محلی را با دستورهای شفاف
+اجرا می کند:
+
+```bash
+make help
+make fmt
+make fmt-check
+make check
+make clippy
+make test
+make architecture
+make build
+make release
+make quality
+make run ARGS="search git"
+make version
+make git-status
+make docs-check
+make install
+make reinstall
+make uninstall
+make install-user
+make install-check
+```
+
+هدف های `make install`، `make reinstall` و `make uninstall` فقط برای مدیریت
+`/usr/local/bin/allp` از sudo استفاده می کنند. این هدف ها Package بومی نصب
+نمی کنند، عملیات package-manager را اجرا نمی کنند، commit/push/tag/publish
+انجام نمی دهند، و failureها را مخفی نمی کنند.
+
+## workflow انتشار محلی
+
+workflow انتشار فقط محلی است. چیزی push نمی شود، GitHub Release ساخته نمی شود،
+و assetی upload نمی شود.
+
+یک بار در هر clone:
+
+```bash
+make hooks-install
+```
+
+آماده سازی نسخه بعدی به صورت صریح:
+
+```bash
+make release-prepare BUMP=patch
+# یا:
+make release-prepare VERSION=0.3.4
+```
+
+`release-prepare` نسخه package، فایل Cargo.lock از مسیر Cargo، CHANGELOG،
+اشاره های نسخه در READMEها، و draft قابل track مثل
+`release/RELEASE_NOTES_v0.3.4.md` را به روز می کند و بعد `make quality` را
+اجرا می کند. فقط اگر quality gate موفق باشد marker محلی و ignored نوشته می شود.
+
+فایل های آماده شده را مثل همیشه commit کنید، مثلا از VS Code Source Control:
+
+```text
+release: Allp v0.3.4
+```
+
+فقط commitی که subject آن با `release:` شروع شود و با marker آماده شده همخوان
+باشد finalize می شود. hook بعد از commit این خروجی های محلی را می سازد:
+
+- tag محلی annotated با نام `v0.3.4`
+- `dist/allp-v0.3.4-source.tar.gz`
+- `dist/allp-v0.3.4-source.tar.gz.sha256`
+- `dist/RELEASE_NOTES_v0.3.4.md`
+
+آرشیو سورس از همان tag commit شده با `git archive` ساخته می شود. commitهای
+معمولی مثل `fix: improve Snap parsing` نسخه را تغییر نمی دهند، tag نمی سازند،
+و خروجی `dist/` تولید نمی کنند. برای بررسی وضعیت از `make release-status` و
+برای تست automation در repositoryهای موقت از `make release-workflow-test`
+استفاده کنید. نمونه taskهای VS Code در `contrib/vscode/tasks.json` قرار دارد،
+چون `.vscode/` حالت editor-local دارد و ignored است.
+
+## عیب یابی
+
+| مشکل | راهنمایی |
+|---|---|
+| قفل APT | صبر کنید Package Manager فعلی تمام شود. Lock fileهای dpkg را حذف نکنید. |
+| مشکل DNF/RPM database | Permission یا سلامت rpmdb را بررسی و اصلاح کنید. |
+| نبودن pip، pipx یا uv | `allp detect --verbose` را اجرا کنید و ابزار مورد نیاز را آگاهانه نصب یا تنظیم کنید. |
+| Permission برای npm global | prefix مربوط به npm را user-owned کنید یا از Node manager کاربری استفاده کنید؛ Allp برای npm global sudo اضافه نمی کند. |
+| Scope در Flatpak | با `allp list --from flatpak` نصب user/system را مشخص کنید. |
+| خطای metadata در Snap | `snap info <name>` و `allp search <name> --from snap --all` را اجرا کنید؛ نتیجه stale قبل از نصب block می شود. |
+| Snap classic | Plan معتبر Allp بعد از `snap info` در صورت نیاز `--classic` را اضافه می کند. |
+
+## مدل امنیتی
+
+Allp دستورها را به صورت executable path و argument vector نگه می دارد و Package Managerها را از طریق `sh -c` اجرا نمی کند. خروجی ابزارهای Native داده محسوب می شود، نه کد قابل اعتماد. Dry run installerها را اجرا نمی کند. Allp sudo password ذخیره نمی کند، telemetry ندارد، و confirmation flagهای Native اضافه نمی کند.
+
+برای گزارش مشکل امنیتی [SECURITY.md](SECURITY.md) را ببینید.
+
+## معماری
+
+```text
+CLI -> discovery -> operation -> backend parser/planner -> renderer -> process runner
+```
+
+Backendها syntax و parser مخصوص ابزار Native را نگه می دارند. Operationهای عمومی انتخاب، confirmation و plan را هماهنگ می کنند. Runner اجرای مستقیم process، streaming خروجی، sudo و de-escalation به کاربر اصلی را مدیریت می کند.
+
+برای جزئیات بیشتر: [ARCHITECTURE.md](ARCHITECTURE.md)، [docs/BACKEND_CONTRACT.md](docs/BACKEND_CONTRACT.md)، [docs/PRIVILEGE_MODEL.md](docs/PRIVILEGE_MODEL.md).
+
+## توسعه
+
+```bash
+cargo fmt --all
+cargo fmt --all -- --check
+cargo check --all-targets
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets
+bash scripts/check-architecture.sh
+cargo build --release
+make quality
+```
+
+برای رفتار Package Managerها از fake executable و fixture استفاده کنید. تست ها نباید عملیات destructive واقعی روی Package Managerها انجام دهند.
+
+## مشارکت
+
+Parser و flagهای مخصوص هر Backend باید داخل همان Backend بمانند. برای تغییر parser fixture اضافه کنید. قرارداد CLI، JSON، privilege، dry-run و UI ترمینال را حفظ کنید. [CONTRIBUTING.md](CONTRIBUTING.md) را ببینید.
+
+## Roadmap
+
+کارهای نزدیک شامل validation روی distroهای واقعی، fixtureهای بیشتر، doctor/diagnostics، و UX امن تر برای انتخاب channel در Snap است. اکوسیستم هایی مثل Cargo، Composer، Go، RubyGems، Maven/Gradle و حالت های GUI/TUI در نسخه 0.3.3 پیاده سازی نشده اند.
+
+[ROADMAP.md](ROADMAP.md) و [TODO.md](TODO.md) را ببینید.
+
+## Changelog
+
+نسخه 0.3.3 برنامه ریزی نصب Snap، hygiene مخزن، مستندات انتشار و Makefile را پایدارتر می کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
+
+## محدودیت های شناخته شده
+
+- Allp هنوز Public Alpha است و audit امنیتی کامل نشده است.
+- انتخاب چند track/channel در Snap محافظه کارانه است و ممکن است به دستور Native `snap` نیاز داشته باشد.
+- Backendهای Experimental باید روی سیستم های واقعی بیشتری اعتبارسنجی شوند.
+- سیاست های پروژه ای Python و Node عمدا محتاطانه هستند.
+- signal forwarding و trusted-path validation عمیق تر هنوز کار آینده است.
+
+## مجوز
+
+MIT. فایل [LICENSE](LICENSE) را ببینید.

@@ -60,6 +60,7 @@ impl Backend for ExampleBackend {
                 PackageDomain::Python,
                 "development package",
             ),
+            metadata: Default::default(),
         }])
     }
 }

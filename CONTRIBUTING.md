@@ -7,16 +7,28 @@ Thank you for helping build Allp.
 Run the full local suite before opening a pull request:
 
 ```bash
-cargo fmt --all
-cargo fmt --all -- --check
-cargo check --all-targets
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets
-bash scripts/check-architecture.sh
-cargo build --release
+make quality
 ```
 
 Do not claim a check passed unless you ran it.
+
+## Local Release Workflow
+
+Release automation is intentionally local-only:
+
+```bash
+make hooks-install
+make release-prepare BUMP=patch
+```
+
+Commit the prepared files with a subject that begins with `release:`. The
+post-commit hook creates only a local annotated tag and files under ignored
+`dist/`. It never pushes, publishes a GitHub Release, or uploads assets.
+Ordinary commits must not change the version or produce release output.
+
+Use `make release-status` to inspect pending state and
+`make release-workflow-test` to exercise the release scripts in temporary Git
+repositories.
 
 ## Architecture Rules
 

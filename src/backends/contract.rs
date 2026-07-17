@@ -1,8 +1,8 @@
 use crate::{
     domain::{
         AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
-        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, PackageCandidate,
-        PackageDomain, PackageInfo, RuntimePrivilegeContext,
+        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
+        PackageCandidate, PackageDomain, PackageInfo, RuntimePrivilegeContext,
     },
     execution::ProcessRunner,
 };
@@ -13,14 +13,37 @@ use std::{
 
 pub type CommandMap = BTreeMap<String, PathBuf>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum InstallPreflight {
     Continue,
+    UseCandidate {
+        candidate: Box<PackageCandidate>,
+        warnings: Vec<InstallPreflightWarning>,
+    },
     AlreadyInstalled {
         package_id: String,
         installed_version: Option<String>,
         candidate_version: Option<String>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct InstallPreflightWarning {
+    pub title: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InstallPreflightStatus {
+    pub stage: String,
+    pub command: NativeCommand,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallPreflightRecovery {
+    RetryValidation,
+    RetrySearch,
+    Cancelled,
 }
 
 const SYSTEM_DOMAINS: &[PackageDomain] = &[PackageDomain::System];
@@ -107,6 +130,25 @@ pub trait Backend: Send + Sync {
         _candidate: &PackageCandidate,
     ) -> AllpResult<InstallPreflight> {
         Ok(InstallPreflight::Continue)
+    }
+
+    fn install_preflight_status(
+        &self,
+        _commands: &CommandMap,
+        _candidate: &PackageCandidate,
+    ) -> AllpResult<Option<InstallPreflightStatus>> {
+        Ok(None)
+    }
+
+    fn recover_install_preflight_failure(
+        &self,
+        _commands: &CommandMap,
+        _runner: &dyn ProcessRunner,
+        _candidate: &PackageCandidate,
+        error: AllpError,
+        _no_interactive: bool,
+    ) -> AllpResult<InstallPreflightRecovery> {
+        Err(error)
     }
 
     fn plan_install(

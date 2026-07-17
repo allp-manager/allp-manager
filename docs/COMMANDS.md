@@ -64,6 +64,7 @@ allp install black --from pipx --dry-run
 allp install typescript --from pnpm --dry-run
 allp install git --no-interactive
 allp install git --from apt --yes
+allp install pycharm --from snap --dry-run
 ```
 
 Flow:
@@ -81,6 +82,18 @@ Related matches are kept visible when multiple backends have meaningful candidat
 When exactly one strong candidate remains and every eligible backend completed successfully, Allp may select that package for planning. Selection is not execution permission: real installs still render the execution plan and ask `Install this package? [Y/n]` unless `--yes` is supplied.
 
 Python and Node registry packages show source/registry separately from installer choices. Fuzzy Python or Node matches are never installed automatically.
+
+Snap install planning is metadata-gated:
+
+1. search results come from `snap find`;
+2. the selected candidate is revalidated with `snap info`;
+3. Allp uses the canonical `name`, not the display title;
+4. publisher decorations such as `**` are stored as verification state;
+5. architecture, stable channel, confinement, and installed state are inspected;
+6. classic confinement adds `--classic`;
+7. stale or unavailable results fail before any install child process starts.
+
+If a Snap has no stable channel, or multiple stable tracks without a safe default, Allp refuses to silently choose candidate, beta, edge, or an arbitrary track.
 
 ## `remove <query>`
 

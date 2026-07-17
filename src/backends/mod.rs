@@ -9,4 +9,5 @@ pub mod util;
 pub use catalog::builtin_backends;
 pub use contract::{
     backend_matches_filter, Backend, CommandMap, CommandRequirement, InstallPreflight,
+    InstallPreflightRecovery, InstallPreflightStatus,
 };

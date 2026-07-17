@@ -1,0 +1,12 @@
+name: pycharm
+title: PyCharm
+summary: Python IDE
+publisher: JetBrains**
+version: 2026.1.4
+confinement: classic
+architectures: amd64, arm64
+channels:
+  latest/stable: 2026.1.4 2026-06-01 (123) 800MB classic
+  latest/candidate: 2026.1.5 2026-06-08 (124) 800MB classic
+  latest/beta: 2026.1.5 2026-06-08 (125) 800MB classic
+  latest/edge: 2026.2.0 2026-06-09 (126) 800MB classic

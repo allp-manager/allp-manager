@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Allp: quality",
+      "type": "shell",
+      "command": "make quality",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Allp: release prepare patch",
+      "type": "shell",
+      "command": "make release-prepare BUMP=patch",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Allp: release status",
+      "type": "shell",
+      "command": "make release-status",
+      "problemMatcher": []
+    },
+    {
+      "label": "Allp: install hooks",
+      "type": "shell",
+      "command": "make hooks-install",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -326,6 +326,7 @@ fn append_lines(
                 PackageDomain::Homebrew,
                 artifact_kind,
             ),
+            metadata: Default::default(),
         });
     }
 }
@@ -373,6 +374,7 @@ fn plan(
         package_id,
         source,
         scope: Some("current user".to_owned()),
+        details: Vec::new(),
         command,
         privilege: PrivilegeRequirement::OriginalUserRequired,
         requires_root: false,

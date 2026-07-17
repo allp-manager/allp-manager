@@ -35,3 +35,5 @@ Stable rows have the strongest test and parser coverage. Experimental rows are i
 | Go | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 
 Unsupported rows are roadmap markers or explicitly deferred ecosystems, not hidden features.
+
+Snap `Install` in v0.3.3 means the selected search result is revalidated with `snap info` before planning. Classic confinement, canonical names, publisher verification, stable channel availability, architecture metadata, and installed state are handled before any install child process can start.

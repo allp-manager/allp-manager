@@ -1,6 +1,58 @@
-/target
-.DS_Store
+# Rust build output
+/target/
+
+# Local release output and state
+/dist/
+/.release-state/
+
+# Local command output and logs
+*.log
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
 *.swp
 *.swo
+*~
+.DS_Store
+Thumbs.db
+
+# IDE and editor-local files
 .idea/
 .vscode/
+*.code-workspace
+
+# Test and coverage artifacts
+coverage/
+coverage-*/
+*.profraw
+*.profdata
+lcov.info
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Runtime/cache directories
+.cache/
+.tmp/
+tmp/
+
+# Locally generated packages and archives
+*.crate
+*.deb
+*.rpm
+*.AppImage
+*.dmg
+*.msi
+*.exe
+*.tar.gz
+*.zip

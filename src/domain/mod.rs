@@ -19,7 +19,7 @@ pub use package::{
 };
 pub use report::{
     BackendIssue, BackendOperationRecord, MaintenancePlan, MultiOperationReport, OperationStatus,
-    SearchReport,
+    SearchBackendState, SearchBackendSummary, SearchReport,
 };
 pub use software_identity::{
     DistributionRelationship, IdentityConfidence, IdentityMetadata, NameMatchKind, SoftwareType,

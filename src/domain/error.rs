@@ -28,6 +28,9 @@ impl AllpExitCode {
 pub enum AllpError {
     InvalidInput(String),
     BackendNotDetected(String),
+    NoConfiguredRemotes {
+        backend: String,
+    },
     UnsupportedOperation {
         backend: String,
         operation: String,
@@ -35,6 +38,19 @@ pub enum AllpError {
     PackageNotFound(String),
     AmbiguousSelection(String),
     NonInteractiveSelectionRequired,
+    ValidationFailed {
+        backend: String,
+        message: String,
+    },
+    ValidationStartFailed {
+        backend: String,
+        executable: String,
+        reason: String,
+    },
+    MetadataParseFailed {
+        backend: String,
+        message: String,
+    },
     PartialFailure(String),
     Timeout(String),
     CommandFailed {
@@ -67,7 +83,12 @@ impl AllpError {
                 AllpExitCode::AmbiguousSelection.code()
             }
             Self::BackendNotDetected(_) => AllpExitCode::BackendNotDetected.code(),
+            Self::NoConfiguredRemotes { .. } => AllpExitCode::BackendNotDetected.code(),
             Self::UnsupportedOperation { .. } => AllpExitCode::UnsupportedOperation.code(),
+            Self::ValidationFailed { .. } | Self::ValidationStartFailed { .. } => {
+                AllpExitCode::NativeCommandFailed.code()
+            }
+            Self::MetadataParseFailed { .. } => AllpExitCode::InternalError.code(),
             Self::CommandFailed { .. } => AllpExitCode::NativeCommandFailed.code(),
             Self::BackendBusy { .. } => AllpExitCode::BackendBusy.code(),
             Self::PartialFailure(_) => AllpExitCode::PartialFailure.code(),
@@ -85,6 +106,9 @@ impl fmt::Display for AllpError {
                 f,
                 "The requested backend \"{name}\" is not available.\n\nRun:\n  allp detect --verbose"
             ),
+            Self::NoConfiguredRemotes { backend } => {
+                write!(f, "{backend} skipped · no configured remotes")
+            }
             Self::UnsupportedOperation { backend, operation } => {
                 write!(
                     f,
@@ -101,6 +125,30 @@ impl fmt::Display for AllpError {
                     f,
                     "Multiple choices were found, but interactive selection is disabled.\n\nUse --from with a backend ID or provide an exact package ID."
                 )
+            }
+            Self::ValidationFailed { backend, message } => {
+                write!(f, "{backend} validation failed")?;
+                if !message.trim().is_empty() {
+                    write!(f, "\n{}", message.trim())?;
+                }
+                Ok(())
+            }
+            Self::ValidationStartFailed {
+                backend,
+                executable,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Unable to start {backend} validation\n  executable: {executable}\n  reason: {reason}"
+                )
+            }
+            Self::MetadataParseFailed { backend, message } => {
+                write!(f, "{backend} metadata parsing failed")?;
+                if !message.trim().is_empty() {
+                    write!(f, "\n{}", message.trim())?;
+                }
+                Ok(())
             }
             Self::PartialFailure(message) => write!(f, "{message}"),
             Self::Timeout(message) => write!(f, "{message}"),

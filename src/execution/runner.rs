@@ -3,6 +3,8 @@ use crate::{
     execution::privilege::prepare_command,
     execution::render_native_command,
 };
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::{
     io::{IsTerminal, Read, Write},
     process::Stdio,
@@ -19,6 +21,8 @@ const REPEAT_HEARTBEAT_AFTER: Duration = Duration::from_secs(15);
 pub struct CommandOutput {
     pub success: bool,
     pub code: Option<i32>,
+    pub signal: Option<i32>,
+    pub duration: Duration,
     pub stdout: String,
     pub stderr: String,
 }
@@ -83,6 +87,8 @@ impl ProcessRunner for StdProcessRunner {
         Ok(CommandOutput {
             success: status.success(),
             code: status.code(),
+            signal: status_signal(&status),
+            duration: started.elapsed(),
             stdout,
             stderr,
         })
@@ -142,6 +148,16 @@ impl ProcessRunner for StdProcessRunner {
             stderr,
         })
     }
+}
+
+#[cfg(unix)]
+fn status_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn status_signal(_status: &std::process::ExitStatus) -> Option<i32> {
+    None
 }
 
 #[derive(Debug, Clone, Copy)]

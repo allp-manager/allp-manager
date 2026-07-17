@@ -110,6 +110,7 @@ impl Backend for AptBackend {
                     PackageDomain::System,
                     "system package",
                 ),
+                metadata: Default::default(),
             });
         }
 
@@ -251,6 +252,7 @@ impl Backend for AptBackend {
             package_id: Some(candidate.package_id.clone()),
             source: candidate.source.clone(),
             scope: candidate.scope.clone(),
+            details: Vec::new(),
             command: apt_mutation_command(apt_get, "install", &[candidate.package_id.as_str()]),
             privilege: PrivilegeRequirement::RootRequired,
             requires_root: true,
@@ -272,6 +274,7 @@ impl Backend for AptBackend {
             package_id: Some(package.package_id.clone()),
             source: package.source.clone(),
             scope: package.scope.clone(),
+            details: Vec::new(),
             command: apt_mutation_command(apt_get, "remove", &[package.package_id.as_str()]),
             privilege: PrivilegeRequirement::RootRequired,
             requires_root: true,
@@ -295,6 +298,7 @@ impl Backend for AptBackend {
             package_id: None,
             source: Some("APT repositories".to_owned()),
             scope: Some("system".to_owned()),
+            details: Vec::new(),
             command: apt_mutation_command(apt_get, "update", &[]),
             privilege: PrivilegeRequirement::RootRequired,
             requires_root: true,
@@ -318,6 +322,7 @@ impl Backend for AptBackend {
             package_id: None,
             source: Some("APT repositories".to_owned()),
             scope: Some("system".to_owned()),
+            details: Vec::new(),
             command: apt_mutation_command(apt_get, "upgrade", &[]),
             privilege: PrivilegeRequirement::RootRequired,
             requires_root: true,

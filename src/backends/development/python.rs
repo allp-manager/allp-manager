@@ -562,6 +562,7 @@ fn python_plan(
         package_id: None,
         source,
         scope,
+        details: Vec::new(),
         command,
         privilege: PrivilegeRequirement::OriginalUserRequired,
         requires_root: false,
@@ -671,6 +672,7 @@ fn candidate(
             PackageDomain::Python,
             "Python package",
         ),
+        metadata: Default::default(),
     }
 }
 
@@ -712,6 +714,7 @@ fn plan(
         package_id,
         source: Some("PyPI".to_owned()),
         scope: Some(python_scope()),
+        details: Vec::new(),
         command,
         privilege: PrivilegeRequirement::OriginalUserRequired,
         requires_root: false,

@@ -170,6 +170,7 @@ mod tests {
                 PackageDomain::Node,
                 "Node package",
             ),
+            metadata: Default::default(),
         }];
 
         annotate_candidates("Homebrew", &mut candidates);

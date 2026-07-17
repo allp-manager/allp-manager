@@ -10,6 +10,22 @@ pub fn select_candidate(
     candidates: &[PackageCandidate],
     no_interactive: bool,
 ) -> AllpResult<usize> {
+    select_candidate_inner(candidates, no_interactive, false, "Choose a result")
+}
+
+pub fn select_package_candidate(
+    candidates: &[PackageCandidate],
+    no_interactive: bool,
+) -> AllpResult<usize> {
+    select_candidate_inner(candidates, no_interactive, true, "Select a package")
+}
+
+fn select_candidate_inner(
+    candidates: &[PackageCandidate],
+    no_interactive: bool,
+    prompt_single: bool,
+    prompt_label: &str,
+) -> AllpResult<usize> {
     if candidates.is_empty() {
         return Err(AllpError::InvalidInput(
             "no candidates are available for selection".to_owned(),
@@ -21,7 +37,7 @@ pub fn select_candidate(
             PackageDomain::Python | PackageDomain::Node
         )
         && candidates[0].match_kind != MatchKind::Exact;
-    if candidates.len() == 1 && !registry_non_exact {
+    if candidates.len() == 1 && !registry_non_exact && (!prompt_single || no_interactive) {
         return Ok(0);
     }
     if no_interactive {
@@ -38,7 +54,7 @@ pub fn select_candidate(
         return select_candidate_paged(candidates);
     }
 
-    prompt_index(candidates.len(), "Choose a result")
+    prompt_index(candidates.len(), prompt_label)
 }
 
 pub fn should_page_candidate_selection(
@@ -77,12 +93,11 @@ pub fn select_search_scope(no_interactive: bool) -> AllpResult<SearchScope> {
         println!("[1] {}", SearchScope::AppsAndTools.label());
         println!("[2] {}", SearchScope::DeveloperEcosystems.label());
         println!("[3] {}", SearchScope::AllSources.label());
-        print!("\nChoose a search scope [1-3, 0 to cancel]: ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        match input.trim() {
+        let input = prompt_line(
+            "\nChoose a search scope [1-3, 0 to cancel]: ",
+            "input closed before a search scope was selected",
+        )?;
+        match input.as_str() {
             "1" => return Ok(SearchScope::AppsAndTools),
             "2" => return Ok(SearchScope::DeveloperEcosystems),
             "3" => return Ok(SearchScope::AllSources),
@@ -134,13 +149,11 @@ pub fn select_installer(
 
 fn prompt_index(count: usize, label: &str) -> AllpResult<usize> {
     loop {
-        print!("{label} [1-{count}, 0 to cancel]: ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let trimmed = input.trim();
-        let Ok(value) = trimmed.parse::<usize>() else {
+        let input = prompt_line(
+            &format!("{label} [1-{count}, 0 to cancel]: "),
+            "input closed before a selection was made",
+        )?;
+        let Ok(value) = input.parse::<usize>() else {
             eprintln!("Please enter a number between 1 and {count}.");
             continue;
         };
@@ -158,6 +171,21 @@ fn prompt_index(count: usize, label: &str) -> AllpResult<usize> {
     }
 }
 
+fn prompt_line(prompt: &str, eof_message: &str) -> AllpResult<String> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    read_complete_line(eof_message)
+}
+
+fn read_complete_line(eof_message: &str) -> AllpResult<String> {
+    let mut input = String::new();
+    input.clear();
+    if io::stdin().read_line(&mut input)? == 0 {
+        return Err(AllpError::Timeout(eof_message.to_owned()));
+    }
+    Ok(input.trim().to_owned())
+}
+
 pub fn confirm_fuzzy_candidate(no_interactive: bool) -> AllpResult<()> {
     if no_interactive {
         return Err(AllpError::AmbiguousSelection(
@@ -167,11 +195,11 @@ pub fn confirm_fuzzy_candidate(no_interactive: bool) -> AllpResult<()> {
     }
 
     loop {
-        print!("The result is not an exact name match. Continue? [y/N]: ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        match input.trim().to_ascii_lowercase().as_str() {
+        let input = prompt_line(
+            "The result is not an exact name match. Continue? [y/N]: ",
+            "input closed before confirmation was provided",
+        )?;
+        match input.to_ascii_lowercase().as_str() {
             "y" | "yes" => return Ok(()),
             "" | "n" | "no" => {
                 return Err(AllpError::InvalidInput(
@@ -208,11 +236,11 @@ pub fn confirm_conflicting_identity(
         println!("{warning}");
     }
     loop {
-        print!("Install this conflicting package anyway? [y/N]: ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        match input.trim().to_ascii_lowercase().as_str() {
+        let input = prompt_line(
+            "Install this conflicting package anyway? [y/N]: ",
+            "input closed before confirmation was provided",
+        )?;
+        match input.to_ascii_lowercase().as_str() {
             "y" | "yes" => return Ok(()),
             "" | "n" | "no" | "q" => {
                 return Err(AllpError::InvalidInput(
@@ -253,11 +281,11 @@ pub fn confirm_execution(
         } else {
             "[y/N]"
         };
-        print!("{} {suffix}: ", request.prompt);
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        match input.trim().to_ascii_lowercase().as_str() {
+        let input = prompt_line(
+            &format!("{} {suffix}: ", request.prompt),
+            "input closed before confirmation was provided",
+        )?;
+        match input.to_ascii_lowercase().as_str() {
             "" if request.default_yes => return Ok(true),
             "" => return Ok(false),
             "y" | "yes" => return Ok(true),
@@ -475,7 +503,11 @@ fn read_trimmed_line() -> AllpResult<String> {
 
 fn read_raw_line() -> AllpResult<String> {
     let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
+    if io::stdin().read_line(&mut input)? == 0 {
+        return Err(AllpError::Timeout(
+            "input closed before a selection was made".to_owned(),
+        ));
+    }
     Ok(input)
 }
 
@@ -571,6 +603,7 @@ mod tests {
                 PackageDomain::System,
                 "test",
             ),
+            metadata: Default::default(),
         }
     }
 }

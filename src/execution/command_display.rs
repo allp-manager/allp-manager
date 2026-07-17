@@ -32,6 +32,22 @@ pub fn render_native_command(command: &NativeCommand) -> String {
     parts.join(" ")
 }
 
+pub fn render_native_argv(command: &NativeCommand) -> String {
+    let mut values = vec![escape_argv_value(command.program.as_os_str())];
+    values.extend(
+        command
+            .args
+            .iter()
+            .map(|arg| escape_argv_value(arg.as_os_str())),
+    );
+    format!("[{}]", values.join(", "))
+}
+
+fn escape_argv_value(value: &OsStr) -> String {
+    let value = value.to_string_lossy();
+    format!("\"{}\"", value.escape_debug())
+}
+
 fn quote(value: &OsStr) -> String {
     let value = value.to_string_lossy();
     if !value.is_empty()
@@ -47,7 +63,7 @@ fn quote(value: &OsStr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_execution_plan_with_context, render_native_command};
+    use super::{render_execution_plan_with_context, render_native_argv, render_native_command};
     use crate::domain::{
         ExecutionPlan, NativeCommand, OperationKind, OriginalUser, PrivilegeRequirement,
         RuntimePrivilegeContext,
@@ -59,6 +75,10 @@ mod tests {
         assert_eq!(
             render_native_command(&command),
             "apt-get install 'name with spaces'"
+        );
+        assert_eq!(
+            render_native_argv(&command),
+            "[\"apt-get\", \"install\", \"name with spaces\"]"
         );
     }
 
@@ -106,6 +126,7 @@ mod tests {
             package_id: None,
             source: None,
             scope: None,
+            details: Vec::new(),
             command: NativeCommand::new("/usr/bin/apt-get").arg("update"),
             privilege,
             requires_root: privilege == PrivilegeRequirement::RootRequired,

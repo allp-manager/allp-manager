@@ -1,8 +1,10 @@
 use crate::{
     bootstrap,
     cli::Spinner,
+    discovery::{BackendDetection, DetectionState},
     domain::{
-        AllpError, BackendIssue, Capability, MatchKind, PackageCandidate, SearchReport, SearchScope,
+        AllpError, BackendIssue, Capability, MatchKind, PackageCandidate, SearchBackendState,
+        SearchBackendSummary, SearchReport, SearchScope,
     },
     identity::resolver,
     operations::OperationContext,
@@ -111,6 +113,7 @@ pub fn gather_with_policy(
     }
 
     let mut issues = Vec::new();
+    let mut backend_summaries = initial_backend_summaries(context, policy);
 
     if !eligible.is_empty() {
         let spinner = Spinner::start(
@@ -137,12 +140,37 @@ pub fn gather_with_policy(
 
             for (backend_id, backend_name, result) in receiver {
                 match result {
-                    Ok(mut found) => candidates.append(&mut found),
-                    Err(error) => issues.push(BackendIssue {
-                        backend_id,
-                        backend_name,
-                        message: error.to_string(),
-                    }),
+                    Ok(mut found) => {
+                        update_backend_summary(
+                            &mut backend_summaries,
+                            &backend_id,
+                            if found.is_empty() {
+                                SearchBackendState::NoMatches
+                            } else {
+                                SearchBackendState::ParsedResults
+                            },
+                            found.len(),
+                            None,
+                        );
+                        candidates.append(&mut found);
+                    }
+                    Err(error) => {
+                        let (state, message) = classify_search_error(&error);
+                        update_backend_summary(
+                            &mut backend_summaries,
+                            &backend_id,
+                            state,
+                            0,
+                            Some(message.clone()),
+                        );
+                        if state == SearchBackendState::SearchFailed {
+                            issues.push(BackendIssue {
+                                backend_id,
+                                backend_name,
+                                message,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -165,7 +193,120 @@ pub fn gather_with_policy(
         complete: issues.is_empty(),
         candidates,
         issues,
+        backend_summaries,
     })
+}
+
+fn initial_backend_summaries(
+    context: &OperationContext<'_>,
+    policy: SearchPolicy,
+) -> Vec<SearchBackendSummary> {
+    context
+        .discovery
+        .entries
+        .iter()
+        .filter(|entry| detection_entry_matches_policy(entry, context.backend_filter, policy))
+        .map(|entry| {
+            let (state, message) = match entry.state {
+                DetectionState::Ready => (SearchBackendState::Available, None),
+                DetectionState::NotFound => (
+                    SearchBackendState::Unavailable,
+                    Some("executable not found".to_owned()),
+                ),
+                _ => (
+                    SearchBackendState::Unavailable,
+                    Some(
+                        entry
+                            .message
+                            .clone()
+                            .unwrap_or_else(|| entry.state.label().to_ascii_lowercase()),
+                    ),
+                ),
+            };
+            SearchBackendSummary {
+                backend_id: entry.backend_id.clone(),
+                backend_name: entry.backend_name.clone(),
+                state,
+                result_count: 0,
+                message,
+            }
+        })
+        .collect()
+}
+
+fn detection_entry_matches_policy(
+    entry: &BackendDetection,
+    backend_filter: Option<&str>,
+    policy: SearchPolicy,
+) -> bool {
+    if let Some(filter) = backend_filter {
+        let normalized = filter.to_ascii_lowercase();
+        let matches_filter = entry.backend_id.eq_ignore_ascii_case(&normalized)
+            || entry.backend_name.eq_ignore_ascii_case(filter)
+            || entry
+                .aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(filter));
+        if !matches_filter {
+            return false;
+        }
+    }
+    entry.capabilities.contains(&Capability::Search)
+        && policy
+            .required_capability
+            .map(|capability| entry.capabilities.contains(&capability))
+            .unwrap_or(true)
+        && policy.scope.matches_backend_domains(&entry.package_domains)
+}
+
+fn update_backend_summary(
+    summaries: &mut [SearchBackendSummary],
+    backend_id: &str,
+    state: SearchBackendState,
+    result_count: usize,
+    message: Option<String>,
+) {
+    if let Some(summary) = summaries
+        .iter_mut()
+        .find(|summary| summary.backend_id == backend_id)
+    {
+        summary.state = state;
+        summary.result_count = result_count;
+        summary.message = message;
+    }
+}
+
+fn classify_search_error(error: &AllpError) -> (SearchBackendState, String) {
+    match error {
+        AllpError::NoConfiguredRemotes { .. } => (
+            SearchBackendState::NoConfiguredRemotes,
+            "no configured remotes".to_owned(),
+        ),
+        _ => (
+            SearchBackendState::SearchFailed,
+            normalized_search_error(error),
+        ),
+    }
+}
+
+fn normalized_search_error(error: &AllpError) -> String {
+    match error {
+        AllpError::CommandFailed { code, stderr, .. } => {
+            let reason = stderr.trim();
+            if reason.is_empty() {
+                code.map(|code| format!("native command exited with {code}"))
+                    .unwrap_or_else(|| "native command failed".to_owned())
+            } else {
+                reason.lines().next().unwrap_or(reason).to_owned()
+            }
+        }
+        _ => error
+            .to_string()
+            .lines()
+            .next()
+            .unwrap_or("search failed")
+            .to_owned(),
+    }
 }
 
 pub fn classify_candidate(candidate: &PackageCandidate, query: &str) -> MatchKind {
@@ -443,6 +584,7 @@ mod tests {
                 },
                 "test",
             ),
+            metadata: Default::default(),
         }
     }
 

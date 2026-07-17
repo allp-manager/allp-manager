@@ -1,7 +1,7 @@
 use crate::{
     backends::{backend_matches_filter, Backend, CommandMap},
     discovery::path::find_executable,
-    domain::{BackendCategory, Capability},
+    domain::{BackendCategory, Capability, PackageDomain},
     execution::ProcessRunner,
 };
 use serde::Serialize;
@@ -36,8 +36,10 @@ pub struct BackendDetection {
     pub backend_id: String,
     pub backend_name: String,
     pub category: BackendCategory,
+    pub package_domains: Vec<PackageDomain>,
     pub state: DetectionState,
     pub capabilities: Vec<Capability>,
+    pub aliases: Vec<String>,
     pub commands: BTreeMap<String, String>,
     pub missing: Vec<String>,
     pub message: Option<String>,
@@ -165,8 +167,14 @@ impl BackendDiscovery {
                 backend_id: backend.id().to_owned(),
                 backend_name: backend.display_name().to_owned(),
                 category: backend.category(),
+                package_domains: backend.package_domains().to_vec(),
                 state,
                 capabilities: backend.capabilities().to_vec(),
+                aliases: backend
+                    .aliases()
+                    .iter()
+                    .map(|alias| (*alias).to_owned())
+                    .collect(),
                 commands: printable_commands,
                 missing,
                 message,
