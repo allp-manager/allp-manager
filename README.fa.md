@@ -398,3 +398,8 @@ Parser و flagهای مخصوص هر Backend باید داخل همان Backend 
 ## مجوز
 
 MIT. فایل [LICENSE](LICENSE) را ببینید.
+
+
+### 💚 Donate
+
+https://daramet.com/wrench

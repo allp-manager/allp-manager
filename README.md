@@ -401,3 +401,8 @@ Version `0.3.4` adds snapd REST resolution/install monitoring, explicit Flatpak 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+### 💚 Donate
+
+https://daramet.com/wrench
