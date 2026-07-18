@@ -8,6 +8,6 @@ pub mod util;
 
 pub use catalog::builtin_backends;
 pub use contract::{
-    backend_matches_filter, Backend, CommandMap, CommandRequirement, InstallPreflight,
-    InstallPreflightRecovery, InstallPreflightStatus,
+    backend_matches_filter, Backend, BackendOperationCapability, CommandMap, CommandRequirement,
+    InstallPreflight, InstallPreflightRecovery, InstallPreflightStatus,
 };

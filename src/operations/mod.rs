@@ -14,6 +14,7 @@ use crate::{
     domain::{AllpError, AllpResult, DeveloperTarget, RuntimePrivilegeContext, SearchScope},
     execution::ProcessRunner,
 };
+use std::path::Path;
 
 pub struct OperationContext<'a> {
     pub backends: &'a DetectedBackendSet,
@@ -26,6 +27,7 @@ pub struct OperationContext<'a> {
     pub yes: bool,
     pub allow_bootstrap: bool,
     pub verbose: u8,
+    pub state_dir: &'a Path,
     pub backend_filter: Option<&'a str>,
     pub search_scope: Option<SearchScope>,
     pub target: Option<DeveloperTarget>,

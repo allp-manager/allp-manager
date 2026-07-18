@@ -1,6 +1,6 @@
 # Backend Contract
 
-The backend contract is capability-based. A backend declares what it supports; operations filter by capabilities before calling backend methods.
+The backend contract is capability-based. A backend declares what it supports; operations filter by capabilities and operation semantics before calling backend methods.
 
 ## Required Identity
 
@@ -13,6 +13,16 @@ Every backend provides:
 - optional command requirements;
 - aliases for ecosystem selectors;
 - capability list.
+
+Maintenance capabilities are intentionally separate from operation semantics. A backend that exposes `Update`/`Upgrade` for UI or compatibility must also classify the native operation as one of:
+
+- `MetadataRefresh`
+- `InstalledPackageUpgrade`
+- `CombinedRefreshAndUpgrade`
+- `SelfUpdate`
+- `Unsupported`
+
+`allp update` only runs metadata-only refresh operations. Backends whose native tool combines refresh and installed-package upgrade report `Not applicable` during `allp update`; their mutation is handled by `allp upgrade`.
 
 Categories:
 

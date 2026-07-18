@@ -36,6 +36,6 @@ Stable rows have the strongest test and parser coverage. Experimental rows are i
 
 Unsupported rows are roadmap markers or explicitly deferred ecosystems, not hidden features.
 
-Snap `Install` uses snapd REST wide discovery plus separate exact name resolution when the local socket is reachable. A valid `404 snap-not-found` is authoritative and cannot trigger CLI fallback. CLI fallback is restricted to concrete socket/connect/endpoint/response failures. Classic confinement, canonical names, publisher verification, stable channels, architecture, and installed state are resolved before any install plan; REST changes are monitored to a terminal state.
+Snap `Install` uses snapd REST wide discovery plus separate exact name resolution when the local socket is reachable. A valid `404 snap-not-found` is authoritative stale metadata and cannot trigger CLI fallback. CLI fallback is restricted to concrete socket/connect/endpoint/response failures. Classic confinement, canonical names, publisher verification, stable channels, architecture, and installed state are resolved before any install plan; REST changes are monitored to a terminal state.
 
 Flatpak `Search` requires both an available executable and at least one configured remote. Installed-without-remotes is a distinct supported diagnostic state, not a no-match result. Flathub setup is an explicit separately confirmed bootstrap action.

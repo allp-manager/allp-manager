@@ -1,6 +1,6 @@
 use crate::{
     backends::{
-        contract::command_path,
+        contract::{command_path, BackendOperationCapability},
         util::{capture_checked, match_kind, parse_key_value_lines, split_tab_or_whitespace},
         Backend, CommandMap, CommandRequirement,
     },
@@ -23,9 +23,12 @@ pub const FLATHUB_URL: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlatpakBackendState {
-    NotInstalled,
-    InstalledWithoutRemotes,
-    InstalledWithRemotes(Vec<FlatpakRemote>),
+    Missing,
+    InstalledNoRemotes,
+    InstalledUserScopeReady,
+    InstalledSystemScopeReady,
+    InstalledBothScopesReady,
+    InstalledRefsWithoutUsableRemote,
     BackendError(String),
 }
 
@@ -36,6 +39,14 @@ pub struct FlatpakRemote {
     pub url: Option<String>,
     pub filter: Option<String>,
     pub options: Option<String>,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlatpakProbe {
+    pub state: FlatpakBackendState,
+    pub remotes: Vec<FlatpakRemote>,
+    pub reason: Option<String>,
 }
 
 impl BackendRequirements for FlatpakBackend {
@@ -75,9 +86,65 @@ impl Backend for FlatpakBackend {
         REQUIREMENTS
     }
 
+    fn operation_capability(&self, capability: Capability) -> BackendOperationCapability {
+        match capability {
+            Capability::Update => BackendOperationCapability::Unsupported,
+            Capability::Upgrade => BackendOperationCapability::CombinedRefreshAndUpgrade,
+            _ => BackendOperationCapability::Unsupported,
+        }
+    }
+
+    fn operation_not_applicable_message(
+        &self,
+        capability: Capability,
+        operation_capability: BackendOperationCapability,
+    ) -> String {
+        if capability == Capability::Update
+            && operation_capability == BackendOperationCapability::Unsupported
+        {
+            return "Not applicable during metadata-only update; installed Flatpak updates are handled by `allp upgrade`".to_owned();
+        }
+        let operation = capability.label().to_ascii_lowercase();
+        match operation_capability {
+            BackendOperationCapability::Unsupported => format!("{operation} is not supported"),
+            BackendOperationCapability::MetadataRefresh => {
+                format!("{operation} only refreshes metadata for this backend")
+            }
+            BackendOperationCapability::InstalledPackageUpgrade => {
+                format!("{operation} only upgrades installed packages for this backend")
+            }
+            BackendOperationCapability::CombinedRefreshAndUpgrade => {
+                format!("{operation} is handled as a combined refresh and upgrade operation")
+            }
+            BackendOperationCapability::SelfUpdate => {
+                format!("{operation} is handled by Allp self-update")
+            }
+        }
+    }
+
     fn probe(&self, commands: &CommandMap, runner: &dyn ProcessRunner) -> AllpResult<()> {
         let flatpak = command_path(self, commands, "flatpak")?;
-        capture_checked(self, runner, NativeCommand::new(flatpak).arg("--version")).map(|_| ())
+        capture_checked(self, runner, NativeCommand::new(flatpak).arg("--version"))?;
+        match detect_flatpak_probe(commands, runner).state {
+            FlatpakBackendState::Missing => Err(AllpError::BackendNotDetected(
+                "Flatpak executable was not found".to_owned(),
+            )),
+            FlatpakBackendState::InstalledNoRemotes
+            | FlatpakBackendState::InstalledRefsWithoutUsableRemote => {
+                Err(AllpError::NoConfiguredRemotes {
+                    backend: self.display_name().to_owned(),
+                })
+            }
+            FlatpakBackendState::BackendError(message) => Err(AllpError::CommandFailed {
+                backend: self.display_name().to_owned(),
+                command: "flatpak remotes --user/--system".to_owned(),
+                code: None,
+                stderr: message,
+            }),
+            FlatpakBackendState::InstalledUserScopeReady
+            | FlatpakBackendState::InstalledSystemScopeReady
+            | FlatpakBackendState::InstalledBothScopesReady => Ok(()),
+        }
     }
 
     fn search(
@@ -87,13 +154,13 @@ impl Backend for FlatpakBackend {
         query: &str,
     ) -> AllpResult<Vec<PackageCandidate>> {
         let flatpak = command_path(self, commands, "flatpak")?;
-        let remotes = capture_checked(
-            self,
-            runner,
-            NativeCommand::new(flatpak)
-                .args(["remotes", "--columns=name,title,url,filter,options"]),
-        )?;
-        if parse_flatpak_remotes(&remotes).is_empty() {
+        let probe = detect_flatpak_probe(commands, runner);
+        if !matches!(
+            probe.state,
+            FlatpakBackendState::InstalledUserScopeReady
+                | FlatpakBackendState::InstalledSystemScopeReady
+                | FlatpakBackendState::InstalledBothScopesReady
+        ) {
             return Err(AllpError::NoConfiguredRemotes {
                 backend: self.display_name().to_owned(),
             });
@@ -359,38 +426,93 @@ impl Backend for FlatpakBackend {
 
     fn plan_update(
         &self,
-        commands: &CommandMap,
+        _commands: &CommandMap,
         _runner: &dyn ProcessRunner,
         _selector: Option<&str>,
         _target: Option<DeveloperTarget>,
     ) -> AllpResult<MaintenancePlan> {
-        let flatpak = command_path(self, commands, "flatpak")?;
-        Ok(MaintenancePlan::from_plans(vec![flatpak_plan(
-            self,
-            flatpak,
-            OperationKind::Update,
-            "Update installed Flatpak applications and runtimes",
-            "User",
-            PrivilegeRequirement::OriginalUserRequired,
-        )]))
+        Ok(MaintenancePlan {
+            plans: Vec::new(),
+            records: vec![MaintenancePlan::record(
+                self.id(),
+                self.display_name(),
+                OperationStatus::NotApplicable,
+                "Not applicable during metadata-only update; installed Flatpak updates are handled by `allp upgrade`",
+            )],
+        })
     }
 
     fn plan_upgrade(
         &self,
         commands: &CommandMap,
-        _runner: &dyn ProcessRunner,
+        runner: &dyn ProcessRunner,
         _selector: Option<&str>,
         _target: Option<DeveloperTarget>,
     ) -> AllpResult<MaintenancePlan> {
         let flatpak = command_path(self, commands, "flatpak")?;
-        Ok(MaintenancePlan::from_plans(vec![flatpak_plan(
-            self,
-            flatpak,
-            OperationKind::Upgrade,
-            "Update installed Flatpak applications and runtimes",
-            "User",
-            PrivilegeRequirement::OriginalUserRequired,
-        )]))
+        let probe = detect_flatpak_probe(commands, runner);
+        let mut plans = Vec::new();
+        if matches!(
+            probe.state,
+            FlatpakBackendState::InstalledUserScopeReady
+                | FlatpakBackendState::InstalledBothScopesReady
+        ) {
+            plans.push(flatpak_plan(
+                self,
+                flatpak,
+                OperationKind::Upgrade,
+                "Update user Flatpak applications and runtimes",
+                FlatpakScope::User,
+            ));
+        }
+        if matches!(
+            probe.state,
+            FlatpakBackendState::InstalledSystemScopeReady
+                | FlatpakBackendState::InstalledBothScopesReady
+        ) {
+            plans.push(flatpak_plan(
+                self,
+                flatpak,
+                OperationKind::Upgrade,
+                "Update system Flatpak applications and runtimes",
+                FlatpakScope::System,
+            ));
+        }
+        if plans.is_empty() {
+            let message = match probe.state {
+                FlatpakBackendState::InstalledRefsWithoutUsableRemote => {
+                    "installed Flatpak refs exist, but no user or system remote is configured"
+                }
+                FlatpakBackendState::InstalledNoRemotes | FlatpakBackendState::Missing => {
+                    "no user or system Flatpak remotes are configured"
+                }
+                FlatpakBackendState::BackendError(_) => {
+                    return Err(AllpError::CommandFailed {
+                        backend: self.display_name().to_owned(),
+                        command: "flatpak remotes --user/--system".to_owned(),
+                        code: None,
+                        stderr: probe
+                            .reason
+                            .unwrap_or_else(|| "Flatpak backend probe failed".to_owned()),
+                    });
+                }
+                FlatpakBackendState::InstalledUserScopeReady
+                | FlatpakBackendState::InstalledSystemScopeReady
+                | FlatpakBackendState::InstalledBothScopesReady => {
+                    "no Flatpak update scope selected"
+                }
+            };
+            return Ok(MaintenancePlan {
+                plans,
+                records: vec![MaintenancePlan::record(
+                    self.id(),
+                    self.display_name(),
+                    OperationStatus::NotApplicable,
+                    message,
+                )],
+            });
+        }
+        Ok(MaintenancePlan::from_plans(plans))
     }
 
     fn classify_execution_success(
@@ -419,8 +541,7 @@ fn flatpak_plan(
     program: &std::path::Path,
     operation: OperationKind,
     action: &str,
-    scope: &str,
-    privilege: PrivilegeRequirement,
+    scope: FlatpakScope,
 ) -> ExecutionPlan {
     ExecutionPlan {
         backend_id: backend.id().to_owned(),
@@ -429,12 +550,48 @@ fn flatpak_plan(
         action: action.to_owned(),
         package_id: None,
         source: Some("configured Flatpak remotes".to_owned()),
-        scope: Some(scope.to_owned()),
+        scope: Some(scope.label().to_owned()),
         details: Vec::new(),
-        command: NativeCommand::new(program).args(["update", "--user"]),
-        privilege,
-        requires_root: false,
+        command: NativeCommand::new(program).args(["update", scope.cli_arg()]),
+        privilege: scope.privilege(),
+        requires_root: scope.privilege() == PrivilegeRequirement::RootRequired,
         interactive: true,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlatpakScope {
+    User,
+    System,
+}
+
+impl FlatpakScope {
+    fn cli_arg(self) -> &'static str {
+        match self {
+            Self::User => "--user",
+            Self::System => "--system",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::User => "User",
+            Self::System => "System",
+        }
+    }
+
+    fn storage_label(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::System => "system",
+        }
+    }
+
+    fn privilege(self) -> PrivilegeRequirement {
+        match self {
+            Self::User => PrivilegeRequirement::OriginalUserRequired,
+            Self::System => PrivilegeRequirement::RootRequired,
+        }
     }
 }
 
@@ -463,27 +620,97 @@ pub fn detect_flatpak_state(
     commands: &CommandMap,
     runner: &dyn ProcessRunner,
 ) -> FlatpakBackendState {
+    detect_flatpak_probe(commands, runner).state
+}
+
+pub fn detect_flatpak_probe(commands: &CommandMap, runner: &dyn ProcessRunner) -> FlatpakProbe {
     let Some(flatpak) = commands.get("flatpak") else {
-        return FlatpakBackendState::NotInstalled;
+        return FlatpakProbe {
+            state: FlatpakBackendState::Missing,
+            remotes: Vec::new(),
+            reason: Some("executable not found".to_owned()),
+        };
     };
-    let command =
-        NativeCommand::new(flatpak).args(["remotes", "--columns=name,title,url,filter,options"]);
-    match runner.capture(&command) {
-        Ok(output) if output.success => {
-            let remotes = parse_flatpak_remotes(&output.stdout);
-            if remotes.is_empty() {
-                FlatpakBackendState::InstalledWithoutRemotes
+
+    let user = capture_flatpak_remotes(flatpak, runner, FlatpakScope::User);
+    let system = capture_flatpak_remotes(flatpak, runner, FlatpakScope::System);
+    let mut remotes = Vec::new();
+    if let Ok(user_remotes) = &user {
+        remotes.extend(user_remotes.clone());
+    }
+    if let Ok(system_remotes) = &system {
+        remotes.extend(system_remotes.clone());
+    }
+    let user_ready = user.as_ref().is_ok_and(|remotes| !remotes.is_empty());
+    let system_ready = system.as_ref().is_ok_and(|remotes| !remotes.is_empty());
+
+    let state = match (user_ready, system_ready) {
+        (true, true) => FlatpakBackendState::InstalledBothScopesReady,
+        (true, false) => FlatpakBackendState::InstalledUserScopeReady,
+        (false, true) => FlatpakBackendState::InstalledSystemScopeReady,
+        (false, false) => {
+            if let Err(reason) = user.as_ref().and(system.as_ref()).map(|_| ()) {
+                return FlatpakProbe {
+                    state: FlatpakBackendState::BackendError(reason.clone()),
+                    remotes,
+                    reason: Some(reason.clone()),
+                };
+            }
+            if installed_refs_exist_without_usable_remote(flatpak, runner) {
+                FlatpakBackendState::InstalledRefsWithoutUsableRemote
             } else {
-                FlatpakBackendState::InstalledWithRemotes(remotes)
+                FlatpakBackendState::InstalledNoRemotes
             }
         }
-        Ok(output) => FlatpakBackendState::BackendError(if output.stderr.trim().is_empty() {
+    };
+
+    FlatpakProbe {
+        state,
+        remotes,
+        reason: None,
+    }
+}
+
+fn capture_flatpak_remotes(
+    flatpak: &std::path::Path,
+    runner: &dyn ProcessRunner,
+    scope: FlatpakScope,
+) -> Result<Vec<FlatpakRemote>, String> {
+    let command = NativeCommand::new(flatpak).args([
+        "remotes",
+        scope.cli_arg(),
+        "--columns=name,title,url,filter,options",
+    ]);
+    match runner.capture(&command) {
+        Ok(output) if output.success => Ok(parse_flatpak_remotes_for_scope(&output.stdout, scope)),
+        Ok(output) => Err(if output.stderr.trim().is_empty() {
             output.stdout.trim().to_owned()
         } else {
             output.stderr.trim().to_owned()
         }),
-        Err(error) => FlatpakBackendState::BackendError(error.to_string()),
+        Err(error) => Err(error.to_string()),
     }
+}
+
+fn installed_refs_exist_without_usable_remote(
+    flatpak: &std::path::Path,
+    runner: &dyn ProcessRunner,
+) -> bool {
+    let command =
+        NativeCommand::new(flatpak).args(["list", "--columns=application,origin,installation"]);
+    runner
+        .capture(&command)
+        .ok()
+        .filter(|output| output.success)
+        .map(|output| {
+            output.stdout.lines().any(|line| {
+                let columns = split_tab_or_whitespace(line);
+                columns.first().is_some_and(|value| {
+                    !value.is_empty() && !value.eq_ignore_ascii_case("Application")
+                })
+            })
+        })
+        .unwrap_or(false)
 }
 
 pub fn plan_add_flathub(commands: &CommandMap) -> AllpResult<ExecutionPlan> {
@@ -519,23 +746,37 @@ pub fn flathub_is_configured(
     commands: &CommandMap,
     runner: &dyn ProcessRunner,
 ) -> AllpResult<bool> {
-    match detect_flatpak_state(commands, runner) {
-        FlatpakBackendState::InstalledWithRemotes(remotes) => Ok(remotes
+    let probe = detect_flatpak_probe(commands, runner);
+    match probe.state {
+        FlatpakBackendState::InstalledUserScopeReady
+        | FlatpakBackendState::InstalledSystemScopeReady
+        | FlatpakBackendState::InstalledBothScopesReady => Ok(probe
+            .remotes
             .iter()
             .any(|remote| remote.name.eq_ignore_ascii_case(FLATHUB_NAME))),
-        FlatpakBackendState::InstalledWithoutRemotes | FlatpakBackendState::NotInstalled => {
-            Ok(false)
-        }
+        FlatpakBackendState::InstalledNoRemotes
+        | FlatpakBackendState::InstalledRefsWithoutUsableRemote
+        | FlatpakBackendState::Missing => Ok(false),
         FlatpakBackendState::BackendError(message) => Err(AllpError::CommandFailed {
             backend: "Flatpak".to_owned(),
-            command: "flatpak remotes --columns=name,title,url,filter,options".to_owned(),
+            command: "flatpak remotes --user/--system --columns=name,title,url,filter,options"
+                .to_owned(),
             code: None,
             stderr: message,
         }),
     }
 }
 
+#[cfg(test)]
 fn parse_flatpak_remotes(output: &str) -> Vec<FlatpakRemote> {
+    parse_flatpak_remotes_with_scope(output, None)
+}
+
+fn parse_flatpak_remotes_for_scope(output: &str, scope: FlatpakScope) -> Vec<FlatpakRemote> {
+    parse_flatpak_remotes_with_scope(output, Some(scope.storage_label()))
+}
+
+fn parse_flatpak_remotes_with_scope(output: &str, scope: Option<&str>) -> Vec<FlatpakRemote> {
     output
         .lines()
         .filter_map(|line| {
@@ -552,6 +793,7 @@ fn parse_flatpak_remotes(output: &str) -> Vec<FlatpakRemote> {
                 url: columns.get(2).cloned().filter(|value| !value.is_empty()),
                 filter: columns.get(3).cloned().filter(|value| !value.is_empty()),
                 options: columns.get(4).cloned().filter(|value| !value.is_empty()),
+                scope: scope.map(str::to_owned),
             })
         })
         .collect()

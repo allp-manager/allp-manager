@@ -94,7 +94,7 @@ Snap install planning is metadata-gated:
 7. classic confinement adds REST `"classic": true`, or CLI fallback `--classic`;
 8. stale or unavailable results fail before sudo, final confirmation, or any install child process starts.
 
-A recognized snapd `404 snap-not-found` is authoritative and cannot trigger `snap info`. CLI fallback is limited to explicit REST transport/compatibility failures and records the reason.
+A recognized snapd `404 snap-not-found` is authoritative stale metadata and cannot trigger `snap info`. CLI fallback is limited to explicit REST transport/compatibility failures and records the reason.
 
 If a Snap has no stable channel, or multiple stable tracks without a safe default, Allp refuses to silently choose candidate, beta, edge, or an arbitrary track.
 

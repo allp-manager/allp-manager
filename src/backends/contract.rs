@@ -62,6 +62,15 @@ pub struct CommandRequirement {
     pub alternatives: &'static [&'static str],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendOperationCapability {
+    MetadataRefresh,
+    InstalledPackageUpgrade,
+    CombinedRefreshAndUpgrade,
+    SelfUpdate,
+    Unsupported,
+}
+
 pub trait Backend: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
@@ -84,6 +93,45 @@ pub trait Backend: Send + Sync {
 
     fn has_capability(&self, capability: Capability) -> bool {
         self.capabilities().contains(&capability)
+    }
+
+    fn operation_capability(&self, capability: Capability) -> BackendOperationCapability {
+        match capability {
+            Capability::Update if self.has_capability(Capability::Update) => {
+                BackendOperationCapability::MetadataRefresh
+            }
+            Capability::Upgrade if self.has_capability(Capability::Upgrade) => {
+                BackendOperationCapability::InstalledPackageUpgrade
+            }
+            _ => BackendOperationCapability::Unsupported,
+        }
+    }
+
+    fn operation_not_applicable_message(
+        &self,
+        capability: Capability,
+        operation_capability: BackendOperationCapability,
+    ) -> String {
+        let operation = capability.label().to_ascii_lowercase();
+        match operation_capability {
+            BackendOperationCapability::Unsupported => format!("{operation} is not supported"),
+            BackendOperationCapability::MetadataRefresh => {
+                format!("{operation} only refreshes metadata for this backend")
+            }
+            BackendOperationCapability::InstalledPackageUpgrade => {
+                format!("{operation} only upgrades installed packages for this backend")
+            }
+            BackendOperationCapability::CombinedRefreshAndUpgrade => {
+                format!("{operation} is handled as a combined refresh and upgrade operation")
+            }
+            BackendOperationCapability::SelfUpdate => {
+                format!("{operation} is handled by Allp self-update")
+            }
+        }
+    }
+
+    fn requires_metadata_refresh_before_upgrade(&self) -> bool {
+        false
     }
 
     fn probe(&self, _commands: &CommandMap, _runner: &dyn ProcessRunner) -> AllpResult<()> {

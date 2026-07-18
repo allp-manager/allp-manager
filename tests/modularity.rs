@@ -113,6 +113,7 @@ fn generic_search_accepts_a_new_backend_without_operation_changes() {
         entries: Vec::new(),
     };
     let privilege_context = RuntimePrivilegeContext::NormalUser;
+    let state_dir = std::env::temp_dir();
     let context = OperationContext {
         backends: &backends,
         discovery: &discovery,
@@ -124,6 +125,7 @@ fn generic_search_accepts_a_new_backend_without_operation_changes() {
         yes: false,
         allow_bootstrap: false,
         verbose: 0,
+        state_dir: &state_dir,
         backend_filter: None,
         search_scope: None,
         target: None,

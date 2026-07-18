@@ -1,6 +1,6 @@
 use crate::{
     backends::{
-        contract::{command_path, InstallPreflight},
+        contract::{command_path, BackendOperationCapability, InstallPreflight},
         util::{capture_checked, match_kind, parse_key_value_lines},
         Backend, CommandMap, CommandRequirement,
     },
@@ -57,6 +57,18 @@ impl Backend for AptBackend {
     }
     fn command_requirements(&self) -> &'static [CommandRequirement] {
         REQUIREMENTS
+    }
+
+    fn operation_capability(&self, capability: Capability) -> BackendOperationCapability {
+        match capability {
+            Capability::Update => BackendOperationCapability::MetadataRefresh,
+            Capability::Upgrade => BackendOperationCapability::InstalledPackageUpgrade,
+            _ => BackendOperationCapability::Unsupported,
+        }
+    }
+
+    fn requires_metadata_refresh_before_upgrade(&self) -> bool {
+        true
     }
 
     fn search(

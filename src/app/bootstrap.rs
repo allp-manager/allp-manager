@@ -174,6 +174,7 @@ impl App {
             yes,
             allow_bootstrap,
             verbose,
+            state_dir: &platform.state_dir,
             backend_filter: backend_filter.as_deref(),
             search_scope,
             target,
@@ -442,7 +443,10 @@ impl App {
         }) else {
             return Ok(PrerequisiteOutcome::NotNeeded);
         };
-        if entry.state == DetectionState::Ready {
+        if matches!(
+            entry.state,
+            DetectionState::Ready | DetectionState::FoundButUnconfigured
+        ) {
             return Ok(PrerequisiteOutcome::NotNeeded);
         }
         let Some(requirement) = bootstrap_requirement_for_backend(&entry.backend_id) else {
@@ -505,7 +509,10 @@ impl App {
                         .aliases
                         .iter()
                         .any(|alias| alias.eq_ignore_ascii_case(filter)))
-                    && entry.state == DetectionState::Ready
+                    && matches!(
+                        entry.state,
+                        DetectionState::Ready | DetectionState::FoundButUnconfigured
+                    )
             });
         if !verified {
             return Err(AllpError::BackendNotDetected(format!(

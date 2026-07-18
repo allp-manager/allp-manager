@@ -11,18 +11,6 @@ use allp::{
 };
 use std::{collections::BTreeSet, path::PathBuf};
 
-struct NoopRunner;
-
-impl ProcessRunner for NoopRunner {
-    fn capture(&self, _command: &NativeCommand) -> AllpResult<CommandOutput> {
-        unreachable!("plan construction should not capture output")
-    }
-
-    fn execute(&self, _plan: &ExecutionPlan) -> AllpResult<ProcessStatus> {
-        unreachable!("plan construction should not execute")
-    }
-}
-
 #[test]
 fn builtin_backend_ids_are_unique() {
     let backends = builtin_backends();
@@ -48,16 +36,16 @@ fn builtin_backend_ids_are_unique() {
 }
 
 #[test]
-fn flatpak_user_update_deescalates_to_original_sudo_user() {
+fn flatpak_user_upgrade_deescalates_to_original_sudo_user() {
     let backend = FlatpakBackend;
     let mut commands = CommandMap::new();
     commands.insert("flatpak".to_owned(), PathBuf::from("/usr/bin/flatpak"));
 
     let plans = backend
-        .plan_update(&commands, &NoopRunner, None, None)
-        .expect("Flatpak update plan should be constructed")
+        .plan_upgrade(&commands, &FlatpakProbeRunner, None, None)
+        .expect("Flatpak upgrade plan should be constructed")
         .plans;
-    let plan = plans.first().expect("Flatpak should have an update plan");
+    let plan = plans.first().expect("Flatpak should have an upgrade plan");
     let context = RuntimePrivilegeContext::SudoRootWithOriginalUser(OriginalUser {
         name: "alice".to_owned(),
         uid: Some(1000),
@@ -70,6 +58,40 @@ fn flatpak_user_update_deescalates_to_original_sudo_user() {
         render_execution_plan_with_context(plan, &context),
         "sudo -u alice -- /usr/bin/flatpak update --user"
     );
+}
+
+struct FlatpakProbeRunner;
+
+impl ProcessRunner for FlatpakProbeRunner {
+    fn capture(&self, command: &NativeCommand) -> AllpResult<CommandOutput> {
+        let args = command
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>();
+        if args.iter().any(|arg| arg.as_ref() == "--user") {
+            return Ok(CommandOutput {
+                success: true,
+                code: Some(0),
+                signal: None,
+                duration: std::time::Duration::ZERO,
+                stdout: "Name\tTitle\tURL\tFilter\tOptions\nflathub\tFlathub\thttps://flathub.org/repo/\t\t\n".to_owned(),
+                stderr: String::new(),
+            });
+        }
+        Ok(CommandOutput {
+            success: true,
+            code: Some(0),
+            signal: None,
+            duration: std::time::Duration::ZERO,
+            stdout: "Name\tTitle\tURL\tFilter\tOptions\n".to_owned(),
+            stderr: String::new(),
+        })
+    }
+
+    fn execute(&self, _plan: &ExecutionPlan) -> AllpResult<ProcessStatus> {
+        unreachable!("plan construction should not execute")
+    }
 }
 
 #[test]

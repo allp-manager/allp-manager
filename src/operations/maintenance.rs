@@ -1,13 +1,23 @@
 use crate::{
+    backends::BackendOperationCapability,
     cli::{confirm_execution, ConfirmationRequest},
     domain::{
         AllpResult, BackendOperationRecord, Capability, ExecutionPlan, MultiOperationReport,
-        OperationStatus,
+        OperationKind, OperationStatus,
     },
     execution::render_execution_plan_with_context,
     operations::OperationContext,
+    state,
 };
-use std::time::Instant;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+const METADATA_REFRESH_FRESH_FOR: Duration = Duration::from_secs(6 * 60 * 60);
+const METADATA_REFRESH_STATE_FILE: &str = "backend-metadata-refresh.json";
 
 pub fn run(
     context: &OperationContext<'_>,
@@ -18,16 +28,52 @@ pub fn run(
     let mut plans = Vec::new();
 
     for runtime in context.eligible_backends()? {
-        if !runtime.backend.has_capability(capability) {
+        let operation_capability = runtime.backend.operation_capability(capability);
+        if should_skip_operation(capability, operation_capability) {
             records.push(BackendOperationRecord {
                 backend_id: runtime.backend.id().to_owned(),
                 backend_name: runtime.backend.display_name().to_owned(),
                 action: None,
                 command: None,
                 status: OperationStatus::NotApplicable,
-                message: Some(format!("{operation_name} is not supported")),
+                message: Some(
+                    runtime
+                        .backend
+                        .operation_not_applicable_message(capability, operation_capability),
+                ),
             });
             continue;
+        }
+
+        if capability == Capability::Upgrade
+            && operation_capability == BackendOperationCapability::InstalledPackageUpgrade
+            && runtime.backend.requires_metadata_refresh_before_upgrade()
+            && metadata_refresh_is_stale(context.state_dir, runtime.backend.id())
+        {
+            match runtime.backend.plan_update(
+                &runtime.commands,
+                context.runner,
+                context.backend_filter,
+                context.target,
+            ) {
+                Ok(mut refresh_plans) => {
+                    plans.append(&mut refresh_plans.plans);
+                    records.append(&mut refresh_plans.records);
+                }
+                Err(error) => {
+                    records.push(BackendOperationRecord {
+                        backend_id: runtime.backend.id().to_owned(),
+                        backend_name: runtime.backend.display_name().to_owned(),
+                        action: None,
+                        command: None,
+                        status: OperationStatus::Failed,
+                        message: Some(format!(
+                            "could not plan required metadata refresh before upgrade: {error}"
+                        )),
+                    });
+                    continue;
+                }
+            }
         }
 
         let backend_plans = match capability {
@@ -210,6 +256,7 @@ pub fn run(
                         started.elapsed(),
                     );
                 }
+                persist_metadata_refresh_success(context, &plan);
                 records.append(&mut parsed);
             }
             Ok(status) => {
@@ -313,6 +360,76 @@ fn title_case(value: &str) -> String {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
     }
+}
+
+fn should_skip_operation(
+    requested: Capability,
+    operation_capability: BackendOperationCapability,
+) -> bool {
+    match (requested, operation_capability) {
+        (_, BackendOperationCapability::Unsupported | BackendOperationCapability::SelfUpdate) => {
+            true
+        }
+        (Capability::Update, BackendOperationCapability::MetadataRefresh) => false,
+        (Capability::Update, _) => true,
+        (Capability::Upgrade, BackendOperationCapability::InstalledPackageUpgrade)
+        | (Capability::Upgrade, BackendOperationCapability::CombinedRefreshAndUpgrade) => false,
+        (Capability::Upgrade, _) => true,
+        _ => true,
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct MetadataRefreshState {
+    refreshed_at_unix_seconds: BTreeMap<String, u64>,
+}
+
+fn metadata_refresh_is_stale(state_dir: &Path, backend_id: &str) -> bool {
+    let path = state_dir.join(METADATA_REFRESH_STATE_FILE);
+    let Ok(Some(state)) = state::read_json::<MetadataRefreshState>(&path) else {
+        return true;
+    };
+    let Some(timestamp) = state.refreshed_at_unix_seconds.get(backend_id) else {
+        return true;
+    };
+    let now = unix_timestamp();
+    now.saturating_sub(*timestamp) >= METADATA_REFRESH_FRESH_FOR.as_secs()
+}
+
+fn persist_metadata_refresh_success(context: &OperationContext<'_>, plan: &ExecutionPlan) {
+    if plan.operation != OperationKind::Update {
+        return;
+    }
+    let Ok(runtime) = context.backend(&plan.backend_id) else {
+        return;
+    };
+    if runtime.backend.operation_capability(Capability::Update)
+        != BackendOperationCapability::MetadataRefresh
+    {
+        return;
+    }
+
+    let path = context.state_dir.join(METADATA_REFRESH_STATE_FILE);
+    let mut persisted = state::read_json::<MetadataRefreshState>(&path)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    persisted
+        .refreshed_at_unix_seconds
+        .insert(plan.backend_id.clone(), unix_timestamp());
+    if let Err(error) = state::write_json_atomically(&path, &persisted) {
+        context.renderer.warn(&format!(
+            "Could not persist {} metadata refresh timestamp: {error}",
+            plan.backend_name
+        ));
+    }
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 fn record_from_plan(

@@ -5,8 +5,8 @@ use crate::execution::render_native_command;
 use crate::{
     backends::{
         contract::{
-            command_path, InstallPreflight, InstallPreflightRecovery, InstallPreflightStatus,
-            InstallPreflightWarning,
+            command_path, BackendOperationCapability, InstallPreflight, InstallPreflightRecovery,
+            InstallPreflightStatus, InstallPreflightWarning,
         },
         util::{capture_checked, match_kind},
         Backend, CommandMap, CommandRequirement,
@@ -48,6 +48,35 @@ enum SnapAvailability {
     BackendError,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CapabilityStatus {
+    Operational,
+    Degraded(String),
+    Unavailable(String),
+}
+
+impl CapabilityStatus {
+    fn is_usable(&self) -> bool {
+        matches!(self, Self::Operational | Self::Degraded(_))
+    }
+
+    fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Operational => None,
+            Self::Degraded(reason) | Self::Unavailable(reason) => Some(reason),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SnapCapabilities {
+    daemon: CapabilityStatus,
+    discovery: CapabilityStatus,
+    metadata_resolution: CapabilityStatus,
+    new_installation: CapabilityStatus,
+    installed_refresh: CapabilityStatus,
+}
+
 impl SnapAvailability {
     fn as_str(self) -> &'static str {
         match self {
@@ -64,6 +93,7 @@ impl SnapAvailability {
 const SNAP_AVAILABILITY_KEY: &str = "snap.availability";
 const SNAP_DISCOVERY_QUERY_KEY: &str = "snap.discovery.query";
 const SNAP_DISCOVERY_VERSION_KEY: &str = "snap.discovery.version";
+const SNAP_DISCOVERY_STATUS_KEY: &str = "snap.discovery.status";
 const SNAP_DISCOVERY_PUBLISHER_KEY: &str = "snap.discovery.publisher";
 const SNAP_DISCOVERY_PUBLISHER_VERIFICATION_KEY: &str = "snap.discovery.publisher_verification";
 const SNAP_DISCOVERY_SUMMARY_KEY: &str = "snap.discovery.summary";
@@ -108,29 +138,64 @@ impl Backend for SnapBackend {
         OPTIONAL_REQUIREMENTS
     }
 
-    fn probe(&self, commands: &CommandMap, runner: &dyn ProcessRunner) -> AllpResult<()> {
-        let socket = snapd_socket_path();
-        let rest = SnapdClient::new(&socket);
-        match rest.get("/v2/system-info") {
-            Ok(_) | Err(SnapdRestError::Daemon { .. }) => Ok(()),
-            Err(rest_error) if rest_error.allows_cli_fallback() => {
-                let snap = command_path(self, commands, "snap").map_err(|_| {
-                    AllpError::BackendNotDetected(format!(
-                        "Snap unavailable: {}; snap CLI fallback was not found",
-                        rest_error.fallback_reason()
-                    ))
-                })?;
-                capture_checked(
-                    self,
-                    runner,
-                    NativeCommand::new(snap)
-                        .arg("version")
-                        .timeout(Duration::from_secs(2)),
-                )
-                .map(|_| ())
-            }
-            Err(error) => Err(snapd_error(self, "probe", error)),
+    fn operation_capability(&self, capability: Capability) -> BackendOperationCapability {
+        match capability {
+            Capability::Update => BackendOperationCapability::Unsupported,
+            Capability::Upgrade => BackendOperationCapability::CombinedRefreshAndUpgrade,
+            _ => BackendOperationCapability::Unsupported,
         }
+    }
+
+    fn operation_not_applicable_message(
+        &self,
+        capability: Capability,
+        operation_capability: BackendOperationCapability,
+    ) -> String {
+        if capability == Capability::Update
+            && operation_capability == BackendOperationCapability::Unsupported
+        {
+            return "Not applicable during metadata-only update; installed snap refresh is handled by `allp upgrade`".to_owned();
+        }
+        let operation = capability.label().to_ascii_lowercase();
+        match operation_capability {
+            BackendOperationCapability::Unsupported => format!("{operation} is not supported"),
+            BackendOperationCapability::MetadataRefresh => {
+                format!("{operation} only refreshes metadata for this backend")
+            }
+            BackendOperationCapability::InstalledPackageUpgrade => {
+                format!("{operation} only upgrades installed packages for this backend")
+            }
+            BackendOperationCapability::CombinedRefreshAndUpgrade => {
+                format!("{operation} is handled as a combined refresh and upgrade operation")
+            }
+            BackendOperationCapability::SelfUpdate => {
+                format!("{operation} is handled by Allp self-update")
+            }
+        }
+    }
+
+    fn probe(&self, commands: &CommandMap, runner: &dyn ProcessRunner) -> AllpResult<()> {
+        let capabilities = inspect_snap_capabilities(self, commands, runner);
+        if capabilities.daemon.is_usable()
+            || capabilities.discovery.is_usable()
+            || capabilities.metadata_resolution.is_usable()
+            || capabilities.new_installation.is_usable()
+            || capabilities.installed_refresh.is_usable()
+        {
+            return Ok(());
+        }
+
+        let reason = capabilities
+            .daemon
+            .reason()
+            .or_else(|| capabilities.discovery.reason())
+            .or_else(|| capabilities.metadata_resolution.reason())
+            .or_else(|| capabilities.new_installation.reason())
+            .or_else(|| capabilities.installed_refresh.reason())
+            .unwrap_or("Snap daemon and CLI are unavailable");
+        Err(AllpError::BackendNotDetected(format!(
+            "Snap unavailable: {reason}"
+        )))
     }
 
     fn search(
@@ -429,24 +494,20 @@ impl Backend for SnapBackend {
 
     fn plan_update(
         &self,
-        commands: &CommandMap,
+        _commands: &CommandMap,
         _runner: &dyn ProcessRunner,
         _selector: Option<&str>,
         _target: Option<DeveloperTarget>,
     ) -> AllpResult<MaintenancePlan> {
-        let snap = command_path(self, commands, "snap")?;
-        Ok(MaintenancePlan::from_plans(vec![snap_plan(
-            self,
-            snap,
-            PlanSpec {
-                operation: OperationKind::Update,
-                action: "Refresh installed snaps",
-                package_id: None,
-                source: Some("Snap Store".to_owned()),
-                scope: Some("system".to_owned()),
-                args: vec!["refresh".into()],
-            },
-        )]))
+        Ok(MaintenancePlan {
+            plans: Vec::new(),
+            records: vec![MaintenancePlan::record(
+                self.id(),
+                self.display_name(),
+                OperationStatus::NotApplicable,
+                "Not applicable during metadata-only update; installed snap refresh is handled by `allp upgrade`",
+            )],
+        })
     }
 
     fn plan_upgrade(
@@ -456,7 +517,17 @@ impl Backend for SnapBackend {
         _selector: Option<&str>,
         _target: Option<DeveloperTarget>,
     ) -> AllpResult<MaintenancePlan> {
-        let snap = command_path(self, commands, "snap")?;
+        let Some(snap) = commands.get("snap").map(PathBuf::as_path) else {
+            return Ok(MaintenancePlan {
+                plans: Vec::new(),
+                records: vec![MaintenancePlan::record(
+                    self.id(),
+                    self.display_name(),
+                    OperationStatus::Unavailable,
+                    "snap CLI is unavailable; installed snap refresh cannot be run",
+                )],
+            });
+        };
         Ok(MaintenancePlan::from_plans(vec![snap_plan(
             self,
             snap,
@@ -528,6 +599,87 @@ impl Backend for SnapBackend {
                 }]
             },
         )
+    }
+}
+
+fn inspect_snap_capabilities(
+    backend: &SnapBackend,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+) -> SnapCapabilities {
+    let socket = snapd_socket_path();
+    let rest = SnapdClient::new(&socket);
+    let daemon = match rest.get("/v2/system-info") {
+        Ok(_) | Err(SnapdRestError::Daemon { .. }) => CapabilityStatus::Operational,
+        Err(error) => CapabilityStatus::Unavailable(error.to_string()),
+    };
+
+    let cli_status = match commands.get("snap") {
+        Some(snap) => match capture_checked(
+            backend,
+            runner,
+            NativeCommand::new(snap)
+                .arg("version")
+                .timeout(Duration::from_secs(2)),
+        ) {
+            Ok(_) => CapabilityStatus::Operational,
+            Err(error) => CapabilityStatus::Unavailable(error.to_string()),
+        },
+        None => CapabilityStatus::Unavailable("snap CLI was not found".to_owned()),
+    };
+
+    let rest_usable = matches!(daemon, CapabilityStatus::Operational);
+    let cli_usable = cli_status.is_usable();
+    let discovery = if rest_usable || cli_usable {
+        if rest_usable {
+            CapabilityStatus::Operational
+        } else {
+            CapabilityStatus::Degraded("using snap CLI fallback for discovery".to_owned())
+        }
+    } else {
+        CapabilityStatus::Unavailable(
+            daemon
+                .reason()
+                .unwrap_or("Snap discovery transport is unavailable")
+                .to_owned(),
+        )
+    };
+    let metadata_resolution = if rest_usable || cli_usable {
+        if rest_usable {
+            CapabilityStatus::Operational
+        } else {
+            CapabilityStatus::Degraded("using snap CLI fallback for metadata resolution".to_owned())
+        }
+    } else {
+        CapabilityStatus::Unavailable(
+            daemon
+                .reason()
+                .unwrap_or("Snap metadata resolution transport is unavailable")
+                .to_owned(),
+        )
+    };
+    let new_installation = if rest_usable || cli_usable {
+        if rest_usable {
+            CapabilityStatus::Operational
+        } else {
+            CapabilityStatus::Degraded("using snap CLI fallback for new installation".to_owned())
+        }
+    } else {
+        CapabilityStatus::Unavailable(
+            daemon
+                .reason()
+                .unwrap_or("Snap installation transport is unavailable")
+                .to_owned(),
+        )
+    };
+    let installed_refresh = cli_status;
+
+    SnapCapabilities {
+        daemon,
+        discovery,
+        metadata_resolution,
+        new_installation,
+        installed_refresh,
     }
 }
 
@@ -783,6 +935,7 @@ struct SnapChange {
 struct SnapCandidate {
     canonical_name: String,
     discovery_version: Option<String>,
+    discovery_status: Option<String>,
     discovery_publisher: Option<SnapPublisher>,
     discovery_summary: Option<String>,
     discovery_notes: Vec<String>,
@@ -814,6 +967,9 @@ impl SnapCandidate {
         }
         if let Some(version) = &self.discovery_version {
             metadata.insert(SNAP_DISCOVERY_VERSION_KEY.to_owned(), version.clone());
+        }
+        if let Some(status) = &self.discovery_status {
+            metadata.insert(SNAP_DISCOVERY_STATUS_KEY.to_owned(), status.clone());
         }
         if let Some(summary) = &self.discovery_summary {
             metadata.insert(SNAP_DISCOVERY_SUMMARY_KEY.to_owned(), summary.clone());
@@ -931,7 +1087,7 @@ impl SnapService for SnapCliFallbackService<'_> {
             let native_error = snap_error_text(&output);
             let availability =
                 if classify_snap_error(&native_error) == Some(SnapErrorKind::PackageNotFound) {
-                    SnapAvailability::Unavailable
+                    SnapAvailability::Stale
                 } else {
                     SnapAvailability::BackendError
                 };
@@ -1010,12 +1166,12 @@ impl SnapdRestService<'_> {
                 raw_body: _,
             }) if kind.as_deref() == Some("snap-not-found") => {
                 return Ok(SnapResolution {
-                    availability: SnapAvailability::Unavailable,
+                    availability: SnapAvailability::Stale,
                     display_command,
                     output: None,
                     info: None,
                     native_error: Some(format!(
-                        "{message} (kind: snap-not-found, value: {package_id})"
+                        "Snap Store discovery listed this snap, but exact snapd lookup returned {message} (kind: snap-not-found, value: {package_id})"
                     )),
                     transport: SnapTransport::Rest,
                     fallback_reason: None,
@@ -1384,6 +1540,10 @@ fn parse_snapd_candidate(
             .get("version")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        discovery_status: result
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         discovery_publisher: parse_snapd_publisher(result.get("publisher")),
         discovery_summary: result
             .get("summary")
@@ -1409,7 +1569,12 @@ fn parse_snapd_info(
         .filter(|name| !name.trim().is_empty())
         .unwrap_or(fallback_name)
         .to_owned();
-    let channels = parse_snapd_channels(result.get("channels"));
+    let mut channels = parse_snapd_channels(result.get("channels"));
+    if channels.is_empty() {
+        if let Some(channel) = parse_snapd_top_level_channel(result) {
+            channels.push(channel);
+        }
+    }
     let confinement = result
         .get("confinement")
         .and_then(Value::as_str)
@@ -1507,6 +1672,39 @@ fn parse_snapd_channels(value: Option<&Value>) -> Vec<SnapChannel> {
             available: !details.is_null(),
         })
         .collect()
+}
+
+fn parse_snapd_top_level_channel(result: &Value) -> Option<SnapChannel> {
+    let channel = result.get("channel").and_then(Value::as_str)?.trim();
+    if channel.is_empty() {
+        return None;
+    }
+    let name = normalize_snapd_channel_name(channel);
+    Some(SnapChannel {
+        name: name.clone(),
+        risk: SnapChannelRisk::parse(&name),
+        version: result
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        confinement: result
+            .get("confinement")
+            .and_then(Value::as_str)
+            .map(SnapConfinement::parse)
+            .unwrap_or(SnapConfinement::Unknown),
+        available: result
+            .get("status")
+            .and_then(Value::as_str)
+            .map_or(true, |status| status.eq_ignore_ascii_case("available")),
+    })
+}
+
+fn normalize_snapd_channel_name(channel: &str) -> String {
+    if channel.contains('/') {
+        channel.to_owned()
+    } else {
+        format!("latest/{channel}")
+    }
 }
 
 fn parse_snapd_architectures(value: Option<&Value>) -> Vec<String> {
@@ -1617,6 +1815,7 @@ fn parse_snap_find(output: &str) -> Vec<SnapCandidate> {
             Some(SnapCandidate {
                 canonical_name: columns[0].to_owned(),
                 discovery_version: columns.get(1).map(|value| (*value).to_owned()),
+                discovery_status: None,
                 discovery_publisher: columns.get(2).map(|value| normalize_snap_publisher(value)),
                 discovery_summary: (columns.len() > 4).then(|| columns[4..].join(" ")),
                 discovery_notes: notes,
@@ -2298,6 +2497,11 @@ fn snap_resolution_unavailable_error(
     if let Some(reason) = &resolution.fallback_reason {
         message.push_str(&format!("\nCLI fallback reason: {reason}"));
     }
+    if resolution.availability == SnapAvailability::Stale {
+        message.push_str(
+            "\n\nThis looks like a stale or search-only Snap Store result. Native `snap info` and `snap install` use exact name resolution too, so Allp stops before requesting sudo.",
+        );
+    }
 
     AllpError::CandidateUnavailable {
         backend: backend.display_name().to_owned(),
@@ -2472,7 +2676,7 @@ fn print_snapd_diagnostic_request(
             println!("{label} response:");
             println!("  {}", indent_block(&bounded_block(&raw_body)));
             if status_code == 404 && kind.as_deref() == Some("snap-not-found") {
-                SnapAvailability::Unavailable
+                SnapAvailability::Stale
             } else {
                 SnapAvailability::BackendError
             }
@@ -2515,7 +2719,7 @@ fn print_snap_cli_diagnostic_request(
             } else if classify_snap_error(&output_message(&output))
                 == Some(SnapErrorKind::PackageNotFound)
             {
-                SnapAvailability::Unavailable
+                SnapAvailability::Stale
             } else {
                 SnapAvailability::BackendError
             }
@@ -2568,6 +2772,13 @@ fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
     if lower.contains("channel") && (lower.contains("not found") || lower.contains("unavailable")) {
         return Some(SnapErrorKind::ChannelUnavailable);
     }
+    if lower.contains("snap-not-found")
+        || lower.contains("not found")
+        || lower.contains("no snap found")
+        || lower.contains("snap") && lower.contains("not installed") && lower.contains("find")
+    {
+        return Some(SnapErrorKind::PackageNotFound);
+    }
     if lower.contains("cannot communicate with server")
         || lower.contains("snapd")
         || lower.contains("daemon")
@@ -2576,12 +2787,6 @@ fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
     }
     if lower.contains("store") && (lower.contains("unavailable") || lower.contains("timeout")) {
         return Some(SnapErrorKind::StoreUnavailable);
-    }
-    if lower.contains("not found")
-        || lower.contains("no snap found")
-        || lower.contains("snap") && lower.contains("not installed") && lower.contains("find")
-    {
-        return Some(SnapErrorKind::PackageNotFound);
     }
     None
 }
@@ -2642,7 +2847,8 @@ mod tests {
         validate_snap_candidate, SnapBackend, SnapCandidate, SnapChange, SnapChangeId,
         SnapCliFallbackService, SnapConfinement, SnapErrorKind, SnapInstallRequest,
         SnapPublisherVerification, SnapService, SnapWideSearch, SNAP_AVAILABILITY_KEY,
-        SNAP_DISCOVERY_NOTES_KEY, SNAP_FALLBACK_REASON_KEY, SNAP_TRANSPORT_KEY,
+        SNAP_DISCOVERY_NOTES_KEY, SNAP_DISCOVERY_STATUS_KEY, SNAP_FALLBACK_REASON_KEY,
+        SNAP_TRANSPORT_KEY,
     };
     use crate::domain::{
         AllpError, AllpResult, BackendCategory, ExecutionPlan, MatchKind, NativeCommand,
@@ -2841,6 +3047,33 @@ mod tests {
     }
 
     #[test]
+    fn snapd_top_level_stable_channel_becomes_latest_stable() {
+        let result = serde_json::json!({
+            "name": "pycharm",
+            "title": "PyCharm",
+            "summary": "Python IDE",
+            "version": "2026.1.4",
+            "publisher": {
+                "display-name": "JetBrains",
+                "validation": "verified"
+            },
+            "status": "available",
+            "channel": "stable",
+            "confinement": "classic"
+        });
+
+        let info = parse_snapd_info(&result, "raw snapd response", "fallback")
+            .expect("top-level snapd discovery metadata should parse");
+        let channel = select_snap_install_channel(&SnapBackend, &candidate("pycharm"), &info)
+            .expect("stable top-level channel should select")
+            .expect("channel should exist");
+
+        assert_eq!(channel.name, "latest/stable");
+        assert_eq!(channel.version.as_deref(), Some("2026.1.4"));
+        assert_eq!(channel.confinement, SnapConfinement::Classic);
+    }
+
+    #[test]
     fn snapd_change_parsing_recognizes_terminal_success_and_failure() {
         let done = parse_snap_change(&serde_json::json!({"status":"Done","ready":true}));
         assert!(done.ready);
@@ -2920,8 +3153,8 @@ mod tests {
             .into_package_candidate(&backend, "pycharm");
         let resolution = service
             .resolve(&candidate)
-            .expect("authoritative REST 404 should be structured");
-        assert_eq!(resolution.availability, SnapAvailability::Unavailable);
+            .expect("REST 404 without available discovery status should be structured");
+        assert_eq!(resolution.availability, SnapAvailability::Stale);
         assert_eq!(resolution.rest_status, Some(404));
         assert!(resolution.fallback_reason.is_none());
 
@@ -2929,6 +3162,69 @@ mod tests {
         let requests = requests.lock().expect("requests lock");
         assert_eq!(requests[0], "GET /v2/find?q=pycharm&scope=wide HTTP/1.1");
         assert_eq!(requests[1], "GET /v2/find?name=pycharm HTTP/1.1");
+        fs::remove_file(socket).expect("fake socket should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapd_exact_not_found_is_stale_even_with_available_discovery_metadata() {
+        use super::{SnapAvailability, SnapdRestService};
+        use std::{
+            fs,
+            io::{Read, Write},
+            os::unix::net::UnixListener,
+            sync::{Arc, Mutex},
+            thread,
+        };
+
+        let socket = std::env::temp_dir().join(format!(
+            "allp-snap-service-recovery-{}-{:?}.sock",
+            std::process::id(),
+            thread::current().id()
+        ));
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).expect("fake snapd socket should bind");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_requests = Arc::clone(&requests);
+        let server = thread::spawn(move || {
+            let body = r#"{"type":"error","status-code":404,"status":"Not Found","result":{"message":"snap not found","kind":"snap-not-found","value":"pycharm"}}"#;
+            let (mut stream, _) = listener.accept().expect("client should connect");
+            let mut request = [0u8; 4096];
+            let count = stream.read(&mut request).expect("request should be read");
+            let request = String::from_utf8_lossy(&request[..count]);
+            server_requests
+                .lock()
+                .expect("requests lock")
+                .push(request.lines().next().unwrap_or_default().to_owned());
+            write!(
+                stream,
+                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("response should be written");
+        });
+
+        let backend = SnapBackend;
+        let service = SnapdRestService {
+            backend: &backend,
+            client: super::SnapdClient::with_timeout(&socket, std::time::Duration::from_secs(2)),
+        };
+        let mut selected = candidate("pycharm");
+        selected
+            .metadata
+            .insert(SNAP_DISCOVERY_STATUS_KEY.to_owned(), "available".to_owned());
+        let resolution = service
+            .resolve(&selected)
+            .expect("exact 404 should be reported as stale");
+
+        assert_eq!(resolution.availability, SnapAvailability::Stale);
+        assert_eq!(resolution.rest_status, Some(404));
+        assert!(resolution.info.is_none());
+
+        server.join().expect("fake snapd should stop");
+        let requests = requests.lock().expect("requests lock");
+        assert_eq!(requests[0], "GET /v2/find?name=pycharm HTTP/1.1");
+        assert_eq!(requests.len(), 1);
         fs::remove_file(socket).expect("fake socket should be removed");
     }
 

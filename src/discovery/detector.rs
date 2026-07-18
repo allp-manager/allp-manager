@@ -158,7 +158,12 @@ impl BackendDiscovery {
 
             if state == DetectionState::Ready {
                 if let Err(error) = backend.probe(&commands, runner) {
-                    state = DetectionState::FoundButUnavailable;
+                    state = if matches!(error, crate::domain::AllpError::NoConfiguredRemotes { .. })
+                    {
+                        DetectionState::FoundButUnconfigured
+                    } else {
+                        DetectionState::FoundButUnavailable
+                    };
                     message = Some(error.to_string());
                 }
             }
@@ -180,7 +185,10 @@ impl BackendDiscovery {
                 message,
             });
 
-            if state == DetectionState::Ready {
+            if matches!(
+                state,
+                DetectionState::Ready | DetectionState::FoundButUnconfigured
+            ) {
                 detected_entries.push(DetectedBackend {
                     backend: Arc::clone(backend),
                     commands,

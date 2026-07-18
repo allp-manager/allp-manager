@@ -617,7 +617,9 @@ if [ "$1" = "list" ]; then
 fi
 if [ "$1" = "remotes" ]; then
   printf '%s\n' 'Name	URL'
-  printf '%s\n' 'flathub	https://flathub.org/repo/'
+  if [ "$2" != "--system" ]; then
+    printf '%s\n' 'flathub	https://flathub.org/repo/'
+  fi
   exit 0
 fi
 if [ "$1" = "search" ]; then
@@ -668,7 +670,9 @@ fn install_fake_flatpak_search_failure(dir: &Path) {
         r#"#!/bin/sh
 if [ "$1" = "remotes" ]; then
   printf '%s\n' 'Name	URL'
-  printf '%s\n' 'flathub	https://flathub.org/repo/'
+  if [ "$2" != "--system" ]; then
+    printf '%s\n' 'flathub	https://flathub.org/repo/'
+  fi
   exit 0
 fi
 if [ "$1" = "search" ]; then
@@ -690,7 +694,9 @@ fn install_fake_flatpak_with_marker(dir: &Path, marker: &Path) {
 printf '%s\n' "$*" >> '{marker}'
 if [ "$1" = "remotes" ]; then
   printf '%s\n' 'Name	URL'
-  printf '%s\n' 'flathub	https://flathub.org/repo/'
+  if [ "$2" != "--system" ]; then
+    printf '%s\n' 'flathub	https://flathub.org/repo/'
+  fi
   exit 0
 fi
 if [ "$1" = "search" ]; then
@@ -1564,11 +1570,12 @@ fn snap_stale_search_result_is_blocked_before_install() {
     let err = stderr(&output);
     assert!(err.contains("Snap candidate unavailable"));
     assert!(err.contains("Search status: Found"));
-    assert!(err.contains("Install status: Unavailable"));
+    assert!(err.contains("Install status: Stale"));
     assert!(err.contains("Resolution command:"));
     assert!(err.contains("snap info stale-snap"));
     assert!(err.contains("Resolution exit code: 1"));
     assert!(err.contains("error: snap \"stale-snap\" not found"));
+    assert!(err.contains("stale or search-only Snap Store result"));
     assert!(!err.contains("invalid input"));
     assert!(!marker.exists(), "stale result must not execute install");
 }
@@ -2498,7 +2505,44 @@ fn apt_upgrade_parses_updated_and_phased_deferred_results() {
 }
 
 #[test]
-fn snap_and_flatpak_up_to_date_outputs_are_not_generic_completed() {
+fn snap_and_flatpak_update_do_not_run_combined_upgrade_operations() {
+    let snap_dir = temp_dir("snap-update-not-applicable");
+    let snap_marker = snap_dir.join("executed");
+    install_fake_snap(&snap_dir, &snap_marker, 0);
+
+    let snap = run_allp(
+        &snap_dir,
+        &["update", "--from", "snap", "--yes", "--no-color"],
+    );
+
+    assert!(snap.status.success(), "stderr: {}", stderr(&snap));
+    let snap_out = stdout(&snap);
+    assert!(snap_out.contains("Snap"));
+    assert!(snap_out.contains("Not applicable"));
+    assert!(snap_out.contains("installed snap refresh is handled by `allp upgrade`"));
+    assert!(
+        !snap_marker.exists(),
+        "metadata-only update must not run snap refresh"
+    );
+
+    let flatpak_dir = temp_dir("flatpak-update-not-applicable");
+    install_fake_flatpak(&flatpak_dir);
+
+    let flatpak = run_allp(
+        &flatpak_dir,
+        &["update", "--from", "flatpak", "--yes", "--no-color"],
+    );
+
+    assert!(flatpak.status.success(), "stderr: {}", stderr(&flatpak));
+    let flatpak_out = stdout(&flatpak);
+    assert!(flatpak_out.contains("Flatpak"));
+    assert!(flatpak_out.contains("Not applicable"));
+    assert!(flatpak_out.contains("installed Flatpak updates are handled by `allp upgrade`"));
+    assert!(!flatpak_out.contains("Nothing to do."));
+}
+
+#[test]
+fn snap_and_flatpak_upgrade_up_to_date_outputs_are_not_generic_completed() {
     let snap_dir = temp_dir("snap-up-to-date");
     let snap_marker = snap_dir.join("executed");
     let sudo_marker = snap_dir.join("sudo-called");
@@ -2507,7 +2551,7 @@ fn snap_and_flatpak_up_to_date_outputs_are_not_generic_completed() {
 
     let snap = run_allp(
         &snap_dir,
-        &["update", "--from", "snap", "--yes", "--no-color"],
+        &["upgrade", "--from", "snap", "--yes", "--no-color"],
     );
 
     assert!(snap.status.success(), "stderr: {}", stderr(&snap));
@@ -2522,7 +2566,7 @@ fn snap_and_flatpak_up_to_date_outputs_are_not_generic_completed() {
 
     let flatpak = run_allp(
         &flatpak_dir,
-        &["update", "--from", "flatpak", "--yes", "--no-color"],
+        &["upgrade", "--from", "flatpak", "--yes", "--no-color"],
     );
 
     assert!(flatpak.status.success(), "stderr: {}", stderr(&flatpak));
@@ -2687,7 +2731,7 @@ fn flatpak_telegram_result_is_included_in_combined_apps_search() {
     assert!(out.contains("Search Summary"));
     assert!(out.contains("Flatpak  1 result") || out.contains("Flatpak 1 result"));
     let commands = fs::read_to_string(marker).expect("flatpak commands should be recorded");
-    assert!(commands.contains("remotes --columns=name,title,url,filter,options"));
+    assert!(commands.contains("remotes --user --columns=name,title,url,filter,options"));
     assert!(commands
         .contains("search telegram --columns=application,name,description,version,branch,remotes"));
 }
@@ -2781,13 +2825,13 @@ fn update_json_contains_normalized_non_actionable_statuses() {
 }
 
 #[test]
-fn user_scoped_update_does_not_print_root_privilege_notice() {
+fn user_scoped_flatpak_upgrade_does_not_print_root_privilege_notice() {
     let dir = temp_dir("flatpak-update");
     install_fake_flatpak(&dir);
 
     let output = run_allp(
         &dir,
-        &["update", "--from", "flatpak", "--dry-run", "--no-color"],
+        &["upgrade", "--from", "flatpak", "--dry-run", "--no-color"],
     );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));

@@ -1,5 +1,5 @@
 use crate::{
-    backends::universal::flatpak::{detect_flatpak_state, FlatpakBackendState, FlatpakRemote},
+    backends::universal::flatpak::{detect_flatpak_probe, FlatpakBackendState, FlatpakRemote},
     capabilities::{CapabilityAvailability, CapabilityRegistry},
     discovery::{DetectedBackendSet, DiscoveryReport},
     execution::ProcessRunner,
@@ -76,30 +76,55 @@ impl DoctorReport {
         let compatible_release_target = platform.target_triple();
         let flatpak = detected
             .get("flatpak")
-            .map(
-                |runtime| match detect_flatpak_state(&runtime.commands, runner) {
-                    FlatpakBackendState::NotInstalled => FlatpakDiagnostic {
+            .map(|runtime| {
+                let probe = detect_flatpak_probe(&runtime.commands, runner);
+                let state = probe.state.clone();
+                match state {
+                    FlatpakBackendState::Missing => FlatpakDiagnostic {
                         status: "not_installed".to_owned(),
                         remotes: Vec::new(),
                         reason: Some("executable not found".to_owned()),
                     },
-                    FlatpakBackendState::InstalledWithoutRemotes => FlatpakDiagnostic {
-                        status: "installed_without_remotes".to_owned(),
-                        remotes: Vec::new(),
-                        reason: Some("no configured remotes".to_owned()),
+                    FlatpakBackendState::InstalledNoRemotes => FlatpakDiagnostic {
+                        status: "installed_no_remotes".to_owned(),
+                        remotes: probe.remotes,
+                        reason: Some("no configured user or system remotes".to_owned()),
                     },
-                    FlatpakBackendState::InstalledWithRemotes(remotes) => FlatpakDiagnostic {
-                        status: "installed_with_remotes".to_owned(),
-                        remotes,
-                        reason: None,
+                    FlatpakBackendState::InstalledRefsWithoutUsableRemote => FlatpakDiagnostic {
+                        status: "installed_refs_without_usable_remote".to_owned(),
+                        remotes: probe.remotes,
+                        reason: Some(
+                            "installed refs exist without a configured usable remote".to_owned(),
+                        ),
                     },
-                    FlatpakBackendState::BackendError(reason) => FlatpakDiagnostic {
+                    FlatpakBackendState::InstalledUserScopeReady
+                    | FlatpakBackendState::InstalledSystemScopeReady
+                    | FlatpakBackendState::InstalledBothScopesReady => {
+                        let status = match state {
+                            FlatpakBackendState::InstalledUserScopeReady => {
+                                "installed_user_scope_ready"
+                            }
+                            FlatpakBackendState::InstalledSystemScopeReady => {
+                                "installed_system_scope_ready"
+                            }
+                            FlatpakBackendState::InstalledBothScopesReady => {
+                                "installed_both_scopes_ready"
+                            }
+                            _ => unreachable!("matched ready flatpak state"),
+                        };
+                        FlatpakDiagnostic {
+                            status: status.to_owned(),
+                            remotes: probe.remotes,
+                            reason: None,
+                        }
+                    }
+                    FlatpakBackendState::BackendError(_) => FlatpakDiagnostic {
                         status: "backend_error".to_owned(),
-                        remotes: Vec::new(),
-                        reason: Some(reason),
+                        remotes: probe.remotes,
+                        reason: probe.reason,
                     },
-                },
-            )
+                }
+            })
             .unwrap_or(FlatpakDiagnostic {
                 status: "not_installed".to_owned(),
                 remotes: Vec::new(),
