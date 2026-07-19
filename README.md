@@ -366,7 +366,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [docs/BACKEND_CONTRACT.md](docs/BACKEND_
 cargo fmt --all
 cargo fmt --all -- --check
 cargo check --all-targets
-cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets
 bash scripts/check-architecture.sh
 cargo build --release
@@ -375,6 +374,7 @@ make quality
 
 Use fake executable fixtures for package-manager behavior. Do not run destructive package-manager operations in tests.
 
+cargo clippy --all-targets --all-features -- -D warnings
 ## Contributing
 
 Keep backend-specific parsing and flags inside backend modules. Add fixtures for parser changes. Preserve command syntax, JSON contracts, privilege behavior, dry-run semantics, and terminal UI expectations. See [CONTRIBUTING.md](CONTRIBUTING.md).
