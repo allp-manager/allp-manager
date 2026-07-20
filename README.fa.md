@@ -45,7 +45,7 @@ Allp Package Manager تازه ای نیست. هسته runtime آن cross-platfor
 ساخت از سورس:
 
 ```bash
-git clone https://github.com/Aliazadi-1776/allp.git
+git clone https://github.com/allp-manager/allp-manager.git
 cd allp
 cargo build --release
 ./target/release/allp --version
@@ -217,7 +217,7 @@ allp update --dry-run --json
 
 ## Update، Self-Update و Doctor
 
-`allp update` در حالت پیش فرض ابتدا repository قابل اعتماد `Aliazadi-1776/allp` را برای نسخه جدید بررسی می کند و بعد سراغ Backendها می رود. phaseها شامل self-update، refresh platform/capability، planning، confirmation، execution و summary هستند.
+`allp update` در حالت پیش فرض ابتدا repository قابل اعتماد `allp-manager/allp-manager` را برای نسخه جدید بررسی می کند و بعد سراغ Backendها می رود. phaseها شامل self-update، refresh platform/capability، planning، confirmation، execution و summary هستند.
 
 ```bash
 allp doctor

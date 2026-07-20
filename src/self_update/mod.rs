@@ -30,8 +30,8 @@ pub struct GitHubRepository {
 }
 
 pub const OFFICIAL_REPOSITORY: GitHubRepository = GitHubRepository {
-    owner: "Aliazadi-1776",
-    name: "allp",
+    owner: "allp-manager",
+    name: "allp-manager",
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

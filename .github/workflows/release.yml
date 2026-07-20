@@ -37,10 +37,6 @@ jobs:
           test -s "$title"
           test -s "$notes"
           test -s release/MINIMUM_UPDATER_VERSION.txt
-          if gh release view "$tag" >/dev/null 2>&1; then
-            printf 'Release %s already exists. Refusing to overwrite it.\n' "$tag" >&2
-            exit 1
-          fi
           printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$tag" >>"$GITHUB_OUTPUT"
           printf 'title=%s\n' "$title" >>"$GITHUB_OUTPUT"
@@ -156,16 +152,24 @@ jobs:
           python3 scripts/generate-release-manifest.py \
             --verify dist/allp-release-manifest.json \
             --dist dist
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ needs.validate.outputs.tag }}"
           title="$(cat '${{ needs.validate.outputs.title }}')"
           mapfile -t assets < <(find dist -maxdepth 1 -type f -printf '%p\n' | sort)
-          gh release create "$tag" "${assets[@]}" \
-            --verify-tag \
-            --title "$title" \
-            --notes-file "${{ needs.validate.outputs.notes }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" \
+              --verify-tag \
+              --title "$title" \
+              --notes-file "${{ needs.validate.outputs.notes }}"
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --verify-tag \
+              --title "$title" \
+              --notes-file "${{ needs.validate.outputs.notes }}"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}

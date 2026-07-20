@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn newer_stable_release_loads_its_exact_manifest() {
-        let release = br#"[{"tag_name":"v0.3.4","draft":false,"prerelease":false,"published_at":"2026-07-17T00:00:00Z","assets":[{"name":"allp-release-manifest.json","browser_download_url":"https://github.com/Aliazadi-1776/allp/releases/download/v0.3.4/allp-release-manifest.json"}]}]"#;
+        let release = br#"[{"tag_name":"v0.3.4","draft":false,"prerelease":false,"published_at":"2026-07-17T00:00:00Z","assets":[{"name":"allp-release-manifest.json","browser_download_url":"https://github.com/allp-manager/allp-manager/releases/download/v0.3.4/allp-release-manifest.json"}]}]"#;
         let manifest = br#"{"schema_version":1,"version":"0.3.4","tag":"v0.3.4","channel":"stable","published_at":"2026-07-17T00:00:00Z","minimum_updater_version":"0.3.3","assets":[{"target":"x86_64-unknown-linux-gnu","os":"linux","architecture":"x86_64","libc":"glibc","archive":"allp-v0.3.4-x86_64-unknown-linux-gnu.tar.gz","binary":"allp","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":42}]}"#;
         let http = MockHttp {
             responses: Mutex::new(vec![

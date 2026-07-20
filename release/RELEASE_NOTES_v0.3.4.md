@@ -19,7 +19,7 @@ Allp v0.3.4 establishes the cross-platform backend foundation, restores reliable
 
 ## Secure Self-Update
 
-- `allp self-update` and the self-update phase of `allp update` trust only `Aliazadi-1776/allp` release metadata.
+- `allp self-update` and the self-update phase of `allp update` trust only `allp-manager/allp-manager` release metadata.
 - Stable/prerelease channels, strict three-part SemVer, ETags, offline state, minimum-updater versions, and exact platform target selection are supported.
 - Downloads require HTTPS, an exact manifest entry, declared size, and SHA-256 verification before bounded archive extraction.
 - Archive traversal, links, and special entries are rejected. Staged binaries must report the expected version.
