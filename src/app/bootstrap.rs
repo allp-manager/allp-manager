@@ -215,7 +215,7 @@ impl App {
                             if args.self_only {
                                 return Ok(0);
                             }
-                            return reexecute_after_self_update();
+                            return reexecute_after_self_update(&platform.current_executable);
                         }
                         Ok(SelfUpdatePhase::Deferred) => return Ok(0),
                         Ok(SelfUpdatePhase::NoChange) => {}
@@ -640,9 +640,17 @@ fn persist_deferred_update_success(platform: &PlatformContext) -> AllpResult<()>
     state::write_json_atomically(&state_path, &persisted)
 }
 
-fn reexecute_after_self_update() -> AllpResult<u8> {
-    let executable = std::env::current_exe()?;
+fn reexecute_after_self_update(executable: &Path) -> AllpResult<u8> {
     let args = std::env::args_os().skip(1).collect::<Vec<OsString>>();
+    let mut command = build_reexecute_command(executable, args);
+    let status = command.status()?;
+    Ok(status
+        .code()
+        .and_then(|code| u8::try_from(code).ok())
+        .unwrap_or(1))
+}
+
+fn build_reexecute_command(executable: &Path, args: Vec<OsString>) -> Command {
     let mut command = Command::new(executable);
     command
         .args(args)
@@ -675,15 +683,32 @@ fn reexecute_after_self_update() -> AllpResult<u8> {
             command.env(key, value);
         }
     }
-    let status = command.status()?;
-    Ok(status
-        .code()
-        .and_then(|code| u8::try_from(code).ok())
-        .unwrap_or(1))
+    command
 }
 
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn reexecute_command_uses_the_install_path_passed_by_platform_detection() {
+        let executable = Path::new("/opt/allp/bin/allp");
+        let command = build_reexecute_command(executable, vec![OsString::from("update")]);
+
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![OsStr::new("update")]
+        );
+        assert!(command.get_envs().any(|(key, value)| {
+            key == OsStr::new(SELF_UPDATE_COMPLETED_ENV) && value == Some(OsStr::new("1"))
+        }));
     }
 }
