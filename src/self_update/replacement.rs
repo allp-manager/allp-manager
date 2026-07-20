@@ -13,10 +13,13 @@ use std::{
     fs,
     io::Write,
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
+    time::{Duration, Instant},
 };
 
 const MAX_ASSET_BYTES: u64 = 256 * 1024 * 1024;
+const TRANSIENT_FS_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+const TRANSIENT_FS_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone)]
 pub struct StagedRelease {
@@ -248,14 +251,12 @@ fn remove_or_move_failed_binary(destination: &Path, failed: &Path) -> std::io::R
 }
 
 fn remove_file_with_transient_retry(path: &Path) -> std::io::Result<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + TRANSIENT_FS_RETRY_TIMEOUT;
     loop {
         match fs::remove_file(path) {
             Ok(()) => return Ok(()),
-            Err(error)
-                if transient_filesystem_error(&error) && std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+            Err(error) if transient_filesystem_error(&error) && Instant::now() < deadline => {
+                std::thread::sleep(TRANSIENT_FS_RETRY_DELAY);
             }
             Err(error) => return Err(error),
         }
@@ -263,14 +264,12 @@ fn remove_file_with_transient_retry(path: &Path) -> std::io::Result<()> {
 }
 
 fn rename_with_transient_retry(from: &Path, to: &Path) -> std::io::Result<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + TRANSIENT_FS_RETRY_TIMEOUT;
     loop {
         match fs::rename(from, to) {
             Ok(()) => return Ok(()),
-            Err(error)
-                if transient_filesystem_error(&error) && std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+            Err(error) if transient_filesystem_error(&error) && Instant::now() < deadline => {
+                std::thread::sleep(TRANSIENT_FS_RETRY_DELAY);
             }
             Err(error) => return Err(error),
         }
@@ -511,7 +510,7 @@ fn find_staged_binary(root: &Path, binary_name: &str) -> AllpResult<PathBuf> {
 }
 
 fn verify_staged_binary(path: &Path, expected: Version) -> AllpResult<()> {
-    let output = Command::new(path).arg("--version").output()?;
+    let output = version_output_with_transient_retry(path)?;
     if !output.status.success() {
         return Err(AllpError::InvalidInput(format!(
             "staged binary failed --version with exit code {:?}",
@@ -531,6 +530,19 @@ fn verify_staged_binary(path: &Path, expected: Version) -> AllpResult<()> {
         )));
     }
     Ok(())
+}
+
+fn version_output_with_transient_retry(path: &Path) -> std::io::Result<Output> {
+    let deadline = Instant::now() + TRANSIENT_FS_RETRY_TIMEOUT;
+    loop {
+        match Command::new(path).arg("--version").output() {
+            Ok(output) => return Ok(output),
+            Err(error) if transient_filesystem_error(&error) && Instant::now() < deadline => {
+                std::thread::sleep(TRANSIENT_FS_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn create_staging_directory(root: &Path, version: Version) -> AllpResult<PathBuf> {
