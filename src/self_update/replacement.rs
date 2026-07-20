@@ -212,17 +212,18 @@ pub fn replace_binary_atomically(
 
     if let Err(error) = verify_staged_binary(destination, expected_version) {
         let failed = parent.join(format!(".{name}.failed-{}", std::process::id()));
-        let failed_removed = remove_or_move_failed_binary(destination, &failed);
+        let failed_cleanup = remove_or_move_failed_binary(destination, &failed);
         let rollback = rename_with_transient_retry(&backup, destination);
         let _ = fs::remove_file(&failed);
-        if let Err(failed_error) = failed_removed {
-            return Err(AllpError::Io(std::io::Error::other(format!(
-                "post-install verification failed ({error}); could not clear failed binary before rollback: {failed_error}"
-            ))));
-        }
         if let Err(rollback_error) = rollback {
+            let cleanup_context = failed_cleanup
+                .err()
+                .map(|cleanup_error| {
+                    format!("; failed binary cleanup also failed: {cleanup_error}")
+                })
+                .unwrap_or_default();
             return Err(AllpError::Io(std::io::Error::other(format!(
-                "post-install verification failed ({error}); rollback also failed: {rollback_error}"
+                "post-install verification failed ({error}); rollback also failed: {rollback_error}{cleanup_context}"
             ))));
         }
         return Err(AllpError::InvalidInput(format!(
@@ -234,7 +235,7 @@ pub fn replace_binary_atomically(
 }
 
 fn remove_or_move_failed_binary(destination: &Path, failed: &Path) -> std::io::Result<()> {
-    match fs::remove_file(destination) {
+    match remove_file_with_transient_retry(destination) {
         Ok(()) => Ok(()),
         Err(remove_error) => {
             rename_with_transient_retry(destination, failed).map_err(|rename_error| {
@@ -246,13 +247,13 @@ fn remove_or_move_failed_binary(destination: &Path, failed: &Path) -> std::io::R
     }
 }
 
-fn rename_with_transient_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+fn remove_file_with_transient_retry(path: &Path) -> std::io::Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
-        match fs::rename(from, to) {
+        match fs::remove_file(path) {
             Ok(()) => return Ok(()),
             Err(error)
-                if transient_rename_error(&error) && std::time::Instant::now() < deadline =>
+                if transient_filesystem_error(&error) && std::time::Instant::now() < deadline =>
             {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
@@ -261,7 +262,22 @@ fn rename_with_transient_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-fn transient_rename_error(error: &std::io::Error) -> bool {
+fn rename_with_transient_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if transient_filesystem_error(&error) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn transient_filesystem_error(error: &std::io::Error) -> bool {
     if matches!(
         error.kind(),
         std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
