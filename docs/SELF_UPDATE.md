@@ -1,6 +1,6 @@
 # Self-Update Architecture
 
-`allp self-update` and phase 1 of `allp update` use the trusted repository constant `Aliazadi-1776/allp`. User-controlled repository URLs are not accepted.
+`allp self-update` and phase 1 of `allp update` use the trusted repository constant `allp-manager/allp-manager`. User-controlled repository URLs are not accepted.
 
 `GitHubReleaseSource` retrieves release metadata over HTTPS with bounded redirects, time, and response size. Stable mode ignores drafts and prereleases; prerelease mode is explicit. Strict three-part semantic versions are compared numerically. Conditional ETags, selected channel, timestamps, and seen/attempted/successful versions are stored in the platform state directory without credentials.
 

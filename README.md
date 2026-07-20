@@ -47,7 +47,7 @@ JSON is available for read-only commands and dry-run maintenance/install plannin
 Build from source:
 
 ```bash
-git clone https://github.com/Aliazadi-1776/allp.git
+git clone https://github.com/allp-manager/allp-manager.git
 cd allp
 cargo build --release
 ./target/release/allp --version
@@ -221,7 +221,7 @@ Human logs are not mixed into JSON stdout.
 
 ## Update, Self-Update, And Doctor
 
-`allp update` checks the trusted repository `Aliazadi-1776/allp` before ordinary backend metadata updates unless disabled. Its phases cover self-update, platform/capability refresh, backend planning, confirmation, execution, and summary.
+`allp update` checks the trusted repository `allp-manager/allp-manager` before ordinary backend metadata updates unless disabled. Its phases cover self-update, platform/capability refresh, backend planning, confirmation, execution, and summary.
 
 ```bash
 allp doctor
