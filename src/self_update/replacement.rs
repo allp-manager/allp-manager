@@ -212,9 +212,14 @@ pub fn replace_binary_atomically(
 
     if let Err(error) = verify_staged_binary(destination, expected_version) {
         let failed = parent.join(format!(".{name}.failed-{}", std::process::id()));
-        let _ = rename_with_transient_retry(destination, &failed);
+        let failed_removed = remove_or_move_failed_binary(destination, &failed);
         let rollback = rename_with_transient_retry(&backup, destination);
         let _ = fs::remove_file(&failed);
+        if let Err(failed_error) = failed_removed {
+            return Err(AllpError::Io(std::io::Error::other(format!(
+                "post-install verification failed ({error}); could not clear failed binary before rollback: {failed_error}"
+            ))));
+        }
         if let Err(rollback_error) = rollback {
             return Err(AllpError::Io(std::io::Error::other(format!(
                 "post-install verification failed ({error}); rollback also failed: {rollback_error}"
@@ -226,6 +231,19 @@ pub fn replace_binary_atomically(
     }
     fs::remove_file(backup)?;
     Ok(())
+}
+
+fn remove_or_move_failed_binary(destination: &Path, failed: &Path) -> std::io::Result<()> {
+    match fs::remove_file(destination) {
+        Ok(()) => Ok(()),
+        Err(remove_error) => {
+            rename_with_transient_retry(destination, failed).map_err(|rename_error| {
+                std::io::Error::other(format!(
+                    "remove failed: {remove_error}; rename failed: {rename_error}"
+                ))
+            })
+        }
+    }
 }
 
 fn rename_with_transient_retry(from: &Path, to: &Path) -> std::io::Result<()> {
