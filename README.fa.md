@@ -6,7 +6,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، Flatpak، Snap، Homebrew/Linuxbrew، Python و Node را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه فعلی: **0.3.4**
+نسخه فعلی: **0.3.5**
 سطح بلوغ: **Public Alpha**
 
 ## چرا Allp وجود دارد
@@ -29,7 +29,7 @@ Allp Package Manager تازه ای نیست. هسته runtime آن cross-platfor
 | Source | وضعیت | Search | Install | Remove | Update | Upgrade | List | Info |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | APT | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
-| Pacman | Stable alpha | بله | بله | بله | خیر | بله | بله | بله |
+| Pacman | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | DNF / DNF5 | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | Flatpak | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | Snap | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
@@ -273,7 +273,7 @@ make install-check
 
 workflow انتشار صریح است. مرحله آماده سازی محلی چیزی push نمی کند، GitHub
 Release نمی سازد و assetی upload نمی کند. GitHub Release فقط وقتی ساخته می شود
-که tag نسخه ای مثل `v0.3.4` push شود.
+که tag نسخه ای مثل `v0.3.5` push شود.
 
 یک بار در هر clone:
 
@@ -286,28 +286,28 @@ make hooks-install
 ```bash
 make release-prepare BUMP=patch
 # یا:
-make release-prepare VERSION=0.3.4
+make release-prepare VERSION=0.3.5
 ```
 
 `release-prepare` نسخه package، فایل Cargo.lock از مسیر Cargo، CHANGELOG،
 اشاره های نسخه در READMEها، title قابل track مثل
-`release/RELEASE_TITLE_v0.3.4.txt`، و draft قابل track مثل
-`release/RELEASE_NOTES_v0.3.4.md` را به روز می کند و بعد `make quality` را
+`release/RELEASE_TITLE_v0.3.5.txt`، و draft قابل track مثل
+`release/RELEASE_NOTES_v0.3.5.md` را به روز می کند و بعد `make quality` را
 اجرا می کند. فقط اگر quality gate موفق باشد marker محلی و ignored نوشته می شود.
 
 فایل های آماده شده را مثل همیشه commit کنید، مثلا از VS Code Source Control:
 
 ```text
-release: Allp v0.3.4
+release: Allp v0.3.5
 ```
 
 فقط commitی که subject آن با `release:` شروع شود و با marker آماده شده همخوان
 باشد finalize می شود. hook بعد از commit این خروجی های محلی را می سازد:
 
-- tag محلی annotated با نام `v0.3.4`
-- `dist/allp-v0.3.4-source.tar.gz`
-- `dist/allp-v0.3.4-source.tar.gz.sha256`
-- `dist/RELEASE_NOTES_v0.3.4.md`
+- tag محلی annotated با نام `v0.3.5`
+- `dist/allp-v0.3.5-source.tar.gz`
+- `dist/allp-v0.3.5-source.tar.gz.sha256`
+- `dist/RELEASE_NOTES_v0.3.5.md`
 
 آرشیو سورس از همان tag commit شده با `git archive` ساخته می شود. commitهای
 معمولی مثل `fix: improve Snap parsing` نسخه را تغییر نمی دهند، tag نمی سازند،
@@ -378,13 +378,13 @@ Parser و flagهای مخصوص هر Backend باید داخل همان Backend 
 
 ## Roadmap
 
-کارهای نزدیک شامل validation روی distroهای واقعی، fixtureهای بیشتر، انتخاب گر تعاملی channel در Snap و تست عمیق تر signal/trusted-path است. اکوسیستم هایی مثل Cargo، Composer، Go، RubyGems، Maven/Gradle و GUI/TUI در نسخه 0.3.4 پیاده سازی نشده اند.
+کارهای نزدیک شامل validation روی distroهای واقعی، fixtureهای بیشتر، انتخاب گر تعاملی channel در Snap و تست عمیق تر signal/trusted-path است. اکوسیستم هایی مثل Cargo، Composer، Go، RubyGems، Maven/Gradle و GUI/TUI در نسخه 0.3.5 پیاده سازی نشده اند.
 
 [ROADMAP.md](ROADMAP.md) و [TODO.md](TODO.md) را ببینید.
 
 ## Changelog
 
-نسخه `0.3.4` قابلیت های snapd REST، مدیریت remoteهای Flatpak، providerهای prerequisite، alternative routing، self-update امن، doctor و assetهای target-specific را اضافه می کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
+نسخه `0.3.5` برای Pacman در `allp update` یک Plan صریح با دستور `pacman -Sy` و یادداشت policy درباره پرهیز از partial upgrade اضافه می کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 
 ## محدودیت های شناخته شده
 

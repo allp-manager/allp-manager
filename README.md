@@ -6,7 +6,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, Flatpak, Snap, Homebrew/Linuxbrew, Python installers, and Node installers, then shows the exact native command or local API request before anything mutates the system.
 
-Current version: **0.3.4**
+Current version: **0.3.5**
 Maturity: **public alpha**
 
 ## Why Allp Exists
@@ -31,7 +31,7 @@ The platform layer detects Linux distributions and package-manager families, mac
 | Source | Status | Search | Install | Remove | Update | Upgrade | List | Info |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | APT | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
-| Pacman | Stable alpha | yes | yes | yes | no | yes | yes | yes |
+| Pacman | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | DNF / DNF5 | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | Flatpak | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | Snap | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
@@ -276,7 +276,7 @@ operations, commit, push, tag, publish, or hide failures.
 
 The release workflow is explicit. Local preparation never pushes, publishes a
 GitHub Release, or uploads assets. A GitHub Release is created only after a
-semantic-version tag such as `v0.3.4` is pushed.
+semantic-version tag such as `v0.3.5` is pushed.
 
 Run once per clone:
 
@@ -289,28 +289,28 @@ Prepare the next version explicitly:
 ```bash
 make release-prepare BUMP=patch
 # or:
-make release-prepare VERSION=0.3.4
+make release-prepare VERSION=0.3.5
 ```
 
 `release-prepare` updates the package version, Cargo.lock through Cargo,
 CHANGELOG, README version references, a tracked release title such as
-`release/RELEASE_TITLE_v0.3.4.txt`, and a tracked draft such as
-`release/RELEASE_NOTES_v0.3.4.md`, then runs `make quality`. It writes an
+`release/RELEASE_TITLE_v0.3.5.txt`, and a tracked draft such as
+`release/RELEASE_NOTES_v0.3.5.md`, then runs `make quality`. It writes an
 ignored readiness marker only after that quality gate passes.
 
 Commit the prepared files normally, for example from VS Code Source Control:
 
 ```text
-release: Allp v0.3.4
+release: Allp v0.3.5
 ```
 
 Only a commit whose subject begins with `release:` and matches the prepared
 marker is finalized. The post-commit hook creates:
 
-- annotated local tag `v0.3.4`
-- `dist/allp-v0.3.4-source.tar.gz`
-- `dist/allp-v0.3.4-source.tar.gz.sha256`
-- `dist/RELEASE_NOTES_v0.3.4.md`
+- annotated local tag `v0.3.5`
+- `dist/allp-v0.3.5-source.tar.gz`
+- `dist/allp-v0.3.5-source.tar.gz.sha256`
+- `dist/RELEASE_NOTES_v0.3.5.md`
 
 The source archive is generated from the exact committed tag with `git archive`.
 Ordinary commits such as `fix: improve Snap parsing` do not change versions,
@@ -381,13 +381,13 @@ Keep backend-specific parsing and flags inside backend modules. Add fixtures for
 
 ## Roadmap
 
-Near-term work is broader real-distro validation, richer parser fixtures, an interactive Snap channel chooser, and deeper signal/trusted-path testing. Future ecosystems such as Cargo, Composer, Go, RubyGems, Maven/Gradle, and GUI/TUI modes are not implemented in 0.3.4.
+Near-term work is broader real-distro validation, richer parser fixtures, an interactive Snap channel chooser, and deeper signal/trusted-path testing. Future ecosystems such as Cargo, Composer, Go, RubyGems, Maven/Gradle, and GUI/TUI modes are not implemented in 0.3.5.
 
 See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-Version `0.3.4` adds snapd REST resolution/install monitoring, explicit Flatpak remote handling, prerequisite providers, alternative routing, secure self-update, diagnostics, and target-specific release assets. See [CHANGELOG.md](CHANGELOG.md).
+Version `0.3.5` adds Pacman `allp update` planning with an explicit `pacman -Sy` package-database synchronization command and partial-upgrade policy note. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Known Limitations
 

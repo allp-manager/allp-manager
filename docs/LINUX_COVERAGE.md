@@ -5,7 +5,7 @@ Allp supports package-manager families rather than distribution names.
 Stable alpha coverage:
 
 - APT for Debian, Ubuntu, Linux Mint, Pop!_OS, elementary OS, and compatible derivatives.
-- Pacman for Arch-family systems. `update` is unsupported to avoid unsafe partial refresh; `upgrade` uses full sync-and-upgrade semantics.
+- Pacman for Arch-family systems. `update` synchronizes package databases with `pacman -Sy`; `upgrade` uses full sync-and-upgrade semantics.
 - DNF/DNF5 for Fedora/RHEL-family systems.
 - Flatpak.
 - Snap, including a snapd usability probe.

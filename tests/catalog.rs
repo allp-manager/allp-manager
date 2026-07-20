@@ -1,11 +1,14 @@
 use allp::{
     backends::{
-        builtin_backends, system::apt::AptBackend, universal::flatpak::FlatpakBackend, Backend,
-        CommandMap,
+        builtin_backends,
+        system::{apt::AptBackend, pacman::PacmanBackend},
+        universal::flatpak::FlatpakBackend,
+        Backend, CommandMap,
     },
     domain::{
-        AllpResult, BackendCategory, ExecutionPlan, MatchKind, NativeCommand, OriginalUser,
-        PackageCandidate, PackageDomain, PrivilegeRequirement, RuntimePrivilegeContext,
+        AllpResult, BackendCategory, ExecutionPlan, MatchKind, NativeCommand, OperationKind,
+        OriginalUser, PackageCandidate, PackageDomain, PrivilegeRequirement,
+        RuntimePrivilegeContext,
     },
     execution::{render_execution_plan_with_context, CommandOutput, ProcessRunner, ProcessStatus},
 };
@@ -58,6 +61,31 @@ fn flatpak_user_upgrade_deescalates_to_original_sudo_user() {
         render_execution_plan_with_context(plan, &context),
         "sudo -u alice -- /usr/bin/flatpak update --user"
     );
+}
+
+#[test]
+fn pacman_update_refreshes_sync_databases_with_policy_detail() {
+    let backend = PacmanBackend;
+    let mut commands = CommandMap::new();
+    commands.insert("pacman".to_owned(), PathBuf::from("/usr/bin/pacman"));
+
+    let plans = backend
+        .plan_update(&commands, &FlatpakProbeRunner, None, None)
+        .expect("Pacman update plan should be constructed")
+        .plans;
+    let plan = plans.first().expect("Pacman should have an update plan");
+
+    assert_eq!(plan.operation, OperationKind::Update);
+    assert_eq!(plan.action, "Synchronize package databases");
+    assert_eq!(plan.source.as_deref(), Some("Pacman repositories"));
+    assert_eq!(
+        render_execution_plan_with_context(plan, &RuntimePrivilegeContext::NormalUser),
+        "sudo -- /usr/bin/pacman -Sy"
+    );
+    assert!(plan
+        .details
+        .iter()
+        .any(|(key, value)| key == "Policy" && value.contains("partial upgrades")));
 }
 
 struct FlatpakProbeRunner;

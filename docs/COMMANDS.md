@@ -135,7 +135,7 @@ Examples:
 - DNF refreshes metadata cache.
 - Snap refreshes installed snaps.
 - Flatpak updates installed apps/runtimes.
-- Pacman does not advertise APT-style `Update`.
+- Pacman synchronizes package databases with `pacman -Sy`; run a full upgrade before installing packages to avoid partial upgrades.
 - npm project update uses `npm update` after `npm outdated --json` inspection.
 - npm global update uses `npm update --global` after global outdated inspection.
 - pnpm project/workspace/global update uses native `pnpm update` forms.

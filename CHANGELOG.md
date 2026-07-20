@@ -4,6 +4,16 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-07-20
+
+### Release Title
+
+Allp v0.3.5 - Pacman Update Planning
+
+### Changed
+
+- Pacman now participates in `allp update` with an explicit `pacman -Sy` package-database synchronization plan and a partial-upgrade policy note.
+
 ## [0.3.4] - 2026-07-18
 
 ### Release Title

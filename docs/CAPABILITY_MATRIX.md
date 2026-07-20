@@ -12,7 +12,7 @@ Stable rows have the strongest test and parser coverage. Experimental rows are i
 | Backend | Detect | Search | Install | Remove | Update | Upgrade | List | Info |
 |---|---|---|---|---|---|---|---|---|
 | APT | Stable | Stable | Stable | Stable | Stable | Stable | Stable | Stable |
-| Pacman | Stable | Stable | Stable | Stable | Unsupported | Stable | Stable | Stable |
+| Pacman | Stable | Stable | Stable | Stable | Stable | Stable | Stable | Stable |
 | DNF / DNF5 | Stable | Stable | Stable | Stable | Stable | Stable | Stable | Stable |
 | Zypper | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |
 | APK | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |

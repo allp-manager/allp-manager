@@ -18,6 +18,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability::Search,
     Capability::Install,
     Capability::Remove,
+    Capability::Update,
     Capability::Upgrade,
     Capability::List,
     Capability::Info,
@@ -237,6 +238,33 @@ impl Backend for PacmanBackend {
                 args: ["-R", "--", package.package_id.as_str()],
             },
         ))
+    }
+
+    fn plan_update(
+        &self,
+        commands: &CommandMap,
+        _runner: &dyn ProcessRunner,
+        _selector: Option<&str>,
+        _target: Option<DeveloperTarget>,
+    ) -> AllpResult<MaintenancePlan> {
+        let pacman = command_path(self, commands, "pacman")?;
+        let mut plan = plan(
+            self,
+            pacman,
+            PlanSpec {
+                operation: OperationKind::Update,
+                action: "Synchronize package databases",
+                package_id: None,
+                source: Some("Pacman repositories".to_owned()),
+                scope: Some("system".to_owned()),
+                args: ["-Sy"],
+            },
+        );
+        plan.details.push((
+            "Policy".to_owned(),
+            "Pacman -Sy refreshes sync databases only; run a full upgrade before installing packages to avoid partial upgrades".to_owned(),
+        ));
+        Ok(MaintenancePlan::from_plans(vec![plan]))
     }
 
     fn plan_upgrade(
