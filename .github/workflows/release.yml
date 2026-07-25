@@ -173,3 +173,55 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+
+  aur-publish:
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist
+          merge-multiple: true
+      - name: Publish updates to AUR (allp-manager & allp-manager-bin)
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+
+          x86_hash="$(sha256sum dist/allp-v${version}-x86_64-unknown-linux-gnu.tar.gz | awk '{print $1}')"
+          arm_hash="$(sha256sum dist/allp-v${version}-aarch64-unknown-linux-gnu.tar.gz | awk '{print $1}')"
+
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 1. Update allp-manager (source release)
+          git clone aur@aur.archlinux.org:allp-manager.git aur-source
+          cd aur-source
+          sed -i "s/^pkgver=.*/pkgver=${version}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          git add PKGBUILD
+          git commit -m "Update to v${version}" || true
+          git push origin master || true
+          cd ..
+
+          # 2. Update allp-manager-bin (pre-compiled binary release)
+          git clone aur@aur.archlinux.org:allp-manager-bin.git aur-bin
+          cd aur-bin
+          sed -i "s/^pkgver=.*/pkgver=${version}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          sed -i "s/sha256sums_x86_64=.*/sha256sums_x86_64=('${x86_hash}')/" PKGBUILD
+          sed -i "s/sha256sums_aarch64=.*/sha256sums_aarch64=('${arm_hash}')/" PKGBUILD
+          git add PKGBUILD
+          git commit -m "Update to v${version}" || true
+          git push origin master || true
