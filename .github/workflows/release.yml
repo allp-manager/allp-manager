@@ -210,7 +210,9 @@ jobs:
           cd aur-source
           sed -i "s/^pkgver=.*/pkgver=${version}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          git add PKGBUILD
+          sed -i "s/\tpkgver = .*/\tpkgver = ${version}/" .SRCINFO
+          sed -i "s/\tpkgrel = .*/\tpkgrel = 1/" .SRCINFO
+          git add PKGBUILD .SRCINFO
           git commit -m "Update to v${version}" || true
           git push origin master || true
           cd ..
@@ -222,6 +224,11 @@ jobs:
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
           sed -i "s/sha256sums_x86_64=.*/sha256sums_x86_64=('${x86_hash}')/" PKGBUILD
           sed -i "s/sha256sums_aarch64=.*/sha256sums_aarch64=('${arm_hash}')/" PKGBUILD
-          git add PKGBUILD
+          sed -i "s/\tpkgver = .*/\tpkgver = ${version}/" .SRCINFO
+          sed -i "s/\tpkgrel = .*/\tpkgrel = 1/" .SRCINFO
+          sed -i "s/sha256sums_x86_64 = .*/sha256sums_x86_64 = ${x86_hash}/" .SRCINFO
+          sed -i "s/sha256sums_aarch64 = .*/sha256sums_aarch64 = ${arm_hash}/" .SRCINFO
+          sed -i "s/v[0-9]\+\.[0-9]\+\.[0-9]\+/v${version}/g" PKGBUILD .SRCINFO
+          git add PKGBUILD .SRCINFO
           git commit -m "Update to v${version}" || true
           git push origin master || true
