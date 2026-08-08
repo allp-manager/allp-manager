@@ -173,6 +173,10 @@ impl App {
             no_interactive,
             yes,
             allow_bootstrap,
+            allow_stale_metadata: matches!(
+                &command,
+                Commands::Upgrade(args) if args.allow_stale_metadata
+            ),
             verbose,
             state_dir: &platform.state_dir,
             backend_filter: backend_filter.as_deref(),

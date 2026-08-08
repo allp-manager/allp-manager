@@ -138,6 +138,10 @@ pub struct MaintenanceArgs {
     #[command(flatten)]
     pub mutation: MutationOptions,
 
+    /// Permit an upgrade to use existing package metadata when a required refresh fails.
+    #[arg(long)]
+    pub allow_stale_metadata: bool,
+
     #[command(flatten)]
     pub common: CommonOptions,
 }

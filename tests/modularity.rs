@@ -124,6 +124,7 @@ fn generic_search_accepts_a_new_backend_without_operation_changes() {
         no_interactive: true,
         yes: false,
         allow_bootstrap: false,
+        allow_stale_metadata: false,
         verbose: 0,
         state_dir: &state_dir,
         backend_filter: None,

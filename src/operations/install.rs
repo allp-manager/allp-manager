@@ -34,6 +34,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
             no_interactive: context.no_interactive,
             yes: context.yes,
             allow_bootstrap: context.allow_bootstrap,
+            allow_stale_metadata: context.allow_stale_metadata,
             verbose: context.verbose,
             state_dir: context.state_dir,
             backend_filter: active_backend_filter,

@@ -349,6 +349,31 @@ exit 0
     );
 }
 
+fn install_fake_apt_failed_refresh(dir: &Path, marker: &Path) {
+    install_fake_apt(dir, marker, 100, 0);
+    let marker = marker.display();
+    write_executable(
+        dir,
+        "apt-get",
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "-o" ]; then shift 2; fi
+if [ "$1" = "update" ]; then
+  printf '%s\n' apt-update >> '{marker}'
+  printf '%s\n' 'E: Failed to fetch https://downloads.example.invalid/repo  403 Forbidden' >&2
+  exit 100
+fi
+if [ "$1" = "upgrade" ]; then
+  printf '%s\n' "apt-upgrade $*" >> '{marker}'
+  printf '%s\n' '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.'
+  exit 0
+fi
+exit 0
+"#
+        ),
+    );
+}
+
 fn install_fake_snap(dir: &Path, marker: &Path, refresh_exit: i32) {
     let marker = marker.display();
     write_executable(
@@ -2502,6 +2527,48 @@ fn apt_upgrade_parses_updated_and_phased_deferred_results() {
     assert!(!out.contains("Failed"));
     let executed = fs::read_to_string(&marker).expect("fake apt upgrade should execute");
     assert!(executed.contains("apt-upgrade"));
+}
+
+#[test]
+fn apt_upgrade_is_deferred_when_required_metadata_refresh_fails() {
+    let dir = temp_dir("apt-refresh-dependency");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt_failed_refresh(&dir, &marker);
+
+    let output = run_allp(&dir, &["upgrade", "--from", "apt", "--yes", "--no-color"]);
+
+    assert_eq!(output.status.code(), Some(8));
+    assert!(stdout(&output).contains("Deferred"));
+    assert!(stdout(&output).contains("required metadata refresh failed"));
+    let executed = fs::read_to_string(marker).expect("refresh should execute");
+    assert!(executed.contains("apt-update"));
+    assert!(!executed.contains("apt-upgrade"));
+}
+
+#[test]
+fn apt_stale_metadata_override_runs_upgrade_with_native_yes_flag() {
+    let dir = temp_dir("apt-stale-override");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt_failed_refresh(&dir, &marker);
+
+    let output = run_allp(
+        &dir,
+        &[
+            "upgrade",
+            "--from",
+            "apt",
+            "--allow-stale-metadata",
+            "--yes",
+            "--no-color",
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(8));
+    let executed = fs::read_to_string(marker).expect("refresh and upgrade should execute");
+    assert!(executed.contains("apt-update"));
+    assert!(executed.contains("apt-upgrade upgrade -y"));
 }
 
 #[test]

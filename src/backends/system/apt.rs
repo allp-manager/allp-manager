@@ -71,6 +71,13 @@ impl Backend for AptBackend {
         true
     }
 
+    fn authorize_noninteractive(&self, plan: &mut ExecutionPlan) {
+        if plan.interactive && !plan.command.args.iter().any(|arg| arg == "-y") {
+            plan.command.args.push("-y".into());
+            plan.interactive = false;
+        }
+    }
+
     fn search(
         &self,
         commands: &CommandMap,
@@ -390,14 +397,21 @@ impl Backend for AptBackend {
                 message: Some(package_count_message(changed)),
             });
         }
-        if parsed.deferred_count() > 0 {
+        for (label, packages) in parsed.deferred.categories() {
+            if packages.is_empty() {
+                continue;
+            }
             records.push(BackendOperationRecord {
                 backend_id: plan.backend_id.clone(),
                 backend_name: plan.backend_name.clone(),
                 action: None,
                 command: None,
                 status: OperationStatus::Deferred,
-                message: Some(parsed.deferred_message()),
+                message: Some(format!(
+                    "{} {label}: {}",
+                    packages.len(),
+                    packages.join(", ")
+                )),
             });
         }
         if records.is_empty() && parsed.saw_summary {
@@ -545,24 +559,30 @@ fn parse_holder_process(stderr: &str) -> Option<String> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AptDeferredReason {
-    PhasedUpdate,
-    Deferred,
+enum AptDeferredSection {
+    Phased,
+    KeptBack,
+    Held,
 }
 
-impl AptDeferredReason {
-    fn label(self) -> &'static str {
-        match self {
-            Self::PhasedUpdate => "phased updates",
-            Self::Deferred => "deferred packages",
-        }
-    }
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AptDeferredPackages {
+    phased: Vec<String>,
+    kept_back: Vec<String>,
+    held: Vec<String>,
+    pinned: Vec<String>,
+    dependency_blocked: Vec<String>,
+}
 
-    fn detail(self) -> &'static str {
-        match self {
-            Self::PhasedUpdate => "deferred due to phasing",
-            Self::Deferred => "deferred by APT",
-        }
+impl AptDeferredPackages {
+    fn categories(&self) -> [(&'static str, &[String]); 5] {
+        [
+            ("phased updates", &self.phased),
+            ("kept back", &self.kept_back),
+            ("held", &self.held),
+            ("pinned", &self.pinned),
+            ("dependency-blocked", &self.dependency_blocked),
+        ]
     }
 }
 
@@ -572,41 +592,13 @@ struct AptUpgradeResult {
     newly_installed: usize,
     removed: usize,
     not_upgraded: usize,
-    deferred_packages: Vec<String>,
-    deferred_reason: Option<AptDeferredReason>,
+    deferred: AptDeferredPackages,
     saw_summary: bool,
 }
 
 impl AptUpgradeResult {
     fn changed_count(&self) -> usize {
         self.upgraded + self.newly_installed + self.removed
-    }
-
-    fn deferred_count(&self) -> usize {
-        if !self.deferred_packages.is_empty() {
-            self.deferred_packages.len()
-        } else if self.deferred_reason.is_some() {
-            self.not_upgraded
-        } else {
-            0
-        }
-    }
-
-    fn deferred_message(&self) -> String {
-        let count = self.deferred_count();
-        let label = self
-            .deferred_reason
-            .unwrap_or(AptDeferredReason::Deferred)
-            .label();
-        let mut message = format!("{count} {label}");
-        if let Some(reason) = self.deferred_reason {
-            message.push_str(&format!(" · {}", reason.detail()));
-        }
-        if !self.deferred_packages.is_empty() {
-            message.push_str(": ");
-            message.push_str(&self.deferred_packages.join(", "));
-        }
-        message
     }
 }
 
@@ -616,11 +608,10 @@ fn parse_apt_upgrade_result(output: &str) -> Option<AptUpgradeResult> {
         newly_installed: 0,
         removed: 0,
         not_upgraded: 0,
-        deferred_packages: Vec::new(),
-        deferred_reason: None,
+        deferred: AptDeferredPackages::default(),
         saw_summary: false,
     };
-    let mut collect_deferred = false;
+    let mut section = None;
 
     for raw_line in output.lines() {
         let line = raw_line.trim();
@@ -643,25 +634,35 @@ fn parse_apt_upgrade_result(output: &str) -> Option<AptUpgradeResult> {
         }
 
         if lower.contains("deferred due to phasing") {
-            result.deferred_reason = Some(AptDeferredReason::PhasedUpdate);
-            collect_deferred = true;
+            section = Some(AptDeferredSection::Phased);
             continue;
         }
-        if lower.contains("following upgrades have been deferred") {
-            result.deferred_reason = Some(AptDeferredReason::Deferred);
-            collect_deferred = true;
+        if lower.contains("following packages have been kept back") {
+            section = Some(AptDeferredSection::KeptBack);
+            continue;
+        }
+        if lower.contains("following packages have been held back") {
+            section = Some(AptDeferredSection::Held);
             continue;
         }
 
-        if collect_deferred {
+        if let Some(active_section) = section {
             if line.is_empty() {
-                collect_deferred = false;
+                section = None;
                 continue;
             }
-            if looks_like_package_name(line) {
-                result.deferred_packages.push(line.to_owned());
-            } else if !raw_line.starts_with(char::is_whitespace) {
-                collect_deferred = false;
+            if raw_line.starts_with(char::is_whitespace) {
+                let packages = line
+                    .split_whitespace()
+                    .filter(|token| looks_like_package_name(token))
+                    .map(str::to_owned);
+                match active_section {
+                    AptDeferredSection::Phased => result.deferred.phased.extend(packages),
+                    AptDeferredSection::KeptBack => result.deferred.kept_back.extend(packages),
+                    AptDeferredSection::Held => result.deferred.held.extend(packages),
+                }
+            } else {
+                section = None;
             }
         }
     }
@@ -696,7 +697,7 @@ fn package_count_message(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_apt_busy, parse_apt_upgrade_result, AptDeferredReason};
+    use super::{parse_apt_busy, parse_apt_upgrade_result};
 
     #[test]
     fn parses_apt_lock_holder_details() {
@@ -730,18 +731,34 @@ The following packages will be upgraded:
         let parsed = parse_apt_upgrade_result(output).expect("APT summary should parse");
 
         assert_eq!(parsed.changed_count(), 1);
-        assert_eq!(parsed.deferred_count(), 3);
+        assert_eq!(parsed.deferred.phased.len(), 3);
         assert_eq!(
-            parsed.deferred_reason,
-            Some(AptDeferredReason::PhasedUpdate)
-        );
-        assert_eq!(
-            parsed.deferred_packages,
+            parsed.deferred.phased,
             vec![
                 "python3-software-properties",
                 "software-properties-common",
                 "software-properties-gtk"
             ]
+        );
+    }
+
+    #[test]
+    fn preserves_multiline_phased_and_kept_back_packages() {
+        let output = r#"The following upgrades have been deferred due to phasing:
+  grub-common grub2-common libnautilus-extension4 nautilus
+  nautilus-data python3-software-properties
+  software-properties-common software-properties-gtk
+The following packages have been kept back:
+  ubuntu-restricted-addons
+0 upgraded, 0 newly installed, 0 to remove and 9 not upgraded.
+"#;
+
+        let parsed = parse_apt_upgrade_result(output).expect("APT summary should parse");
+        assert_eq!(parsed.deferred.phased.len(), 8);
+        assert_eq!(parsed.deferred.kept_back, vec!["ubuntu-restricted-addons"]);
+        assert_eq!(
+            parsed.deferred.phased.len() + parsed.deferred.kept_back.len(),
+            9
         );
     }
 }

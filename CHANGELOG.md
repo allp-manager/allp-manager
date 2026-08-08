@@ -4,6 +4,12 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- APT upgrades now depend on a successful required metadata refresh and are deferred after refresh failure unless `--allow-stale-metadata` is explicitly supplied.
+- APT phased, kept-back, and held package sections are parsed statefully, including multiple package names on one line, without conflating their categories.
+- Authorized APT maintenance plans include the native `-y` flag in both the displayed and executed command.
+
 ## [0.3.5] - 2026-07-20
 
 ### Release Title

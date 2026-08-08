@@ -134,6 +134,9 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    /// Apply a backend-native noninteractive flag after Allp authorization.
+    fn authorize_noninteractive(&self, _plan: &mut ExecutionPlan) {}
+
     fn probe(&self, _commands: &CommandMap, _runner: &dyn ProcessRunner) -> AllpResult<()> {
         Ok(())
     }

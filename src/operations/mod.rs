@@ -26,6 +26,7 @@ pub struct OperationContext<'a> {
     pub no_interactive: bool,
     pub yes: bool,
     pub allow_bootstrap: bool,
+    pub allow_stale_metadata: bool,
     pub verbose: u8,
     pub state_dir: &'a Path,
     pub backend_filter: Option<&'a str>,

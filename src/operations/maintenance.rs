@@ -11,7 +11,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -19,13 +19,20 @@ use std::{
 const METADATA_REFRESH_FRESH_FOR: Duration = Duration::from_secs(6 * 60 * 60);
 const METADATA_REFRESH_STATE_FILE: &str = "backend-metadata-refresh.json";
 
+#[derive(Debug)]
+struct PlannedOperation {
+    id: usize,
+    plan: ExecutionPlan,
+    depends_on: Vec<usize>,
+}
+
 pub fn run(
     context: &OperationContext<'_>,
     capability: Capability,
     operation_name: &str,
 ) -> AllpResult<MultiOperationReport> {
     let mut records = Vec::new();
-    let mut plans = Vec::new();
+    let mut operations = Vec::new();
 
     for runtime in context.eligible_backends()? {
         let operation_capability = runtime.backend.operation_capability(capability);
@@ -57,8 +64,27 @@ pub fn run(
                 context.target,
             ) {
                 Ok(mut refresh_plans) => {
-                    plans.append(&mut refresh_plans.plans);
+                    let dependency_ids =
+                        append_operations(&mut operations, refresh_plans.plans, &[]);
                     records.append(&mut refresh_plans.records);
+                    let backend_plans = runtime.backend.plan_upgrade(
+                        &runtime.commands,
+                        context.runner,
+                        context.backend_filter,
+                        context.target,
+                    );
+                    match backend_plans {
+                        Ok(mut backend_plans) => {
+                            append_operations(
+                                &mut operations,
+                                backend_plans.plans,
+                                &dependency_ids,
+                            );
+                            records.append(&mut backend_plans.records);
+                        }
+                        Err(error) => records.push(planning_failure(runtime, error)),
+                    }
+                    continue;
                 }
                 Err(error) => {
                     records.push(BackendOperationRecord {
@@ -94,7 +120,7 @@ pub fn run(
 
         match backend_plans {
             Ok(mut backend_plans) => {
-                plans.append(&mut backend_plans.plans);
+                append_operations(&mut operations, backend_plans.plans, &[]);
                 records.append(&mut backend_plans.records);
             }
             Err(error) => {
@@ -121,6 +147,19 @@ pub fn run(
         }
     }
 
+    if context.yes {
+        for operation in &mut operations {
+            if let Ok(runtime) = context.backend(&operation.plan.backend_id) {
+                runtime
+                    .backend
+                    .authorize_noninteractive(&mut operation.plan);
+            }
+        }
+    }
+    let plans = operations
+        .iter()
+        .map(|operation| operation.plan.clone())
+        .collect::<Vec<_>>();
     let mut selected = plans
         .iter()
         .map(|plan| plan.backend_name.clone())
@@ -150,9 +189,9 @@ pub fn run(
     }
 
     if context.dry_run {
-        for plan in plans {
+        for operation in operations {
             records.push(record_from_plan(
-                plan,
+                operation.plan,
                 OperationStatus::DryRun,
                 None,
                 context.privilege_context,
@@ -217,9 +256,26 @@ pub fn run(
     }
 
     update_phase(context, operation_name, "Phase 5: Execution");
-    let total = plans.len();
-    for (offset, plan) in plans.into_iter().enumerate() {
+    let total = operations.len();
+    let mut failed = BTreeSet::new();
+    for (offset, operation) in operations.into_iter().enumerate() {
         let index = offset + 1;
+        let plan = operation.plan;
+        let blocked_by = operation
+            .depends_on
+            .iter()
+            .copied()
+            .filter(|dependency| failed.contains(dependency))
+            .collect::<Vec<_>>();
+        if !blocked_by.is_empty() && !context.allow_stale_metadata {
+            records.push(record_from_plan(
+                plan,
+                OperationStatus::Deferred,
+                Some("required metadata refresh failed; use --allow-stale-metadata to explicitly permit existing metadata".to_owned()),
+                context.privilege_context,
+            ));
+            continue;
+        }
         let command = render_execution_plan_with_context(&plan, context.privilege_context);
         context
             .renderer
@@ -260,6 +316,7 @@ pub fn run(
                 records.append(&mut parsed);
             }
             Ok(status) => {
+                failed.insert(operation.id);
                 let error = classify_failure(context, &plan, &status);
                 let record = BackendOperationRecord {
                     backend_id: plan.backend_id.clone(),
@@ -292,6 +349,7 @@ pub fn run(
                 records.push(record);
             }
             Err(error) => {
+                failed.insert(operation.id);
                 let record = BackendOperationRecord {
                     backend_id: plan.backend_id,
                     backend_name: plan.backend_name,
@@ -322,6 +380,45 @@ pub fn run(
         .renderer
         .maintenance_summary(&report, context.verbose > 0, context.dry_run);
     Ok(report)
+}
+
+fn append_operations(
+    operations: &mut Vec<PlannedOperation>,
+    plans: Vec<ExecutionPlan>,
+    depends_on: &[usize],
+) -> Vec<usize> {
+    let mut ids = Vec::with_capacity(plans.len());
+    for plan in plans {
+        let id = operations.len();
+        operations.push(PlannedOperation {
+            id,
+            plan,
+            depends_on: depends_on.to_vec(),
+        });
+        ids.push(id);
+    }
+    ids
+}
+
+fn planning_failure(
+    runtime: &crate::discovery::DetectedBackend,
+    error: crate::domain::AllpError,
+) -> BackendOperationRecord {
+    BackendOperationRecord {
+        backend_id: runtime.backend.id().to_owned(),
+        backend_name: runtime.backend.display_name().to_owned(),
+        action: None,
+        command: None,
+        status: if matches!(
+            &error,
+            crate::domain::AllpError::UnsupportedOperation { .. }
+        ) {
+            OperationStatus::NotApplicable
+        } else {
+            OperationStatus::Failed
+        },
+        message: Some(error.to_string()),
+    }
 }
 
 fn update_phase(context: &OperationContext<'_>, operation_name: &str, label: &str) {

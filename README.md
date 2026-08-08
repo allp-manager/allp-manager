@@ -93,9 +93,12 @@ allp install git --dry-run
 allp install pycharm
 allp update
 allp upgrade
+allp upgrade --allow-stale-metadata # explicit recovery only
 allp update --scope dev
 allp search git --json
 ```
+
+`update` refreshes backend metadata; it does not upgrade Snap, Flatpak, or Homebrew packages. `upgrade` upgrades installed software. When APT needs a metadata refresh first, that refresh is a required dependency: a failure defers the APT upgrade. `--allow-stale-metadata` is an explicit override, never the default.
 
 Use `--from` for a precise backend:
 

@@ -91,9 +91,12 @@ allp install git --dry-run
 allp install pycharm
 allp update
 allp upgrade
+allp upgrade --allow-stale-metadata # فقط برای بازیابی صریح
 allp update --scope dev
 allp search git --json
 ```
+
+دستور `update` فقط metadata مربوط به Backendها را تازه می کند و Packageهای Snap، Flatpak یا Homebrew را Upgrade نمی کند. دستور `upgrade` نرم افزارهای نصب شده را Upgrade می کند. اگر APT ابتدا به refresh شدن metadata نیاز داشته باشد، آن مرحله یک dependency اجباری است و شکست آن باعث Deferred شدن APT upgrade می شود. گزینه `--allow-stale-metadata` فقط یک override صریح است و رفتار پیش فرض نیست.
 
 برای انتخاب دقیق Backend از `--from` استفاده کنید:
 
