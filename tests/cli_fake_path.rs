@@ -125,6 +125,44 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+#[test]
+fn global_verbose_is_distinct_from_version_and_works_before_subcommand() {
+    let dir = temp_dir("global-verbose");
+    install_fake_apt(&dir, &dir.join("executed"), 0, 0);
+
+    let long = run_allp(
+        &dir,
+        &[
+            "--verbose",
+            "update",
+            "--from",
+            "apt",
+            "--dry-run",
+            "--skip-self-update",
+        ],
+    );
+    let short = run_allp(
+        &dir,
+        &[
+            "-v",
+            "update",
+            "--from",
+            "apt",
+            "--dry-run",
+            "--skip-self-update",
+        ],
+    );
+    let version = run_allp(&dir, &["--version"]);
+    let doctor = run_allp(&dir, &["--verbose", "doctor", "homebrew", "--no-color"]);
+
+    assert!(long.status.success(), "stderr: {}", stderr(&long));
+    assert!(short.status.success(), "stderr: {}", stderr(&short));
+    assert!(version.status.success(), "stderr: {}", stderr(&version));
+    assert!(doctor.status.success(), "stderr: {}", stderr(&doctor));
+    assert!(stdout(&version).starts_with("allp 0.3.5"));
+    assert!(!stdout(&long).starts_with("allp 0.3.5"));
+}
+
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
@@ -370,6 +408,53 @@ if [ "$1" = "upgrade" ]; then
 fi
 exit 0
 "#
+        ),
+    );
+}
+
+fn install_fake_homebrew(
+    dir: &Path,
+    marker: &Path,
+    update_if_needed_supported: bool,
+    update_exit: i32,
+    before_json: &str,
+    after_json: &str,
+) {
+    let marker = marker.display();
+    let counter = dir.join("brew-outdated-count");
+    write_executable(
+        dir,
+        "brew",
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf '%s\n' 'Homebrew 4.6.0'; exit 0; fi
+if [ "$1" = "help" ] && [ "$2" = "update-if-needed" ]; then exit {help_exit}; fi
+if [ "$1" = "update-if-needed" ]; then
+  printf '%s\n' "update-if-needed HOME=$HOME USER=$USER" >> '{marker}'
+  if [ {update_exit} -eq 11 ]; then
+    printf '%s\n' 'Error: Another `brew update` process is already running.' >&2
+    exit 1
+  fi
+  exit {update_exit}
+fi
+if [ "$1" = "outdated" ]; then
+  printf '%s\n' "outdated no_auto=$HOMEBREW_NO_AUTO_UPDATE" >> '{marker}'
+  if [ -f '{counter}' ]; then
+    printf '%s\n' '{after_json}'
+  else
+    /usr/bin/touch '{counter}'
+    printf '%s\n' '{before_json}'
+  fi
+  exit 0
+fi
+if [ "$1" = "upgrade" ]; then
+  printf '%s\n' "upgrade no_auto=$HOMEBREW_NO_AUTO_UPDATE args=$*" >> '{marker}'
+  exit 0
+fi
+exit 0
+"#,
+            counter = counter.display(),
+            help_exit = if update_if_needed_supported { 0 } else { 1 }
         ),
     );
 }
@@ -2569,6 +2654,171 @@ fn apt_stale_metadata_override_runs_upgrade_with_native_yes_flag() {
     let executed = fs::read_to_string(marker).expect("refresh and upgrade should execute");
     assert!(executed.contains("apt-update"));
     assert!(executed.contains("apt-upgrade upgrade -y"));
+}
+
+#[test]
+fn homebrew_update_prefers_update_if_needed() {
+    let dir = temp_dir("brew-update-if-needed");
+    let marker = dir.join("executed");
+    install_fake_homebrew(
+        &dir,
+        &marker,
+        true,
+        0,
+        r#"{"formulae":[],"casks":[]}"#,
+        r#"{"formulae":[],"casks":[]}"#,
+    );
+
+    let output = run_allp(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "brew",
+            "--dry-run",
+            "--skip-self-update",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("brew update-if-needed"));
+    assert!(!stdout(&output).contains("brew update\n"));
+}
+
+#[test]
+fn homebrew_update_falls_back_only_after_capability_probe() {
+    let dir = temp_dir("brew-update-fallback");
+    let marker = dir.join("executed");
+    install_fake_homebrew(
+        &dir,
+        &marker,
+        false,
+        0,
+        r#"{"formulae":[],"casks":[]}"#,
+        r#"{"formulae":[],"casks":[]}"#,
+    );
+
+    let output = run_allp(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "brew",
+            "--dry-run",
+            "--skip-self-update",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("brew update"));
+    assert!(!stdout(&output).contains("brew update-if-needed"));
+}
+
+#[test]
+fn homebrew_empty_outdated_state_skips_upgrade() {
+    let dir = temp_dir("brew-empty-upgrade");
+    let marker = dir.join("executed");
+    install_fake_homebrew(
+        &dir,
+        &marker,
+        true,
+        0,
+        r#"{"formulae":[],"casks":[]}"#,
+        r#"{"formulae":[],"casks":[]}"#,
+    );
+
+    let output = run_allp(&dir, &["upgrade", "--from", "brew", "--yes", "--no-color"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("no outdated formulae or casks"));
+    let executed = fs::read_to_string(marker).expect("Homebrew probes should be recorded");
+    assert!(executed.contains("outdated no_auto=1"));
+    assert!(!executed.contains("upgrade no_auto="));
+}
+
+#[test]
+fn homebrew_upgrade_suppresses_auto_update_and_post_verifies() {
+    let dir = temp_dir("brew-verified-upgrade");
+    let marker = dir.join("executed");
+    install_fake_homebrew(
+        &dir,
+        &marker,
+        true,
+        0,
+        r#"{"formulae":[{"name":"git","pinned":false}],"casks":[{"name":"firefox"}]}"#,
+        r#"{"formulae":[],"casks":[]}"#,
+    );
+
+    let output = run_allp(&dir, &["upgrade", "--from", "brew", "--yes", "--no-color"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let executed = fs::read_to_string(marker).expect("Homebrew operations should be recorded");
+    assert_eq!(executed.matches("outdated no_auto=1").count(), 2);
+    assert!(executed.contains("upgrade no_auto=1 args=upgrade --no-ask"));
+    assert!(stdout(&output).contains("updated: 2"));
+    assert!(stdout(&output).contains("remaining: 0"));
+}
+
+#[test]
+fn homebrew_update_contention_is_busy_without_lock_deletion() {
+    let dir = temp_dir("brew-busy");
+    let marker = dir.join("executed");
+    install_fake_homebrew(
+        &dir,
+        &marker,
+        true,
+        11,
+        r#"{"formulae":[],"casks":[]}"#,
+        r#"{"formulae":[],"casks":[]}"#,
+    );
+
+    let output = run_allp(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "brew",
+            "--yes",
+            "--skip-self-update",
+            "--no-color",
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(8));
+    assert!(stdout(&output).contains("Busy"));
+    assert!(stdout(&output).contains("Do not remove the lock file"));
+}
+
+#[test]
+fn homebrew_exit_130_is_cancelled() {
+    let dir = temp_dir("brew-cancelled");
+    let marker = dir.join("executed");
+    install_fake_homebrew(
+        &dir,
+        &marker,
+        true,
+        130,
+        r#"{"formulae":[],"casks":[]}"#,
+        r#"{"formulae":[],"casks":[]}"#,
+    );
+
+    let output = run_allp(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "brew",
+            "--yes",
+            "--skip-self-update",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("Cancelled"));
+    assert!(stdout(&output).contains("interrupted by user"));
 }
 
 #[test]

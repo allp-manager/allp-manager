@@ -115,6 +115,11 @@ impl NativeCommand {
         self.timeout = Some(timeout);
         self
     }
+
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
+    }
 }
 
 #[derive(Debug, Clone)]

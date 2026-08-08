@@ -98,6 +98,8 @@ allp search git --json
 
 دستور `update` فقط metadata مربوط به Backendها را تازه می کند و Packageهای Snap، Flatpak یا Homebrew را Upgrade نمی کند. دستور `upgrade` نرم افزارهای نصب شده را Upgrade می کند. اگر APT ابتدا به refresh شدن metadata نیاز داشته باشد، آن مرحله یک dependency اجباری است و شکست آن باعث Deferred شدن APT upgrade می شود. گزینه `--allow-stale-metadata` فقط یک override صریح است و رفتار پیش فرض نیست.
 
+برای refresh کردن metadata در Homebrew، Allp ابتدا `brew update-if-needed` را ترجیح می دهد. کشف و اجرای Upgrade با `HOMEBREW_NO_AUTO_UPDATE=1` و خروجی ساختاریافته `brew outdated --json=v2` انجام می شود؛ Upgrade خالی اجرا نمی شود و وضعیت outdated پس از اجرا دوباره بررسی می شود. حتی اگر Allp با sudo اجرا شده باشد، Homebrew در context کاربر اصلی اجرا می شود.
+
 برای انتخاب دقیق Backend از `--from` استفاده کنید:
 
 ```bash

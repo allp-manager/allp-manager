@@ -105,8 +105,22 @@ pub fn prepare_command_with_context(
             .arg(&user.name)
             .arg("--")
             .arg(&command.program);
-        if let Some(home) = home_for_user(&user.name) {
-            process.env("HOME", home);
+        if let Some(identity) = identity_for_user(&user.name) {
+            process
+                .env("HOME", &identity.home)
+                .env("USER", &user.name)
+                .env("LOGNAME", &user.name)
+                .env("SHELL", &identity.shell)
+                .env("XDG_CONFIG_HOME", format!("{}/.config", identity.home))
+                .env("XDG_CACHE_HOME", format!("{}/.cache", identity.home))
+                .env("XDG_DATA_HOME", format!("{}/.local/share", identity.home))
+                .env("XDG_STATE_HOME", format!("{}/.local/state", identity.home));
+            if let Some(uid) = user.uid {
+                let runtime = format!("/run/user/{uid}");
+                if Path::new(&runtime).is_dir() {
+                    process.env("XDG_RUNTIME_DIR", runtime);
+                }
+            }
         }
         process
     } else if privilege == PrivilegeRequirement::OriginalUserRequired
@@ -131,11 +145,19 @@ pub fn prepare_command_with_context(
     Ok(process)
 }
 
-fn home_for_user(name: &str) -> Option<String> {
+struct UserEnvironment {
+    home: String,
+    shell: String,
+}
+
+fn identity_for_user(name: &str) -> Option<UserEnvironment> {
     #[cfg(not(unix))]
     {
         let _ = name;
-        return env::var("USERPROFILE").ok();
+        return env::var("USERPROFILE").ok().map(|home| UserEnvironment {
+            home,
+            shell: env::var("COMSPEC").unwrap_or_default(),
+        });
     }
     #[cfg(unix)]
     {
@@ -147,7 +169,11 @@ fn home_for_user(name: &str) -> Option<String> {
                 return None;
             }
             let home = fields.nth(4)?;
-            (!home.is_empty()).then(|| home.to_owned())
+            let shell = fields.next().unwrap_or("/bin/sh");
+            (!home.is_empty()).then(|| UserEnvironment {
+                home: home.to_owned(),
+                shell: shell.to_owned(),
+            })
         })
     }
 }

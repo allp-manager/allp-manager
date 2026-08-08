@@ -14,6 +14,10 @@ use crate::{
     long_about = "Allp detects package managers already installed on the system, delegates work to their native commands, and keeps the user in control."
 )]
 pub struct Cli {
+    /// Increase diagnostic output. Repeat for more detail.
+    #[arg(short = 'v', long, action = ArgAction::Count, global = true)]
+    pub verbose: u8,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -27,10 +31,6 @@ pub struct CommonOptions {
     /// Disable ANSI colors and spinner animation.
     #[arg(long)]
     pub no_color: bool,
-
-    /// Increase diagnostic output. Repeat for more detail.
-    #[arg(short = 'v', long, action = ArgAction::Count)]
-    pub verbose: u8,
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -207,6 +207,9 @@ pub struct SelfUpdateArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct DoctorArgs {
+    /// Restrict diagnostics to a backend such as apt, snap, flatpak, or homebrew.
+    pub backend: Option<String>,
+
     #[command(flatten)]
     pub common: CommonOptions,
 }
@@ -449,10 +452,6 @@ impl Commands {
 
     pub fn no_color(&self) -> bool {
         self.common().no_color
-    }
-
-    pub fn verbose(&self) -> u8 {
-        self.common().verbose
     }
 }
 

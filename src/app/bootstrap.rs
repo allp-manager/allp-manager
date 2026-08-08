@@ -37,14 +37,13 @@ impl App {
     }
 
     pub fn run(&self, cli: Cli) -> AllpResult<u8> {
-        let Cli { command } = cli;
+        let Cli { verbose, command } = cli;
         let dry_run = command.dry_run();
         let json = command.json();
         let no_interactive = command.no_interactive();
         let yes = command.yes();
         let allow_bootstrap = command.allow_bootstrap();
         let no_color = command.no_color();
-        let verbose = command.verbose();
         let backend_filter = command.backend_filter().map(str::to_owned);
         let mut search_scope = command.search_scope();
         let target = command.target();
@@ -186,8 +185,8 @@ impl App {
         };
 
         match command {
-            Commands::Detect(args) => {
-                operations::detect::run(&renderer, &discovery.report, args.common.verbose > 0)
+            Commands::Detect(_) => {
+                operations::detect::run(&renderer, &discovery.report, verbose > 0)
             }
             Commands::Search(args) => {
                 operations::search::run(&context, &args.query, args.exact, args.limit, args.all)?;

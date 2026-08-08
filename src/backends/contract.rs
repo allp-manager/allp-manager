@@ -134,6 +134,11 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    /// Delay upgrade inspection until a required metadata refresh has executed successfully.
+    fn plan_upgrade_after_metadata_refresh(&self) -> bool {
+        false
+    }
+
     /// Apply a backend-native noninteractive flag after Allp authorization.
     fn authorize_noninteractive(&self, _plan: &mut ExecutionPlan) {}
 
@@ -253,6 +258,14 @@ pub trait Backend: Send + Sync {
         _command: &str,
     ) -> Option<Vec<BackendOperationRecord>> {
         None
+    }
+
+    fn post_execution_verification(
+        &self,
+        _plan: &ExecutionPlan,
+        _runner: &dyn ProcessRunner,
+    ) -> AllpResult<Option<BackendOperationRecord>> {
+        Ok(None)
     }
 
     fn plan_remove(

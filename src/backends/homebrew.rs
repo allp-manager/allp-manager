@@ -1,16 +1,18 @@
 use crate::{
     backends::{
-        contract::command_path,
+        contract::{command_path, BackendOperationCapability},
         util::{capture_checked, match_kind},
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpResult, BackendCategory, Capability, DeveloperTarget, ExecutionPlan, InstalledPackage,
-        MaintenancePlan, NativeCommand, OperationKind, PackageCandidate, PackageDomain,
-        PackageInfo, PrivilegeRequirement,
+        AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
+        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
+        OperationKind, OperationStatus, PackageCandidate, PackageDomain, PackageInfo,
+        PrivilegeRequirement,
     },
     execution::{CommandOutput, ProcessRunner},
 };
+use serde::Deserialize;
 
 pub struct HomebrewBackend;
 
@@ -26,12 +28,7 @@ const CAPABILITIES: &[Capability] = &[
 
 const REQUIREMENTS: &[CommandRequirement] = &[CommandRequirement {
     key: "brew",
-    alternatives: &[
-        "brew",
-        "/opt/homebrew/bin/brew",
-        "/usr/local/bin/brew",
-        "/home/linuxbrew/.linuxbrew/bin/brew",
-    ],
+    alternatives: &["brew"],
 }];
 const DOMAINS: &[PackageDomain] = &[PackageDomain::Homebrew];
 
@@ -62,6 +59,36 @@ impl Backend for HomebrewBackend {
 
     fn package_domains(&self) -> &'static [PackageDomain] {
         DOMAINS
+    }
+
+    fn operation_capability(&self, capability: Capability) -> BackendOperationCapability {
+        match capability {
+            Capability::Update => BackendOperationCapability::MetadataRefresh,
+            Capability::Upgrade => BackendOperationCapability::InstalledPackageUpgrade,
+            _ => BackendOperationCapability::Unsupported,
+        }
+    }
+
+    fn requires_metadata_refresh_before_upgrade(&self) -> bool {
+        true
+    }
+
+    fn plan_upgrade_after_metadata_refresh(&self) -> bool {
+        true
+    }
+
+    fn authorize_noninteractive(&self, plan: &mut ExecutionPlan) {
+        if plan.operation == OperationKind::Upgrade
+            && plan.interactive
+            && !plan
+                .command
+                .args
+                .iter()
+                .any(|argument| argument == "--no-ask")
+        {
+            plan.command.args.push("--no-ask".into());
+            plan.interactive = false;
+        }
     }
 
     fn search(
@@ -237,38 +264,268 @@ impl Backend for HomebrewBackend {
     fn plan_update(
         &self,
         commands: &CommandMap,
-        _runner: &dyn ProcessRunner,
+        runner: &dyn ProcessRunner,
         _selector: Option<&str>,
         _target: Option<DeveloperTarget>,
     ) -> AllpResult<MaintenancePlan> {
         let brew = command_path(self, commands, "brew")?;
+        let operation = if supports_update_if_needed(brew, runner) {
+            "update-if-needed"
+        } else {
+            "update"
+        };
         Ok(MaintenancePlan::from_plans(vec![plan(
             self,
             OperationKind::Update,
             "Refresh Homebrew formula and cask metadata",
             None,
             Some("Homebrew".to_owned()),
-            NativeCommand::new(brew).arg("update"),
+            NativeCommand::new(brew).arg(operation),
         )]))
     }
 
     fn plan_upgrade(
         &self,
         commands: &CommandMap,
-        _runner: &dyn ProcessRunner,
+        runner: &dyn ProcessRunner,
         _selector: Option<&str>,
         _target: Option<DeveloperTarget>,
     ) -> AllpResult<MaintenancePlan> {
         let brew = command_path(self, commands, "brew")?;
-        Ok(MaintenancePlan::from_plans(vec![plan(
+        let command = no_auto_update(NativeCommand::new(brew).args(["outdated", "--json=v2"]));
+        let output =
+            runner.capture_with_privilege(&command, PrivilegeRequirement::OriginalUserRequired)?;
+        if !output.success {
+            return Err(AllpError::CommandFailed {
+                backend: self.display_name().to_owned(),
+                command: "brew outdated --json=v2".to_owned(),
+                code: output.code,
+                stderr: output.stderr,
+            });
+        }
+        let outdated = parse_outdated(&output.stdout)?;
+        if outdated.is_empty() {
+            return Ok(MaintenancePlan {
+                plans: Vec::new(),
+                records: vec![MaintenancePlan::record(
+                    self.id(),
+                    self.display_name(),
+                    OperationStatus::UpToDate,
+                    "no outdated formulae or casks",
+                )],
+            });
+        }
+        let mut upgrade = plan(
             self,
             OperationKind::Upgrade,
             "Upgrade installed Homebrew packages",
             None,
             Some("Homebrew".to_owned()),
-            NativeCommand::new(brew).arg("upgrade"),
-        )]))
+            no_auto_update(NativeCommand::new(brew).arg("upgrade")),
+        );
+        upgrade.details.push((
+            "Outdated formulae".to_owned(),
+            outdated.formula_names().join(", "),
+        ));
+        upgrade.details.push((
+            "Outdated casks".to_owned(),
+            outdated.cask_names().join(", "),
+        ));
+        upgrade
+            .details
+            .push(("Outdated total".to_owned(), outdated.total().to_string()));
+        Ok(MaintenancePlan::from_plans(vec![upgrade]))
     }
+
+    fn classify_execution_failure(
+        &self,
+        _plan: &ExecutionPlan,
+        status: &crate::execution::ProcessStatus,
+        command: &str,
+    ) -> Option<AllpError> {
+        is_busy_output(&status.stderr).then(|| AllpError::BackendBusy {
+            backend: self.display_name().to_owned(),
+            command: command.to_owned(),
+            code: status.code,
+            lock_path: None,
+            holder_pid: None,
+            holder_process: Some("another Homebrew update".to_owned()),
+        })
+    }
+
+    fn classify_execution_success(
+        &self,
+        plan: &ExecutionPlan,
+        status: &crate::execution::ProcessStatus,
+        _command: &str,
+    ) -> Option<Vec<BackendOperationRecord>> {
+        if plan.operation == OperationKind::Update {
+            let changed = !(status.stdout.trim().is_empty() && status.stderr.trim().is_empty())
+                && !status.stdout.contains("Already up-to-date");
+            return Some(vec![BackendOperationRecord {
+                backend_id: plan.backend_id.clone(),
+                backend_name: plan.backend_name.clone(),
+                action: None,
+                command: None,
+                status: if changed {
+                    OperationStatus::Updated
+                } else {
+                    OperationStatus::UpToDate
+                },
+                message: Some(if changed {
+                    "Homebrew metadata refreshed".to_owned()
+                } else {
+                    "Homebrew metadata already current".to_owned()
+                }),
+            }]);
+        }
+        if plan.operation == OperationKind::Upgrade {
+            let count = plan
+                .details
+                .iter()
+                .find(|(key, _)| key == "Outdated total")
+                .and_then(|(_, value)| value.parse::<usize>().ok())?;
+            return Some(vec![BackendOperationRecord {
+                backend_id: plan.backend_id.clone(),
+                backend_name: plan.backend_name.clone(),
+                action: None,
+                command: None,
+                status: OperationStatus::Updated,
+                message: Some(format!(
+                    "native upgrade completed for {count} outdated package(s); post-upgrade state requires verification"
+                )),
+            }]);
+        }
+        None
+    }
+
+    fn post_execution_verification(
+        &self,
+        plan: &ExecutionPlan,
+        runner: &dyn ProcessRunner,
+    ) -> AllpResult<Option<BackendOperationRecord>> {
+        if plan.operation == OperationKind::Upgrade {
+            verify_upgrade(plan, runner).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn no_auto_update(command: NativeCommand) -> NativeCommand {
+    command.env("HOMEBREW_NO_AUTO_UPDATE", "1")
+}
+
+fn supports_update_if_needed(brew: &std::path::Path, runner: &dyn ProcessRunner) -> bool {
+    runner
+        .capture_with_privilege(
+            &NativeCommand::new(brew).args(["help", "update-if-needed"]),
+            PrivilegeRequirement::OriginalUserRequired,
+        )
+        .is_ok_and(|output| output.success)
+}
+
+fn is_busy_output(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("another `brew update` process is already running")
+        || lower.contains("another brew update process is already running")
+}
+
+#[derive(Debug, Deserialize)]
+struct HomebrewOutdated {
+    #[serde(default)]
+    formulae: Vec<HomebrewOutdatedFormula>,
+    #[serde(default)]
+    casks: Vec<HomebrewOutdatedCask>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HomebrewOutdatedFormula {
+    name: String,
+    #[serde(default)]
+    pinned: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct HomebrewOutdatedCask {
+    name: String,
+}
+
+impl HomebrewOutdated {
+    fn is_empty(&self) -> bool {
+        self.formulae.is_empty() && self.casks.is_empty()
+    }
+
+    fn total(&self) -> usize {
+        self.formulae.len() + self.casks.len()
+    }
+
+    fn formula_names(&self) -> Vec<String> {
+        self.formulae
+            .iter()
+            .map(|formula| {
+                if formula.pinned {
+                    format!("{} (pinned)", formula.name)
+                } else {
+                    formula.name.clone()
+                }
+            })
+            .collect()
+    }
+
+    fn cask_names(&self) -> Vec<String> {
+        self.casks.iter().map(|cask| cask.name.clone()).collect()
+    }
+}
+
+fn parse_outdated(output: &str) -> AllpResult<HomebrewOutdated> {
+    serde_json::from_str(output).map_err(|error| AllpError::MetadataParseFailed {
+        backend: "Homebrew".to_owned(),
+        message: format!("invalid `brew outdated --json=v2` output: {error}"),
+    })
+}
+
+fn verify_upgrade(
+    plan: &ExecutionPlan,
+    runner: &dyn ProcessRunner,
+) -> AllpResult<BackendOperationRecord> {
+    let before = plan
+        .details
+        .iter()
+        .find(|(key, _)| key == "Outdated total")
+        .and_then(|(_, value)| value.parse::<usize>().ok())
+        .ok_or_else(|| AllpError::Parse {
+            backend: "Homebrew".to_owned(),
+            message: "upgrade plan did not preserve the pre-upgrade outdated count".to_owned(),
+        })?;
+    let command =
+        no_auto_update(NativeCommand::new(&plan.command.program).args(["outdated", "--json=v2"]));
+    let output =
+        runner.capture_with_privilege(&command, PrivilegeRequirement::OriginalUserRequired)?;
+    if !output.success {
+        return Err(AllpError::CommandFailed {
+            backend: "Homebrew".to_owned(),
+            command: "brew outdated --json=v2".to_owned(),
+            code: output.code,
+            stderr: output.stderr,
+        });
+    }
+    let remaining = parse_outdated(&output.stdout)?.total();
+    let updated = before.saturating_sub(remaining);
+    Ok(BackendOperationRecord {
+        backend_id: plan.backend_id.clone(),
+        backend_name: plan.backend_name.clone(),
+        action: None,
+        command: None,
+        status: if remaining == 0 {
+            OperationStatus::Updated
+        } else {
+            OperationStatus::Deferred
+        },
+        message: Some(format!(
+            "before: {before} outdated · updated: {updated} · remaining: {remaining}"
+        )),
+    })
 }
 
 fn append_search(
@@ -396,4 +653,35 @@ fn first_version(output: &str) -> Option<String> {
         let _name = parts.next()?;
         parts.next().map(str::to_owned)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_busy_output, parse_outdated};
+
+    #[test]
+    fn parses_formulae_casks_and_pinned_state() {
+        let parsed = parse_outdated(
+            r#"{"formulae":[{"name":"openssl@3","pinned":true},{"name":"git"}],"casks":[{"name":"firefox"}]}"#,
+        )
+        .expect("Homebrew JSON v2 should parse");
+
+        assert_eq!(parsed.total(), 3);
+        assert_eq!(parsed.formula_names(), vec!["openssl@3 (pinned)", "git"]);
+        assert_eq!(parsed.cask_names(), vec!["firefox"]);
+    }
+
+    #[test]
+    fn empty_outdated_json_is_evidence_for_up_to_date() {
+        let parsed = parse_outdated(r#"{"formulae":[],"casks":[]}"#)
+            .expect("empty Homebrew JSON v2 should parse");
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn recognizes_homebrew_update_concurrency_message() {
+        assert!(is_busy_output(
+            "Error: Another `brew update` process is already running."
+        ));
+    }
 }

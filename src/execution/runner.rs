@@ -37,6 +37,13 @@ pub struct ProcessStatus {
 
 pub trait ProcessRunner: Send + Sync {
     fn capture(&self, command: &NativeCommand) -> AllpResult<CommandOutput>;
+    fn capture_with_privilege(
+        &self,
+        command: &NativeCommand,
+        _privilege: PrivilegeRequirement,
+    ) -> AllpResult<CommandOutput> {
+        self.capture(command)
+    }
     fn execute(&self, plan: &ExecutionPlan) -> AllpResult<ProcessStatus>;
 }
 
@@ -45,7 +52,15 @@ pub struct StdProcessRunner;
 
 impl ProcessRunner for StdProcessRunner {
     fn capture(&self, command: &NativeCommand) -> AllpResult<CommandOutput> {
-        let mut process = prepare_command(command, PrivilegeRequirement::NoElevation)?;
+        self.capture_with_privilege(command, PrivilegeRequirement::NoElevation)
+    }
+
+    fn capture_with_privilege(
+        &self,
+        command: &NativeCommand,
+        privilege: PrivilegeRequirement,
+    ) -> AllpResult<CommandOutput> {
+        let mut process = prepare_command(command, privilege)?;
         let mut child = process
             .env("LC_ALL", "C")
             .env("LANG", "C")

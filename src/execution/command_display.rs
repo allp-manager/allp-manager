@@ -27,7 +27,17 @@ pub fn render_execution_plan_with_context(
 }
 
 pub fn render_native_command(command: &NativeCommand) -> String {
-    let mut parts = vec![quote(command.program.as_os_str())];
+    let mut parts = Vec::new();
+    if !command.env.is_empty() {
+        parts.push("env".to_owned());
+        parts.extend(command.env.iter().map(|(key, value)| {
+            let mut assignment = key.clone();
+            assignment.push("=");
+            assignment.push(value);
+            quote(assignment.as_os_str())
+        }));
+    }
+    parts.push(quote(command.program.as_os_str()));
     parts.extend(command.args.iter().map(|arg| quote(arg.as_os_str())));
     parts.join(" ")
 }

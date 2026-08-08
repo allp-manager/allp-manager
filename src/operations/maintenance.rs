@@ -11,7 +11,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::Path,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -33,6 +33,7 @@ pub fn run(
 ) -> AllpResult<MultiOperationReport> {
     let mut records = Vec::new();
     let mut operations = Vec::new();
+    let mut upgrades_pending_refresh = BTreeSet::new();
 
     for runtime in context.eligible_backends()? {
         let operation_capability = runtime.backend.operation_capability(capability);
@@ -67,6 +68,10 @@ pub fn run(
                     let dependency_ids =
                         append_operations(&mut operations, refresh_plans.plans, &[]);
                     records.append(&mut refresh_plans.records);
+                    if runtime.backend.plan_upgrade_after_metadata_refresh() {
+                        upgrades_pending_refresh.insert(runtime.backend.id().to_owned());
+                        continue;
+                    }
                     let backend_plans = runtime.backend.plan_upgrade(
                         &runtime.commands,
                         context.runner,
@@ -256,10 +261,13 @@ pub fn run(
     }
 
     update_phase(context, operation_name, "Phase 5: Execution");
-    let total = operations.len();
+    let mut queue = VecDeque::from(operations);
+    let mut total = queue.len();
+    let mut next_id = total;
+    let mut index = 0;
     let mut failed = BTreeSet::new();
-    for (offset, operation) in operations.into_iter().enumerate() {
-        let index = offset + 1;
+    while let Some(operation) = queue.pop_front() {
+        index += 1;
         let plan = operation.plan;
         let blocked_by = operation
             .depends_on
@@ -283,17 +291,34 @@ pub fn run(
         let started = Instant::now();
         match context.runner.execute(&plan) {
             Ok(status) if status.success => {
-                let mut parsed = classify_success(context, &plan, &status, &command)
-                    .unwrap_or_else(|| {
-                        vec![BackendOperationRecord {
-                            backend_id: plan.backend_id.clone(),
-                            backend_name: plan.backend_name.clone(),
-                            action: Some(plan.action.clone()),
-                            command: Some(command.clone()),
-                            status: OperationStatus::Completed,
-                            message: None,
-                        }]
-                    });
+                let verification = context.backend(&plan.backend_id).and_then(|runtime| {
+                    runtime
+                        .backend
+                        .post_execution_verification(&plan, context.runner)
+                });
+                let mut parsed = match verification {
+                    Ok(Some(record)) => vec![record],
+                    Err(error) => vec![BackendOperationRecord {
+                        backend_id: plan.backend_id.clone(),
+                        backend_name: plan.backend_name.clone(),
+                        action: None,
+                        command: None,
+                        status: OperationStatus::Failed,
+                        message: Some(format!("post-upgrade verification failed: {error}")),
+                    }],
+                    Ok(None) => {
+                        classify_success(context, &plan, &status, &command).unwrap_or_else(|| {
+                            vec![BackendOperationRecord {
+                                backend_id: plan.backend_id.clone(),
+                                backend_name: plan.backend_name.clone(),
+                                action: Some(plan.action.clone()),
+                                command: Some(command.clone()),
+                                status: OperationStatus::Completed,
+                                message: None,
+                            }]
+                        })
+                    }
+                };
                 for record in &mut parsed {
                     if record.action.is_none() {
                         record.action = Some(plan.action.clone());
@@ -314,29 +339,84 @@ pub fn run(
                 }
                 persist_metadata_refresh_success(context, &plan);
                 records.append(&mut parsed);
+                if plan.operation == OperationKind::Update
+                    && upgrades_pending_refresh.remove(&plan.backend_id)
+                {
+                    let runtime = context.backend(&plan.backend_id)?;
+                    match runtime.backend.plan_upgrade(
+                        &runtime.commands,
+                        context.runner,
+                        context.backend_filter,
+                        context.target,
+                    ) {
+                        Ok(mut follow_up) => {
+                            if context.yes {
+                                for plan in &mut follow_up.plans {
+                                    runtime.backend.authorize_noninteractive(plan);
+                                }
+                            }
+                            context
+                                .renderer
+                                .planned_operations(&follow_up.plans, context.privilege_context);
+                            if !follow_up.plans.is_empty()
+                                && confirm_follow_up(context, operation_name)?
+                            {
+                                for plan in follow_up.plans {
+                                    queue.push_back(PlannedOperation {
+                                        id: next_id,
+                                        plan,
+                                        depends_on: Vec::new(),
+                                    });
+                                    next_id += 1;
+                                    total += 1;
+                                }
+                            } else if !follow_up.plans.is_empty() {
+                                records.push(BackendOperationRecord {
+                                    backend_id: runtime.backend.id().to_owned(),
+                                    backend_name: runtime.backend.display_name().to_owned(),
+                                    action: None,
+                                    command: None,
+                                    status: OperationStatus::Cancelled,
+                                    message: Some(
+                                        "cancelled before package upgrade execution".to_owned(),
+                                    ),
+                                });
+                            }
+                            records.append(&mut follow_up.records);
+                        }
+                        Err(error) => records.push(planning_failure(runtime, error)),
+                    }
+                }
             }
             Ok(status) => {
                 failed.insert(operation.id);
                 let error = classify_failure(context, &plan, &status);
+                let cancelled = status.code == Some(130);
                 let record = BackendOperationRecord {
                     backend_id: plan.backend_id.clone(),
                     backend_name: plan.backend_name.clone(),
                     action: Some(plan.action.clone()),
                     command: Some(command),
-                    status: if error.is_some() {
+                    status: if cancelled {
+                        OperationStatus::Cancelled
+                    } else if matches!(&error, Some(crate::domain::AllpError::BackendBusy { .. })) {
                         OperationStatus::Busy
                     } else {
                         OperationStatus::Failed
                     },
-                    message: Some(error.map(|error| error.to_string()).unwrap_or_else(|| {
-                        format!(
-                            "native command exited with status {}",
-                            status
-                                .code
-                                .map(|code| code.to_string())
-                                .unwrap_or_else(|| "unknown".to_owned())
-                        )
-                    })),
+                    message: Some(if cancelled {
+                        "interrupted by user".to_owned()
+                    } else {
+                        error.map(|error| error.to_string()).unwrap_or_else(|| {
+                            format!(
+                                "native command exited with status {}",
+                                status
+                                    .code
+                                    .map(|code| code.to_string())
+                                    .unwrap_or_else(|| "unknown".to_owned())
+                            )
+                        })
+                    }),
                 };
                 context.renderer.execution_finished(
                     index,
@@ -347,9 +427,11 @@ pub fn run(
                     started.elapsed(),
                 );
                 records.push(record);
+                defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
             }
             Err(error) => {
                 failed.insert(operation.id);
+                defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
                 let record = BackendOperationRecord {
                     backend_id: plan.backend_id,
                     backend_name: plan.backend_name,
@@ -380,6 +462,37 @@ pub fn run(
         .renderer
         .maintenance_summary(&report, context.verbose > 0, context.dry_run);
     Ok(report)
+}
+
+fn confirm_follow_up(context: &OperationContext<'_>, operation_name: &str) -> AllpResult<bool> {
+    confirm_execution(
+        context.no_interactive,
+        context.yes,
+        ConfirmationRequest {
+            prompt: format!("Continue with {operation_name}?"),
+            default_yes: false,
+            non_interactive_hint: format!(
+                "Review with:\n  allp {operation_name} --dry-run\n\nExecute explicitly with:\n  allp {operation_name} --yes"
+            ),
+        },
+    )
+}
+
+fn defer_pending_upgrade(
+    pending: &mut BTreeSet<String>,
+    plan: &ExecutionPlan,
+    records: &mut Vec<BackendOperationRecord>,
+) {
+    if plan.operation == OperationKind::Update && pending.remove(&plan.backend_id) {
+        records.push(BackendOperationRecord {
+            backend_id: plan.backend_id.clone(),
+            backend_name: plan.backend_name.clone(),
+            action: Some("Upgrade installed packages".to_owned()),
+            command: None,
+            status: OperationStatus::Deferred,
+            message: Some("required metadata refresh failed".to_owned()),
+        });
+    }
 }
 
 fn append_operations(
