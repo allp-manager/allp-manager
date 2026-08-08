@@ -59,7 +59,7 @@ fn flatpak_user_upgrade_deescalates_to_original_sudo_user() {
     assert_eq!(plan.scope.as_deref(), Some("User"));
     assert_eq!(
         render_execution_plan_with_context(plan, &context),
-        "sudo -u alice -- /usr/bin/flatpak update --user"
+        "sudo -H -u alice -- /usr/bin/flatpak update --user"
     );
 }
 

@@ -17,7 +17,7 @@ pub fn render_execution_plan_with_context(
         PrivilegeRequirement::RootRequired if !context.is_root() => format!("sudo -- {native}"),
         PrivilegeRequirement::OriginalUserRequired if context.is_root() => {
             if let Some(user) = context.original_user() {
-                format!("sudo -u {} -- {native}", quote(OsStr::new(&user.name)))
+                format!("sudo -H -u {} -- {native}", quote(OsStr::new(&user.name)))
             } else {
                 format!("run as original user: {native}")
             }
@@ -123,7 +123,7 @@ mod tests {
 
         assert_eq!(
             render_execution_plan_with_context(&plan, &context),
-            "sudo -u alice -- /usr/bin/apt-get update"
+            "sudo -H -u alice -- /usr/bin/apt-get update"
         );
     }
 

@@ -29,7 +29,7 @@ Install and remove follow the same confirmation rule as update and upgrade:
 4. Ask for final confirmation.
 5. Execute only after confirmation.
 
-When Allp is already root, it never adds nested sudo and never claims to be running as a normal user. If `SUDO_USER` is available, user-scoped Homebrew, Python, Node, and Flatpak-user plans are executed as that original user. If no safe original user exists, those plans fail before execution.
+When Allp is already root, it never adds nested sudo and never claims to be running as a normal user. If `SUDO_USER` is available, user-scoped Homebrew, Python, Node, and Flatpak-user plans are executed with `sudo -H -u <user>` as that original user. The reusable privilege boundary supplies the target user's `HOME`, `USER`, `LOGNAME`, `PATH`, `SHELL`, and XDG directories so user-scoped package managers never inherit root's home. If no safe original user exists, those plans fail before execution.
 
 Dry runs never invoke sudo, never request passwords, and never execute native installers.
 

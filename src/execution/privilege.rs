@@ -78,6 +78,7 @@ pub fn prepare_command_with_context(
         validate_elevated_executable(&command.program)?;
     }
 
+    let mut environment_is_command_argv = false;
     let mut process = if privilege.requires_sudo(context) {
         let sudo = find_executable("sudo").ok_or_else(|| {
             AllpError::BackendNotDetected("sudo is required but was not found".to_owned())
@@ -100,28 +101,39 @@ pub fn prepare_command_with_context(
         })?;
         validate_elevated_executable(&sudo)?;
         let mut process = Command::new(sudo);
+        environment_is_command_argv = true;
         process
+            .arg("-H")
             .arg("-u")
             .arg(&user.name)
             .arg("--")
-            .arg(&command.program);
+            .arg("/usr/bin/env");
         if let Some(identity) = identity_for_user(&user.name) {
+            let path = user_path(&identity.home);
             process
-                .env("HOME", &identity.home)
-                .env("USER", &user.name)
-                .env("LOGNAME", &user.name)
-                .env("SHELL", &identity.shell)
-                .env("XDG_CONFIG_HOME", format!("{}/.config", identity.home))
-                .env("XDG_CACHE_HOME", format!("{}/.cache", identity.home))
-                .env("XDG_DATA_HOME", format!("{}/.local/share", identity.home))
-                .env("XDG_STATE_HOME", format!("{}/.local/state", identity.home));
+                .arg(format!("HOME={}", identity.home))
+                .arg(format!("USER={}", user.name))
+                .arg(format!("LOGNAME={}", user.name))
+                .arg(format!("PATH={path}"))
+                .arg(format!("SHELL={}", identity.shell))
+                .arg(format!("XDG_CONFIG_HOME={}/.config", identity.home))
+                .arg(format!("XDG_CACHE_HOME={}/.cache", identity.home))
+                .arg(format!("XDG_DATA_HOME={}/.local/share", identity.home))
+                .arg(format!("XDG_STATE_HOME={}/.local/state", identity.home));
             if let Some(uid) = user.uid {
                 let runtime = format!("/run/user/{uid}");
                 if Path::new(&runtime).is_dir() {
-                    process.env("XDG_RUNTIME_DIR", runtime);
+                    process.arg(format!("XDG_RUNTIME_DIR={runtime}"));
                 }
             }
         }
+        for (key, value) in &command.env {
+            let mut assignment = key.clone();
+            assignment.push("=");
+            assignment.push(value);
+            process.arg(assignment);
+        }
+        process.arg(&command.program);
         process
     } else if privilege == PrivilegeRequirement::OriginalUserRequired
         && matches!(context, RuntimePrivilegeContext::RootDirect)
@@ -138,11 +150,18 @@ pub fn prepare_command_with_context(
     if let Some(current_dir) = &command.current_dir {
         process.current_dir(current_dir);
     }
-    for (key, value) in &command.env {
-        process.env(key, value);
+    if !environment_is_command_argv {
+        for (key, value) in &command.env {
+            process.env(key, value);
+        }
     }
 
     Ok(process)
+}
+
+fn user_path(home: &str) -> String {
+    let inherited = env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_owned());
+    format!("{home}/.local/bin:{home}/bin:{inherited}")
 }
 
 struct UserEnvironment {

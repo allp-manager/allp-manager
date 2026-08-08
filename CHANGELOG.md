@@ -9,6 +9,7 @@ All notable changes to Allp will be documented in this file.
 - Homebrew metadata refresh now capability-probes and prefers `update-if-needed`; outdated queries and upgrades suppress Homebrew's implicit auto-update lifecycle.
 - Homebrew upgrades use JSON v2 evidence, skip empty work, preserve formula/cask and pinned details, and verify remaining outdated packages after execution.
 - Homebrew update contention is classified as Busy without deleting locks, while exit 130 is classified as Cancelled.
+- Original-user execution now uses `sudo -H -u` and establishes the target user's PATH alongside HOME, USER, LOGNAME, SHELL, and XDG directories.
 - `-v` and `--verbose` are now global options accepted before or after subcommands and remain distinct from `--version`.
 - Original-user execution now supplies HOME, USER, LOGNAME, SHELL, and XDG directory context instead of inheriting root's user environment.
 - APT upgrades now depend on a successful required metadata refresh and are deferred after refresh failure unless `--allow-stale-metadata` is explicitly supplied.
