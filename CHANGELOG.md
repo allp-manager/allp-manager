@@ -4,8 +4,22 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- A dedicated compiled build identity keeps Cargo at `0.3.5` while exposing build `0.3.5.1`, with verbose commit, workflow/build ID, channel, target, timestamp, and provenance diagnostics.
+- A separate main-branch `Continuous Build` workflow produces versioned native artifacts, SHA-256 files, and an authoritative continuous manifest without publishing a stable release.
+- Continuous self-update compares base SemVer before build revision, verifies the successful trusted workflow and exact target, and validates staged display version, commit, build ID, target, channel, and official provenance before every replacement path.
+
 ### Fixed
 
+- Continuous discovery now falls back deterministically past failed or running workflow candidates, treats an unpublished feed and unsupported targets as structured no-update states, and binds the exact mirror manifest hash to GitHub's authoritative artifact identity.
+- Stable discovery uses GitHub's latest-release endpoint, while explicit semantic prerelease discovery is isolated from per-push continuous tags; continuous mirrors can no longer starve tagged channel discovery.
+- Self-update temporary header files and staging directories are owner-only, API rate-limit failures expose useful reset/retry metadata, full published Git IDs accept only exact SHA-1/SHA-256 lengths, and legacy ETags are not sent without cached verified response data.
+- Self-update now carries the extracted binary's SHA-256 and exact size through native, elevated, and Windows-deferred replacement, rejecting same-version staged-file swaps before execution. Elevated `curl`/`tar` lookup also rejects untrusted PATH executables.
+- Update phase 1 now completes before capability probing and backend discovery, so `--self-only` and standalone self-update do not invoke package-manager detectors; guarded re-execution still continues backend work exactly once.
+- Homebrew detection now uses one validated multi-provider locator shared by detect, scoped doctor diagnostics, the capability registry, and package operations, including the official Linuxbrew prefix when sudo's PATH omits it; broken or wrong-owner installations are no longer reported as absent. Owner-specific probes and immediate pre-mutation revalidation prevent stale or replaced brew paths from executing, while relative provider paths are rejected.
+- Elevated Homebrew captures and mutations now share the account-tuple-validated `OriginalUserRequired` executor, reconstruct a deterministic environment with `env -i`, and resolve sudo only from canonical root-owned, non-writable helper paths instead of trusting PATH order.
+- Root-required backend executables are now canonicalized and must be root-owned, executable, and reached only through root-owned non-writable ancestors before either `sudo --` or direct-root execution, preventing a user-controlled `PATH` entry from crossing the privilege boundary.
 - Homebrew metadata refresh now capability-probes and prefers `update-if-needed`; outdated queries and upgrades suppress Homebrew's implicit auto-update lifecycle.
 - Homebrew upgrades use JSON v2 evidence, skip empty work, preserve formula/cask and pinned details, and verify remaining outdated packages after execution.
 - Homebrew update contention is classified as Busy without deleting locks, while exit 130 is classified as Cancelled.

@@ -1,13 +1,13 @@
 use crate::{
     domain::{AllpError, AllpResult, ExecutionPlan, NativeCommand, PrivilegeRequirement},
-    execution::privilege::prepare_command,
+    execution::privilege::{prepare_command, UserAccount, UserContextExecutor},
     execution::render_native_command,
 };
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::{
     io::{IsTerminal, Read, Write},
-    process::Stdio,
+    process::{Command, Stdio},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -44,23 +44,25 @@ pub trait ProcessRunner: Send + Sync {
     ) -> AllpResult<CommandOutput> {
         self.capture(command)
     }
+    fn capture_in_user_context(
+        &self,
+        command: &NativeCommand,
+        _user: &UserAccount,
+    ) -> AllpResult<CommandOutput> {
+        self.capture_with_privilege(command, PrivilegeRequirement::OriginalUserRequired)
+    }
     fn execute(&self, plan: &ExecutionPlan) -> AllpResult<ProcessStatus>;
 }
 
 #[derive(Debug, Default)]
 pub struct StdProcessRunner;
 
-impl ProcessRunner for StdProcessRunner {
-    fn capture(&self, command: &NativeCommand) -> AllpResult<CommandOutput> {
-        self.capture_with_privilege(command, PrivilegeRequirement::NoElevation)
-    }
-
-    fn capture_with_privilege(
+impl StdProcessRunner {
+    fn capture_prepared(
         &self,
         command: &NativeCommand,
-        privilege: PrivilegeRequirement,
+        mut process: Command,
     ) -> AllpResult<CommandOutput> {
-        let mut process = prepare_command(command, privilege)?;
         let mut child = process
             .env("LC_ALL", "C")
             .env("LANG", "C")
@@ -107,6 +109,30 @@ impl ProcessRunner for StdProcessRunner {
             stdout,
             stderr,
         })
+    }
+}
+
+impl ProcessRunner for StdProcessRunner {
+    fn capture(&self, command: &NativeCommand) -> AllpResult<CommandOutput> {
+        self.capture_with_privilege(command, PrivilegeRequirement::NoElevation)
+    }
+
+    fn capture_with_privilege(
+        &self,
+        command: &NativeCommand,
+        privilege: PrivilegeRequirement,
+    ) -> AllpResult<CommandOutput> {
+        let process = prepare_command(command, privilege)?;
+        self.capture_prepared(command, process)
+    }
+
+    fn capture_in_user_context(
+        &self,
+        command: &NativeCommand,
+        user: &UserAccount,
+    ) -> AllpResult<CommandOutput> {
+        let process = UserContextExecutor::prepare(command, user)?;
+        self.capture_prepared(command, process)
     }
 
     fn execute(&self, plan: &ExecutionPlan) -> AllpResult<ProcessStatus> {

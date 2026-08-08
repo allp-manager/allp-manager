@@ -55,7 +55,9 @@ fn run_allp_in_with_env(
         .env("XDG_CACHE_HOME", path.join("xdg-cache"))
         .env("XDG_STATE_HOME", path.join("xdg-state"))
         .env("XDG_CONFIG_HOME", path.join("xdg-config"))
+        .env_remove("ALLP_TEST_SUDO_EXECUTABLE")
         .env("NO_COLOR", "1");
+    configure_test_sudo(&mut command, path);
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -68,7 +70,8 @@ fn run_allp_pty(path: &Path, args: &[&str], input: &str) -> Output {
         .map(shell_quote)
         .collect::<Vec<_>>()
         .join(" ");
-    let mut child = Command::new("/usr/bin/script")
+    let mut command = Command::new("/usr/bin/script");
+    command
         .args(["-qfec", &command_line, "/dev/null"])
         .env("PATH", path)
         .env("ALLP_DISABLE_STANDARD_PATHS", "1")
@@ -77,12 +80,13 @@ fn run_allp_pty(path: &Path, args: &[&str], input: &str) -> Output {
         .env("XDG_CACHE_HOME", path.join("xdg-cache"))
         .env("XDG_STATE_HOME", path.join("xdg-state"))
         .env("XDG_CONFIG_HOME", path.join("xdg-config"))
+        .env_remove("ALLP_TEST_SUDO_EXECUTABLE")
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("script should start");
+        .stderr(Stdio::piped());
+    configure_test_sudo(&mut command, path);
+    let mut child = command.spawn().expect("script should start");
     child
         .stdin
         .as_mut()
@@ -95,7 +99,8 @@ fn run_allp_pty(path: &Path, args: &[&str], input: &str) -> Output {
 }
 
 fn run_allp_with_live_self_update(path: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_allp"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_allp"));
+    command
         .args(args)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .env("PATH", path)
@@ -104,9 +109,17 @@ fn run_allp_with_live_self_update(path: &Path, args: &[&str]) -> Output {
         .env("XDG_CACHE_HOME", path.join("xdg-cache"))
         .env("XDG_STATE_HOME", path.join("xdg-state"))
         .env("XDG_CONFIG_HOME", path.join("xdg-config"))
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("allp subprocess should run")
+        .env_remove("ALLP_TEST_SUDO_EXECUTABLE")
+        .env("NO_COLOR", "1");
+    configure_test_sudo(&mut command, path);
+    command.output().expect("allp subprocess should run")
+}
+
+fn configure_test_sudo(command: &mut Command, path: &Path) {
+    let sudo = path.join("sudo");
+    if sudo.is_file() {
+        command.env("ALLP_TEST_SUDO_EXECUTABLE", sudo);
+    }
 }
 
 fn shell_quote(value: &str) -> String {
@@ -129,6 +142,7 @@ fn stdout(output: &Output) -> String {
 fn global_verbose_is_distinct_from_version_and_works_before_subcommand() {
     let dir = temp_dir("global-verbose");
     install_fake_apt(&dir, &dir.join("executed"), 0, 0);
+    let unrelated_probe = dir.join("unrelated-flatpak-probe");
 
     let long = run_allp(
         &dir,
@@ -153,12 +167,30 @@ fn global_verbose_is_distinct_from_version_and_works_before_subcommand() {
         ],
     );
     let version = run_allp(&dir, &["--version"]);
+    write_executable(
+        &dir,
+        "flatpak",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' invoked >> '{}'\nexit 0\n",
+            unrelated_probe.display()
+        ),
+    );
     let doctor = run_allp(&dir, &["--verbose", "doctor", "homebrew", "--no-color"]);
 
     assert!(long.status.success(), "stderr: {}", stderr(&long));
     assert!(short.status.success(), "stderr: {}", stderr(&short));
     assert!(version.status.success(), "stderr: {}", stderr(&version));
     assert!(doctor.status.success(), "stderr: {}", stderr(&doctor));
+    let doctor_output = stdout(&doctor);
+    assert!(doctor_output.contains("\nHomebrew\n"));
+    assert!(!doctor_output.contains("\nSnap\n"));
+    assert!(!doctor_output.contains("\nFlatpak\n"));
+    assert!(!doctor_output.contains("  APT"));
+    assert!(!doctor_output.contains("apt-get"));
+    assert!(
+        !unrelated_probe.exists(),
+        "scoped Homebrew doctor must not invoke Flatpak probes"
+    );
     assert!(stdout(&version).starts_with("allp 0.3.5"));
     assert!(!stdout(&long).starts_with("allp 0.3.5"));
 }
@@ -420,6 +452,7 @@ fn install_fake_homebrew(
     before_json: &str,
     after_json: &str,
 ) {
+    let prefix = dir.display();
     let marker = marker.display();
     let counter = dir.join("brew-outdated-count");
     write_executable(
@@ -428,6 +461,7 @@ fn install_fake_homebrew(
         &format!(
             r#"#!/bin/sh
 if [ "$1" = "--version" ]; then printf '%s\n' 'Homebrew 4.6.0'; exit 0; fi
+if [ "$1" = "--prefix" ]; then printf '%s\n' '{prefix}'; exit 0; fi
 if [ "$1" = "help" ] && [ "$2" = "update-if-needed" ]; then exit {help_exit}; fi
 if [ "$1" = "update-if-needed" ]; then
   printf '%s\n' "update-if-needed HOME=$HOME USER=$USER" >> '{marker}'
@@ -847,7 +881,16 @@ fn install_fake_brew(dir: &Path) {
     write_executable(
         dir,
         "brew",
-        r#"#!/bin/sh
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' 'Homebrew 4.6.0'
+  exit 0
+fi
+if [ "$1" = "--prefix" ]; then
+  printf '%s\n' '{}'
+  exit 0
+fi
 if [ "$1" = "search" ]; then
   printf '%s\n' 'git'
   exit 0
@@ -868,6 +911,8 @@ if [ "$1" = "update" ] || [ "$1" = "upgrade" ]; then
 fi
 exit 0
 "#,
+            dir.display()
+        ),
     );
 }
 
@@ -2473,7 +2518,17 @@ fn update_skip_self_update_does_not_create_self_update_state() {
 fn update_self_only_offline_stops_before_backend_updates() {
     let dir = temp_dir("update-self-only");
     let marker = dir.join("executed");
+    let discovery_marker = dir.join("discovery-executed");
     install_fake_apt(&dir, &marker, 0, 0);
+    write_executable(
+        &dir,
+        "brew",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' 'Homebrew 6.0.15'; exit 0; fi\nif [ \"$1\" = \"--prefix\" ]; then printf '%s\\n' '{}'; exit 0; fi\nexit 0\n",
+            discovery_marker.display(),
+            dir.display()
+        ),
+    );
     let output = run_allp(
         &dir,
         &[
@@ -2489,6 +2544,10 @@ fn update_self_only_offline_stops_before_backend_updates() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(stdout(&output).contains("offline mode"));
     assert!(!marker.exists(), "--self-only must not update backends");
+    assert!(
+        !discovery_marker.exists(),
+        "phase 1 --self-only must finish before Homebrew/backend discovery"
+    );
 }
 
 #[test]
@@ -2519,7 +2578,10 @@ fn completed_standalone_self_update_guard_does_not_reenter_update_check() {
         &["self-update", "--no-color"],
         &[
             ("ALLP_SELF_UPDATE_COMPLETED", Path::new("1")),
-            ("ALLP_SELF_UPDATE_VERSION", Path::new("0.3.4")),
+            (
+                "ALLP_SELF_UPDATE_VERSION",
+                Path::new(allp::build_identity::DISPLAY_VERSION),
+            ),
         ],
     );
 
@@ -2527,7 +2589,11 @@ fn completed_standalone_self_update_guard_does_not_reenter_update_check() {
     assert!(stdout(&output).contains("completed in this process chain"));
     let state = fs::read_to_string(dir.join("xdg-state/allp/self-update.json"))
         .expect("deferred completion should update state");
-    assert!(state.contains("\"last_successful_version\": \"0.3.4\""));
+    assert!(state.contains(&format!(
+        "\"last_successful_version\": \"{}\"",
+        allp::build_identity::BASE_VERSION
+    )));
+    assert!(state.contains("\"last_successful_build\""));
 }
 
 #[test]
@@ -2759,6 +2825,57 @@ fn homebrew_upgrade_suppresses_auto_update_and_post_verifies() {
     assert!(executed.contains("upgrade no_auto=1 args=upgrade --no-ask"));
     assert!(stdout(&output).contains("updated: 2"));
     assert!(stdout(&output).contains("remaining: 0"));
+}
+
+#[test]
+fn homebrew_pre_execution_validation_failure_defers_dependent_upgrade() {
+    let dir = temp_dir("brew-pre-execution-validation");
+    let version_seen = dir.join("version-seen");
+    let mutation_marker = dir.join("mutation-executed");
+    write_executable(
+        &dir,
+        "brew",
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  if [ -f '{version_seen}' ]; then
+    printf '%s\n' 'brew became unavailable' >&2
+    exit 1
+  fi
+  /usr/bin/touch '{version_seen}'
+  printf '%s\n' 'Homebrew 6.0.15'
+  exit 0
+fi
+if [ "$1" = "--prefix" ]; then
+  printf '%s\n' '{prefix}'
+  exit 0
+fi
+if [ "$1" = "help" ] && [ "$2" = "update-if-needed" ]; then
+  exit 0
+fi
+if [ "$1" = "update-if-needed" ] || [ "$1" = "update" ] || [ "$1" = "outdated" ] || [ "$1" = "upgrade" ]; then
+  printf '%s\n' "$*" >> '{mutation_marker}'
+  exit 0
+fi
+exit 0
+"#,
+            version_seen = version_seen.display(),
+            prefix = dir.display(),
+            mutation_marker = mutation_marker.display(),
+        ),
+    );
+
+    let output = run_allp(&dir, &["upgrade", "--from", "brew", "--yes", "--no-color"]);
+
+    assert_eq!(output.status.code(), Some(8));
+    let output = stdout(&output);
+    assert!(output.contains("pre-execution validation failed"));
+    assert!(output.contains("Deferred"));
+    assert!(output.contains("required metadata refresh failed"));
+    assert!(
+        !mutation_marker.exists(),
+        "neither metadata mutation nor dependent upgrade may execute"
+    );
 }
 
 #[test]

@@ -8,6 +8,13 @@ on:
 permissions:
   contents: write
 
+env:
+  ALLP_BUILD_REVISION: "0"
+  ALLP_GIT_SHA: ${{ github.sha }}
+  ALLP_BUILD_ID: ${{ github.run_id }}.${{ github.run_attempt }}
+  ALLP_BUILD_CHANNEL: stable
+  ALLP_BUILD_OFFICIAL: "1"
+
 jobs:
   validate:
     runs-on: ubuntu-latest

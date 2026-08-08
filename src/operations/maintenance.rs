@@ -268,6 +268,7 @@ pub fn run(
     let mut failed = BTreeSet::new();
     while let Some(operation) = queue.pop_front() {
         index += 1;
+        let operation_id = operation.id;
         let plan = operation.plan;
         let blocked_by = operation
             .depends_on
@@ -280,6 +281,22 @@ pub fn run(
                 plan,
                 OperationStatus::Deferred,
                 Some("required metadata refresh failed; use --allow-stale-metadata to explicitly permit existing metadata".to_owned()),
+                context.privilege_context,
+            ));
+            continue;
+        }
+        let runtime = context.backend(&plan.backend_id)?;
+        if let Err(error) = runtime.backend.validate_before_execution(
+            &plan,
+            context.runner,
+            context.privilege_context,
+        ) {
+            failed.insert(operation_id);
+            defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
+            records.push(record_from_plan(
+                plan,
+                OperationStatus::Failed,
+                Some(format!("pre-execution validation failed: {error}")),
                 context.privilege_context,
             ));
             continue;
@@ -389,7 +406,7 @@ pub fn run(
                 }
             }
             Ok(status) => {
-                failed.insert(operation.id);
+                failed.insert(operation_id);
                 let error = classify_failure(context, &plan, &status);
                 let cancelled = status.code == Some(130);
                 let record = BackendOperationRecord {
@@ -430,7 +447,7 @@ pub fn run(
                 defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
             }
             Err(error) => {
-                failed.insert(operation.id);
+                failed.insert(operation_id);
                 defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
                 let record = BackendOperationRecord {
                     backend_id: plan.backend_id,

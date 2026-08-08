@@ -49,6 +49,8 @@ allp update --skip-self-update
 allp update --self-only
 allp update --check-only
 allp update --offline
+allp update --update-channel continuous
+allp update --update-channel stable
 allp update --update-channel prerelease
 
 allp upgrade
@@ -76,11 +78,14 @@ allp install typescript --from pnpm --dry-run
 allp search git --from brew
 
 allp doctor
+allp doctor homebrew
 allp doctor --json
 
 allp self-update
 allp self-update --check-only
 allp self-update --offline
+allp self-update --update-channel continuous
+allp self-update --update-channel stable
 allp self-update --update-channel prerelease
 ```
 
@@ -124,9 +129,9 @@ Development maintenance supports `--target`:
 
 ## Self-Update And Doctor
 
-`allp update` checks the trusted official GitHub release source before backend updates unless `--skip-self-update`, `--offline`, or the guarded same-process-chain completion marker applies. `--self-only` stops after that phase. `--check-only` and dry run cannot replace the binary. Unsupported targets leave the installed binary unchanged and ordinary updates can continue.
+`allp update` checks the trusted official GitHub build source before backend updates unless `--skip-self-update`, `--offline`, or the guarded same-process-chain completion marker applies. The default is the verified continuous main-branch channel; an explicitly selected stable channel remains configured. `--self-only` stops after that phase. `--check-only` and dry run cannot replace the binary. Unsupported targets leave the installed binary unchanged and ordinary updates can continue.
 
-`allp doctor` is read-only. It reports normalized platform, capability, Snap, Flatpak, backend, install-path, update-source, and data-directory state without exposing credentials.
+`allp doctor` is read-only. It reports normalized platform, capability, Snap, Flatpak, backend, install-path, update-source, and data-directory state without exposing credentials. `allp doctor homebrew` scopes output to the shared validated Homebrew locator and its provider history.
 
 ## Stable Exit Codes
 

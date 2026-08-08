@@ -1,14 +1,15 @@
 use crate::{
     backends::{
         contract::{command_path, BackendOperationCapability},
-        util::{capture_checked, match_kind},
+        util::{capture_checked_with_privilege, match_kind},
         Backend, CommandMap, CommandRequirement,
     },
+    discovery::revalidate_homebrew_executable,
     domain::{
         AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
         DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
         OperationKind, OperationStatus, PackageCandidate, PackageDomain, PackageInfo,
-        PrivilegeRequirement,
+        PrivilegeRequirement, RuntimePrivilegeContext,
     },
     execution::{CommandOutput, ProcessRunner},
 };
@@ -91,6 +92,32 @@ impl Backend for HomebrewBackend {
         }
     }
 
+    fn validate_before_execution(
+        &self,
+        plan: &ExecutionPlan,
+        runner: &dyn ProcessRunner,
+        context: &RuntimePrivilegeContext,
+    ) -> AllpResult<()> {
+        if !matches!(
+            plan.operation,
+            OperationKind::Install
+                | OperationKind::Remove
+                | OperationKind::Update
+                | OperationKind::Upgrade
+        ) {
+            return Ok(());
+        }
+        revalidate_homebrew_executable(&plan.command.program, context, runner)
+            .map(|_| ())
+            .map_err(|problem| {
+                AllpError::InvalidInput(format!(
+                    "Homebrew changed or became unusable after planning; refusing to execute {}: {}",
+                    plan.command.program.display(),
+                    problem.message
+                ))
+            })
+    }
+
     fn search(
         &self,
         commands: &CommandMap,
@@ -101,7 +128,10 @@ impl Backend for HomebrewBackend {
         let mut candidates = Vec::new();
         append_search(
             self,
-            runner.capture(&NativeCommand::new(brew).args(["search", "--formula", query])),
+            runner.capture_with_privilege(
+                &NativeCommand::new(brew).args(["search", "--formula", query]),
+                PrivilegeRequirement::OriginalUserRequired,
+            ),
             query,
             "Homebrew formulae",
             "Homebrew formula",
@@ -109,7 +139,10 @@ impl Backend for HomebrewBackend {
         );
         append_search(
             self,
-            runner.capture(&NativeCommand::new(brew).args(["search", "--cask", query])),
+            runner.capture_with_privilege(
+                &NativeCommand::new(brew).args(["search", "--cask", query]),
+                PrivilegeRequirement::OriginalUserRequired,
+            ),
             query,
             "Homebrew casks",
             "Homebrew cask",
@@ -117,10 +150,11 @@ impl Backend for HomebrewBackend {
         );
 
         if candidates.is_empty() {
-            let output = capture_checked(
+            let output = capture_checked_with_privilege(
                 self,
                 runner,
                 NativeCommand::new(brew).args(["search", query]),
+                PrivilegeRequirement::OriginalUserRequired,
             )?;
             append_lines(
                 self,
@@ -144,10 +178,11 @@ impl Backend for HomebrewBackend {
         let mut packages = Vec::new();
         append_installed(
             self,
-            &capture_checked(
+            &capture_checked_with_privilege(
                 self,
                 runner,
                 NativeCommand::new(brew).args(["list", "--formula", "--versions"]),
+                PrivilegeRequirement::OriginalUserRequired,
             )
             .unwrap_or_default(),
             "Homebrew formulae",
@@ -156,10 +191,11 @@ impl Backend for HomebrewBackend {
         );
         append_installed(
             self,
-            &capture_checked(
+            &capture_checked_with_privilege(
                 self,
                 runner,
                 NativeCommand::new(brew).args(["list", "--cask", "--versions"]),
+                PrivilegeRequirement::OriginalUserRequired,
             )
             .unwrap_or_default(),
             "Homebrew casks",
@@ -176,10 +212,11 @@ impl Backend for HomebrewBackend {
         package_id: &str,
     ) -> AllpResult<PackageInfo> {
         let brew = command_path(self, commands, "brew")?;
-        let output = capture_checked(
+        let output = capture_checked_with_privilege(
             self,
             runner,
             NativeCommand::new(brew).args(["info", package_id]),
+            PrivilegeRequirement::OriginalUserRequired,
         )?;
         Ok(PackageInfo {
             backend_id: self.id().to_owned(),
@@ -205,10 +242,11 @@ impl Backend for HomebrewBackend {
         package_id: &str,
     ) -> AllpResult<String> {
         let brew = command_path(self, commands, "brew")?;
-        capture_checked(
+        capture_checked_with_privilege(
             self,
             runner,
             NativeCommand::new(brew).args(["info", package_id]),
+            PrivilegeRequirement::OriginalUserRequired,
         )
     }
 

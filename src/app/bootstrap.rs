@@ -12,12 +12,11 @@ use crate::{
     execution::{privilege::runtime_context, ProcessRunner, StdProcessRunner},
     operations::{self, OperationContext},
     platform::PlatformContext,
-    release::Version,
     requirements::bootstrap_requirement_for_backend,
     self_update::{
-        apply_replacement, stage_release, CurlHttpClient, GitHubReleaseSource, ReplacementOutcome,
-        SelfUpdateState, SelfUpdater, UpdateAvailability, UpdateChannel, SELF_UPDATE_COMPLETED_ENV,
-        SELF_UPDATE_VERSION_ENV,
+        apply_replacement, stage_release, CurlHttpClient, ExpectedBinary, ExpectedBuildIdentity,
+        GitHubActionsBuildSource, ReplacementOutcome, SelfUpdateState, SelfUpdater,
+        UpdateAvailability, UpdateChannel, SELF_UPDATE_COMPLETED_ENV, SELF_UPDATE_VERSION_ENV,
     },
     state,
 };
@@ -45,6 +44,10 @@ impl App {
         let allow_bootstrap = command.allow_bootstrap();
         let no_color = command.no_color();
         let backend_filter = command.backend_filter().map(str::to_owned);
+        let doctor_backend_filter = match &command {
+            Commands::Doctor(args) => args.backend.clone(),
+            _ => None,
+        };
         let mut search_scope = command.search_scope();
         let target = command.target();
 
@@ -68,14 +71,34 @@ impl App {
             return Ok(0);
         }
         if let Commands::InternalReplace(args) = &command {
-            run_internal_replacement(&args.staged, &args.destination, &args.version)?;
+            let binary = ExpectedBinary::from_internal_args(&args.binary_sha256, args.binary_size)?;
+            let identity = ExpectedBuildIdentity::from_internal_args(
+                args.commit.as_deref(),
+                args.build_id.as_deref(),
+                args.target.as_deref(),
+            )?;
+            run_internal_replacement(
+                &args.staged,
+                &args.destination,
+                &args.version,
+                &binary,
+                identity.as_ref(),
+            )?;
             return Ok(0);
         }
         if let Commands::InternalDeferredReplace(args) = &command {
+            let binary = ExpectedBinary::from_internal_args(&args.binary_sha256, args.binary_size)?;
+            let identity = ExpectedBuildIdentity::from_internal_args(
+                args.commit.as_deref(),
+                args.build_id.as_deref(),
+                args.target.as_deref(),
+            )?;
             run_internal_deferred_replacement(
                 &args.staged,
                 &args.destination,
                 &args.version,
+                &binary,
+                identity.as_ref(),
                 &args.cleanup_dir,
                 &args.continuation,
             )?;
@@ -84,8 +107,24 @@ impl App {
         let platform = PlatformContext::detect(&privilege_context);
         cleanup_deferred_update(&platform);
         persist_deferred_update_success(&platform)?;
-        let mut capabilities = CapabilityRegistry::probe_defaults(&platform);
         let no_interactive = no_interactive || json || !std::io::stdin().is_terminal();
+
+        match self.run_early_self_update_phase(
+            &command,
+            &renderer,
+            &platform,
+            EarlySelfUpdateOptions {
+                dry_run,
+                no_interactive,
+                yes,
+                json,
+            },
+        )? {
+            EarlySelfUpdateOutcome::Continue => {}
+            EarlySelfUpdateOutcome::Exit(code) => return Ok(code),
+        }
+
+        let mut capabilities = CapabilityRegistry::probe_defaults(&platform);
         let mut root_context_notice_shown = false;
 
         if search_scope.is_none()
@@ -100,7 +139,13 @@ impl App {
             search_scope = Some(select_search_scope(no_interactive)?);
         }
 
-        let mut discovery = self.detector.discover(self.runner.as_ref());
+        let mut discovery = self.detector.discover_with_context_filtered(
+            self.runner.as_ref(),
+            &platform,
+            &privilege_context,
+            doctor_backend_filter.as_deref(),
+        );
+        capabilities.apply_discovery(&discovery.report);
         if matches!(&command, Commands::Install(_)) {
             if let Some(filter) = backend_filter.as_deref() {
                 match self.bootstrap_explicit_backend(
@@ -197,75 +242,7 @@ impl App {
             Commands::Remove(args) => {
                 operations::remove::run(&context, &args.package)?;
             }
-            Commands::Update(args) => {
-                let self_update_completed = std::env::var_os(SELF_UPDATE_COMPLETED_ENV).is_some();
-                let test_offline = cfg!(debug_assertions)
-                    && std::env::var_os("ALLP_SELF_UPDATE_TEST_OFFLINE").is_some();
-                let self_check_offline = args.offline || test_offline;
-                if !args.skip_self_update && !self_update_completed {
-                    renderer.phase("Phase 1: Allp self-update check");
-                    match self.run_self_update(
-                        &renderer,
-                        &platform,
-                        args.update_channel,
-                        args.check_only || dry_run,
-                        self_check_offline,
-                        no_interactive,
-                        yes,
-                        !json,
-                    ) {
-                        Ok(SelfUpdatePhase::Updated) => {
-                            if args.self_only {
-                                return Ok(0);
-                            }
-                            return reexecute_after_self_update(&platform.current_executable);
-                        }
-                        Ok(SelfUpdatePhase::Deferred) => return Ok(0),
-                        Ok(SelfUpdatePhase::NoChange) => {}
-                        Err(error) if args.self_only => return Err(error),
-                        Err(error) => {
-                            renderer.warn(&format!("Allp self-update check failed: {error}"));
-                            if !no_interactive
-                                && !confirm_execution(
-                                    false,
-                                    false,
-                                    ConfirmationRequest {
-                                        prompt: "Continue with backend updates?".to_owned(),
-                                        default_yes: true,
-                                        non_interactive_hint: String::new(),
-                                    },
-                                )?
-                            {
-                                renderer.info_message("Update cancelled");
-                                return Ok(0);
-                            }
-                        }
-                    }
-                } else {
-                    renderer.info_message(if args.skip_self_update {
-                        "Allp self-update check skipped by --skip-self-update."
-                    } else {
-                        "Allp self-update already completed in this process chain."
-                    });
-                }
-                if args.self_only {
-                    return Ok(0);
-                }
-                if args.offline {
-                    renderer.info_message(
-                        "Offline mode: backend metadata updates were not contacted or executed.",
-                    );
-                    return Ok(0);
-                }
-                renderer.phase("Phase 2: Platform and capability refresh");
-                renderer.info_message(&format!(
-                    "{} · {} · {}",
-                    platform.os.label(),
-                    platform.architecture.as_str(),
-                    platform
-                        .target_triple()
-                        .unwrap_or_else(|| "unsupported release target".to_owned())
-                ));
+            Commands::Update(_) => {
                 renderer.phase("Phase 3: Backend metadata/developer update planning");
                 let report = operations::update::run(&context)?;
                 if report.has_failures() {
@@ -284,8 +261,8 @@ impl App {
             Commands::Info(args) => {
                 operations::info::run(&context, &args.package, args.full, args.raw)?;
             }
-            Commands::Doctor(_) => {
-                let report = DoctorReport::collect(
+            Commands::Doctor(args) => {
+                let mut report = DoctorReport::collect(
                     platform,
                     &capabilities,
                     &discovery.report,
@@ -293,30 +270,123 @@ impl App {
                     self.runner.as_ref(),
                     &crate::backends::universal::snap::snapd_socket_path(),
                 );
+                if let Some(filter) = args.backend.as_deref() {
+                    if !report.retain_backend(filter) {
+                        return Err(AllpError::BackendNotDetected(filter.to_owned()));
+                    }
+                }
                 renderer.doctor(&report);
             }
-            Commands::SelfUpdate(args) => {
-                if std::env::var_os(SELF_UPDATE_COMPLETED_ENV).is_some() {
-                    renderer.info_message("Allp self-update completed in this process chain.");
-                } else {
-                    self.run_self_update(
-                        &renderer,
-                        &platform,
-                        args.update_channel,
-                        args.check_only || args.mutation.dry_run,
-                        args.offline,
-                        no_interactive,
-                        yes,
-                        true,
-                    )?;
-                }
-            }
+            Commands::SelfUpdate(_) => unreachable!("self-update exits before backend discovery"),
             Commands::InternalSnapdInstall(_)
             | Commands::InternalReplace(_)
             | Commands::InternalDeferredReplace(_) => unreachable!(),
         }
 
         Ok(0)
+    }
+
+    fn run_early_self_update_phase(
+        &self,
+        command: &Commands,
+        renderer: &Renderer,
+        platform: &PlatformContext,
+        options: EarlySelfUpdateOptions,
+    ) -> AllpResult<EarlySelfUpdateOutcome> {
+        match command {
+            Commands::SelfUpdate(args) => {
+                if std::env::var_os(SELF_UPDATE_COMPLETED_ENV).is_some() {
+                    renderer.info_message("Allp self-update completed in this process chain.");
+                } else {
+                    self.run_self_update(
+                        renderer,
+                        platform,
+                        args.update_channel,
+                        args.check_only || args.mutation.dry_run,
+                        args.offline,
+                        options.no_interactive,
+                        options.yes,
+                        true,
+                    )?;
+                }
+                Ok(EarlySelfUpdateOutcome::Exit(0))
+            }
+            Commands::Update(args) => {
+                let self_update_completed = std::env::var_os(SELF_UPDATE_COMPLETED_ENV).is_some();
+                let test_offline = cfg!(debug_assertions)
+                    && std::env::var_os("ALLP_SELF_UPDATE_TEST_OFFLINE").is_some();
+                let self_check_offline = args.offline || test_offline;
+                if !args.skip_self_update && !self_update_completed {
+                    renderer.phase("Phase 1: Allp self-update check");
+                    match self.run_self_update(
+                        renderer,
+                        platform,
+                        args.update_channel,
+                        args.check_only || options.dry_run,
+                        self_check_offline,
+                        options.no_interactive,
+                        options.yes,
+                        !options.json,
+                    ) {
+                        Ok(SelfUpdatePhase::Updated) => {
+                            if args.self_only {
+                                return Ok(EarlySelfUpdateOutcome::Exit(0));
+                            }
+                            let code = reexecute_after_self_update(&platform.current_executable)?;
+                            return Ok(EarlySelfUpdateOutcome::Exit(code));
+                        }
+                        Ok(SelfUpdatePhase::Deferred) => {
+                            return Ok(EarlySelfUpdateOutcome::Exit(0));
+                        }
+                        Ok(SelfUpdatePhase::NoChange) => {}
+                        Err(error) if args.self_only => return Err(error),
+                        Err(error) => {
+                            renderer.warn(&format!("Allp self-update check failed: {error}"));
+                            if !options.no_interactive
+                                && !confirm_execution(
+                                    false,
+                                    false,
+                                    ConfirmationRequest {
+                                        prompt: "Continue with backend updates?".to_owned(),
+                                        default_yes: true,
+                                        non_interactive_hint: String::new(),
+                                    },
+                                )?
+                            {
+                                renderer.info_message("Update cancelled");
+                                return Ok(EarlySelfUpdateOutcome::Exit(0));
+                            }
+                        }
+                    }
+                } else {
+                    renderer.info_message(if args.skip_self_update {
+                        "Allp self-update check skipped by --skip-self-update."
+                    } else {
+                        "Allp self-update already completed in this process chain."
+                    });
+                }
+                if args.self_only {
+                    return Ok(EarlySelfUpdateOutcome::Exit(0));
+                }
+                if args.offline {
+                    renderer.info_message(
+                        "Offline mode: backend metadata updates were not contacted or executed.",
+                    );
+                    return Ok(EarlySelfUpdateOutcome::Exit(0));
+                }
+                renderer.phase("Phase 2: Platform and capability refresh");
+                renderer.info_message(&format!(
+                    "{} · {} · {}",
+                    platform.os.label(),
+                    platform.architecture.as_str(),
+                    platform
+                        .target_triple()
+                        .unwrap_or_else(|| "unsupported release target".to_owned())
+                ));
+                Ok(EarlySelfUpdateOutcome::Continue)
+            }
+            _ => Ok(EarlySelfUpdateOutcome::Continue),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -332,10 +402,22 @@ impl App {
         render_check: bool,
     ) -> AllpResult<SelfUpdatePhase> {
         let state_path = platform.state_dir.join("self-update.json");
-        let persisted = state::read_json::<SelfUpdateState>(&state_path)?.unwrap_or_default();
-        let channel = requested_channel.unwrap_or(persisted.update_channel);
+        let mut persisted = state::read_json::<SelfUpdateState>(&state_path)?.unwrap_or_default();
+        let channel = if let Some(requested) = requested_channel {
+            persisted.update_channel = requested;
+            persisted.channel_configured = true;
+            state::write_json_atomically(&state_path, &persisted)?;
+            requested
+        } else if persisted.channel_configured {
+            persisted.update_channel
+        } else {
+            // Migrate the old implicit stable default. An explicit `--update-channel stable`
+            // remains sticky through `channel_configured`.
+            UpdateChannel::Continuous
+        };
         let client = CurlHttpClient::default();
-        let source = GitHubReleaseSource::official_with_etag(&client, persisted.etag.as_deref());
+        let source =
+            GitHubActionsBuildSource::official_with_etag(&client, persisted.etag.as_deref());
         let updater = SelfUpdater::new(&source, platform, state_path);
         let check = updater.check(channel, offline)?;
         if render_check {
@@ -367,7 +449,11 @@ impl App {
             renderer.info_message("Allp self-update cancelled");
             return Ok(SelfUpdatePhase::NoChange);
         }
-        updater.mark_attempted(release.version)?;
+        if let Some(identity) = &release.build_identity {
+            updater.mark_attempted_build(identity)?;
+        } else {
+            updater.mark_attempted(release.version)?;
+        }
         let staged = stage_release(release, asset, platform)?;
         let outcome = apply_replacement(&staged, platform)?;
         match outcome {
@@ -378,8 +464,11 @@ impl App {
                     backend_name: "Allp".to_owned(),
                     operation: OperationKind::Update,
                     action: "Atomically replace the installed Allp binary".to_owned(),
-                    package_id: Some(format!("allp {}", release.version)),
-                    source: Some("official GitHub release".to_owned()),
+                    package_id: Some(format!("allp {}", staged.display_version)),
+                    source: Some(format!(
+                        "official GitHub {} channel",
+                        release.channel.as_str()
+                    )),
                     scope: Some(platform.current_executable.display().to_string()),
                     details: vec![("Rollback".to_owned(), "Enabled".to_owned())],
                     command,
@@ -416,9 +505,16 @@ impl App {
                 return Ok(SelfUpdatePhase::Deferred);
             }
         }
-        updater.mark_successful(release.version)?;
+        if let Some(identity) = &release.build_identity {
+            updater.mark_successful_build(identity)?;
+        } else {
+            updater.mark_successful(release.version)?;
+        }
         let _ = fs::remove_dir_all(&staged.staging_dir);
-        renderer.success_message(&format!("Allp {} installed successfully.", release.version));
+        renderer.success_message(&format!(
+            "Allp {} installed successfully.",
+            staged.display_version
+        ));
         Ok(SelfUpdatePhase::Updated)
     }
 
@@ -503,9 +599,14 @@ impl App {
                 },
             });
         }
-        let refreshed = capabilities.refresh_executable(&requirement.id);
-        *discovery = self.detector.discover(self.runner.as_ref());
-        let verified = refreshed.availability == CapabilityAvailability::Available
+        capabilities.refresh_executable(&requirement.id);
+        *discovery =
+            self.detector
+                .discover_with_context(self.runner.as_ref(), platform, privilege_context);
+        capabilities.apply_discovery(&discovery.report);
+        let verified = capabilities
+            .executable(&requirement.id)
+            .is_some_and(|capability| capability.availability == CapabilityAvailability::Available)
             && discovery.report.entries.iter().any(|entry| {
                 (entry.backend_id.eq_ignore_ascii_case(filter)
                     || entry
@@ -540,6 +641,20 @@ enum SelfUpdatePhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EarlySelfUpdateOutcome {
+    Continue,
+    Exit(u8),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EarlySelfUpdateOptions {
+    dry_run: bool,
+    no_interactive: bool,
+    yes: bool,
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrerequisiteOutcome {
     NotNeeded,
     DryRunComplete,
@@ -555,7 +670,13 @@ fn validate_internal_socket(path: &Path) -> AllpResult<()> {
     Ok(())
 }
 
-fn run_internal_replacement(staged: &Path, destination: &Path, version: &str) -> AllpResult<()> {
+fn run_internal_replacement(
+    staged: &Path,
+    destination: &Path,
+    version: &str,
+    binary: &ExpectedBinary,
+    identity: Option<&ExpectedBuildIdentity>,
+) -> AllpResult<()> {
     if !staged.is_absolute() || !destination.is_absolute() {
         return Err(AllpError::InvalidInput(
             "internal replacement paths must be absolute".to_owned(),
@@ -568,16 +689,21 @@ fn run_internal_replacement(staged: &Path, destination: &Path, version: &str) ->
             destination.display()
         )));
     }
-    let version = version
-        .parse::<Version>()
-        .map_err(AllpError::InvalidInput)?;
-    crate::self_update::replace_binary_atomically(staged, destination, version)
+    crate::self_update::replace_binary_atomically_verified(
+        staged,
+        destination,
+        version,
+        binary,
+        identity,
+    )
 }
 
 fn run_internal_deferred_replacement(
     staged: &Path,
     destination: &Path,
     version: &str,
+    binary: &ExpectedBinary,
+    identity: Option<&ExpectedBuildIdentity>,
     cleanup_dir: &Path,
     continuation: &[OsString],
 ) -> AllpResult<()> {
@@ -586,13 +712,12 @@ fn run_internal_deferred_replacement(
             "internal deferred replacement paths must be absolute".to_owned(),
         ));
     }
-    let version = version
-        .parse::<Version>()
-        .map_err(AllpError::InvalidInput)?;
-    crate::self_update::run_deferred_replacement(
+    crate::self_update::run_deferred_replacement_verified(
         staged,
         destination,
         version,
+        binary,
+        identity,
         cleanup_dir,
         continuation,
     )
@@ -633,13 +758,18 @@ fn persist_deferred_update_success(platform: &PlatformContext) -> AllpResult<()>
     let Some(version) = std::env::var_os(SELF_UPDATE_VERSION_ENV) else {
         return Ok(());
     };
-    let version = version
-        .to_string_lossy()
-        .parse::<Version>()
-        .map_err(AllpError::InvalidInput)?;
+    let expected_display = version.to_string_lossy();
+    let installed_build = crate::build_identity::AllpBuildIdentity::current();
+    if installed_build.display_version() != expected_display {
+        return Err(AllpError::InvalidInput(format!(
+            "deferred self-update completed with build {}, expected {expected_display}",
+            installed_build.display_version()
+        )));
+    }
     let state_path = platform.state_dir.join("self-update.json");
     let mut persisted = state::read_json::<SelfUpdateState>(&state_path)?.unwrap_or_default();
-    persisted.last_successful_version = Some(version);
+    persisted.last_successful_version = Some(installed_build.base_version);
+    persisted.last_successful_build = Some(installed_build);
     state::write_json_atomically(&state_path, &persisted)
 }
 

@@ -6,7 +6,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، Flatpak، Snap، Homebrew/Linuxbrew، Python و Node را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه فعلی: **0.3.5**
+نسخه Build فعلی: **0.3.5.1** (نسخه پایه Cargo: **0.3.5**)
 سطح بلوغ: **Public Alpha**
 
 ## چرا Allp وجود دارد
@@ -59,6 +59,8 @@ allp --version
 allp update && allp upgrade
 ```
 
+`allp --version` نسخه نمایشی Build را نشان می دهد و `allp --version --verbose` نسخه پایه، revision، channel، commit، Build ID، target و رسمی بودن Build را نیز گزارش می کند. کانال پیش فرض `allp update`، Buildهای Continuous اعتبارسنجی شده شاخه `main` است؛ بنابراین یک اصلاح کوچک می تواند بدون تغییر SemVer از `0.3.5.1` به `0.3.5.2` به روز شود. برای Releaseهای tag شده از `--update-channel stable` استفاده کنید.
+
 `make install` باینری release را می سازد و آن را به
 `/usr/local/bin/allp` نصب می کند. برای همین کپی فایل از `sudo install` استفاده
 می شود. برای نصب user-local بدون sudo:
@@ -98,7 +100,7 @@ allp search git --json
 
 دستور `update` فقط metadata مربوط به Backendها را تازه می کند و Packageهای Snap، Flatpak یا Homebrew را Upgrade نمی کند. دستور `upgrade` نرم افزارهای نصب شده را Upgrade می کند. اگر APT ابتدا به refresh شدن metadata نیاز داشته باشد، آن مرحله یک dependency اجباری است و شکست آن باعث Deferred شدن APT upgrade می شود. گزینه `--allow-stale-metadata` فقط یک override صریح است و رفتار پیش فرض نیست.
 
-برای refresh کردن metadata در Homebrew، Allp ابتدا `brew update-if-needed` را ترجیح می دهد. کشف و اجرای Upgrade با `HOMEBREW_NO_AUTO_UPDATE=1` و خروجی ساختاریافته `brew outdated --json=v2` انجام می شود؛ Upgrade خالی اجرا نمی شود و وضعیت outdated پس از اجرا دوباره بررسی می شود. حتی اگر Allp با sudo اجرا شده باشد، Homebrew در context کاربر اصلی اجرا می شود.
+کشف Homebrew در detect، doctor و عملیات package از یک locator اعتبارسنجی شده مشترک استفاده می کند. این locator مسیر تنظیم شده، PATH، state اعتبارسنجی مجدد شده، مسیرهای قطعی کاربر اصلی و prefixهای رسمی Linux/macOS را بررسی می کند؛ بنابراین حذف Linuxbrew از PATH ریشه توسط sudo باعث ناپدید شدن نصب موجود نمی شود. برای refresh کردن metadata در Homebrew، Allp ابتدا `brew update-if-needed` را ترجیح می دهد. کشف و اجرای Upgrade با `HOMEBREW_NO_AUTO_UPDATE=1` و خروجی ساختاریافته `brew outdated --json=v2` انجام می شود؛ Upgrade خالی اجرا نمی شود و وضعیت outdated پس از اجرا دوباره بررسی می شود. probeها و عملیات Homebrew حتی هنگام اجرای Allp با sudo در context مالک اعتبارسنجی شده اجرا می شوند.
 
 برای انتخاب دقیق Backend از `--from` استفاده کنید:
 
@@ -235,7 +237,7 @@ allp update --offline
 allp update --update-channel prerelease
 ```
 
-channel پیش فرض `stable` است و prerelease فقط صریح انتخاب و persist می شود. Release باید `allp-release-manifest.json` معتبر داشته باشد. نسخه ها با SemVer عددی مقایسه می شوند و asset بر اساس OS، معماری، libc، فرمت executable و target انتخاب می شود.
+channel پیش‌فرض، buildهای verified و continuous شاخه `main` است؛ انتخاب stable و prerelease صریح و persist می‌شود. Release پایدار باید `allp-release-manifest.json` معتبر داشته باشد و build continuous از manifest اختصاصی و workflow identity مورد اعتماد استفاده می‌کند. ابتدا SemVer پایه و سپس build revision مقایسه می‌شود؛ asset بر اساس OS، معماری، libc، فرمت executable و target انتخاب می‌شود و target ناسازگار بدون staging گزارش می‌شود.
 
 Download فقط HTTPS، با timeout، redirect و size limit و فقط برای repository، tag و asset دقیق انجام می شود. SHA-256، مسیرهای archive و نسخه binary staged قبل از نصب بررسی می شوند. در Linux/macOS جایگزینی با staging هم فایل سیستم، backup rollback و verification نهایی انجام می شود؛ برای مسیر non-writable فقط helper کوچک elevate می شود. Windows از helper deferred استفاده می کند. re-execution محافظت شده باعث می شود `allp update` فقط یک بار ادامه یابد و loop نسازد. حالت offline با GitHub یا remote sourceها تماس نمی گیرد.
 

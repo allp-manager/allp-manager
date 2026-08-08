@@ -2,6 +2,7 @@ pub mod alternatives;
 pub mod app;
 pub mod backends;
 pub mod bootstrap;
+pub mod build_identity;
 pub mod capabilities;
 pub mod cli;
 pub mod diagnostics;

@@ -104,36 +104,72 @@ impl Renderer {
         println!("  Cache: {}", report.platform.cache_dir.display());
         println!("  State: {}", report.platform.state_dir.display());
         println!("  Config: {}", report.platform.config_dir.display());
-        println!("\nSnap");
-        println!("  Socket: {}", report.snap_socket.path);
-        println!("  Exists: {}", yes_no(report.snap_socket.exists));
-        println!(
-            "  Reachable: {}",
-            report
-                .snap_socket
-                .reachable
-                .map(yes_no)
-                .unwrap_or("not tested")
-        );
-        if let Some(reason) = &report.snap_socket.reason {
-            println!("  Reason: {reason}");
-        }
-        println!("\nFlatpak");
-        println!("  Status: {}", report.flatpak.status);
-        println!("  Configured remotes: {}", report.flatpak.remotes.len());
-        for remote in &report.flatpak.remotes {
+        if let Some(snap_socket) = &report.snap_socket {
+            println!("\nSnap");
+            println!("  Socket: {}", snap_socket.path);
+            println!("  Exists: {}", yes_no(snap_socket.exists));
             println!(
-                "    {}{}",
-                remote.name,
-                remote
-                    .url
-                    .as_ref()
-                    .map(|url| format!(" · {url}"))
-                    .unwrap_or_default()
+                "  Reachable: {}",
+                snap_socket.reachable.map(yes_no).unwrap_or("not tested")
             );
+            if let Some(reason) = &snap_socket.reason {
+                println!("  Reason: {reason}");
+            }
         }
-        if let Some(reason) = &report.flatpak.reason {
-            println!("  Reason: {reason}");
+        if let Some(flatpak) = &report.flatpak {
+            println!("\nFlatpak");
+            println!("  Status: {}", flatpak.status);
+            println!("  Configured remotes: {}", flatpak.remotes.len());
+            for remote in &flatpak.remotes {
+                println!(
+                    "    {}{}",
+                    remote.name,
+                    remote
+                        .url
+                        .as_ref()
+                        .map(|url| format!(" · {url}"))
+                        .unwrap_or_default()
+                );
+            }
+            if let Some(reason) = &flatpak.reason {
+                println!("  Reason: {reason}");
+            }
+        }
+        if let Some(discovery) = &report.homebrew {
+            println!("\nHomebrew");
+            println!("  Discovery attempts:");
+            for attempt in &discovery.attempts {
+                println!("    {}:", attempt.source.label());
+                if let Some(executable) = &attempt.executable {
+                    println!("      Candidate: {}", executable.display());
+                }
+                println!("      Status: {}", attempt.status.label());
+                if let Some(message) = &attempt.message {
+                    println!("      Detail: {message}");
+                }
+            }
+            if let Some(installation) = discovery.state.installation() {
+                println!(
+                    "  Selected executable: {}",
+                    installation.executable.display()
+                );
+                println!(
+                    "  Resolved executable: {}",
+                    installation.resolved_executable.display()
+                );
+                println!("  Version: {}", installation.version);
+                println!("  Prefix: {}", installation.prefix.display());
+                println!("  Owner: {}", installation.owner.name);
+                if let Some(uid) = installation.owner.uid {
+                    println!("  Owner uid: {uid}");
+                }
+                println!("  Backend: Ready");
+            } else if let Some(problem) = discovery.state.problem() {
+                println!("  Backend: Installed but unavailable");
+                println!("  Reason: {}", problem.message);
+            } else {
+                println!("  Backend: Not installed");
+            }
         }
         println!("\nExecutables");
         for executable in &report.executables {
@@ -164,20 +200,35 @@ impl Renderer {
             #[derive(Serialize)]
             struct JsonCheck<'a> {
                 current_version: String,
+                current_base_version: String,
+                current_build_revision: u64,
+                current_commit: &'a str,
                 status: &'a str,
                 available_version: Option<String>,
+                available_commit: Option<&'a str>,
                 target: &'a Option<String>,
                 asset: Option<&'a str>,
                 install_path: String,
                 message: &'a Option<String>,
             }
             self.render_json(&JsonCheck {
-                current_version: check.current_version.to_string(),
+                current_version: check.current_build.display_version(),
+                current_base_version: check.current_version.to_string(),
+                current_build_revision: check.current_build.build_revision,
+                current_commit: &check.current_build.git_commit,
                 status: update_availability_label(check.availability),
-                available_version: check
+                available_version: check.release.as_ref().map(|release| {
+                    release
+                        .build_identity
+                        .as_ref()
+                        .map(|identity| identity.display_version())
+                        .unwrap_or_else(|| release.version.to_string())
+                }),
+                available_commit: check
                     .release
                     .as_ref()
-                    .map(|release| release.version.to_string()),
+                    .and_then(|release| release.build_identity.as_ref())
+                    .map(|identity| identity.git_commit.as_str()),
                 target: &check.target,
                 asset: check.asset.as_ref().map(|asset| asset.archive.as_str()),
                 install_path: check.install_path.display().to_string(),
@@ -190,8 +241,24 @@ impl Renderer {
                 let release = check.release.as_ref().expect("available release");
                 let asset = check.asset.as_ref().expect("available asset");
                 println!("{}", self.heading("Allp Update Available"));
-                println!("\nCurrent version:\n  {}", check.current_version);
-                println!("\nAvailable version:\n  {}", release.version);
+                println!(
+                    "\nCurrent version:\n  {}",
+                    check.current_build.display_version()
+                );
+                println!(
+                    "\nAvailable version:\n  {}",
+                    release
+                        .build_identity
+                        .as_ref()
+                        .map(|identity| identity.display_version())
+                        .unwrap_or_else(|| release.version.to_string())
+                );
+                if let Some(remote) = &release.build_identity {
+                    println!(
+                        "\nChanges:\n  {} → {}",
+                        check.current_build.git_commit, remote.git_commit
+                    );
+                }
                 println!(
                     "\nTarget:\n  {}",
                     check.target.as_deref().unwrap_or("unsupported")
@@ -200,7 +267,13 @@ impl Renderer {
                 println!("\nInstall path:\n  {}", check.install_path.display());
             }
             UpdateAvailability::UpToDate => {
-                println!("Allp {} is up to date.", check.current_version);
+                println!(
+                    "Allp {} is up to date.",
+                    check.current_build.display_version()
+                );
+                if let Some(message) = &check.message {
+                    println!("  {message}");
+                }
             }
             UpdateAvailability::Offline => {
                 println!("Allp self-update check skipped in offline mode.");
@@ -313,6 +386,35 @@ impl Renderer {
                 println!("Commands:");
                 for (key, path) in &entry.commands {
                     println!("  {key:<11} {path}");
+                }
+            }
+            if let Some(discovery) = &entry.homebrew {
+                println!("Discovery attempts:");
+                for attempt in &discovery.attempts {
+                    let candidate = attempt
+                        .executable
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "none".to_owned());
+                    println!(
+                        "  {:<32} {:<11} {}",
+                        attempt.source.label(),
+                        attempt.status.label(),
+                        candidate
+                    );
+                    if let Some(message) = &attempt.message {
+                        println!("    {message}");
+                    }
+                }
+                if let Some(installation) = discovery.state.installation() {
+                    println!("Selected executable: {}", installation.executable.display());
+                    println!(
+                        "Resolved executable: {}",
+                        installation.resolved_executable.display()
+                    );
+                    println!("Version: {}", installation.version);
+                    println!("Prefix: {}", installation.prefix.display());
+                    println!("Owner: {}", installation.owner.name);
                 }
             }
             println!(

@@ -242,6 +242,16 @@ pub trait Backend: Send + Sync {
         Ok(())
     }
 
+    /// Revalidate backend runtime identity immediately before a mutating plan is spawned.
+    fn validate_before_execution(
+        &self,
+        _plan: &ExecutionPlan,
+        _runner: &dyn ProcessRunner,
+        _context: &RuntimePrivilegeContext,
+    ) -> AllpResult<()> {
+        Ok(())
+    }
+
     fn classify_execution_failure(
         &self,
         _plan: &ExecutionPlan,

@@ -1,9 +1,11 @@
 use super::{
-    checksum::verify_sha256, github::validate_release_asset_url, ReleaseDescriptor,
-    OFFICIAL_REPOSITORY,
+    checksum::{sha256_file, verify_sha256},
+    github::validate_release_asset_url,
+    trusted_helper::resolve_self_update_helper,
+    ReleaseDescriptor, OFFICIAL_REPOSITORY,
 };
 use crate::{
-    discovery::path::find_executable,
+    build_identity::{AllpBuildIdentity, BuildChannel},
     domain::{AllpError, AllpResult, NativeCommand},
     platform::{OperatingSystem, PlatformContext},
     release::{ReleaseAsset, Version},
@@ -17,15 +19,147 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
+
 const MAX_ASSET_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_BINARY_BYTES: u64 = 256 * 1024 * 1024;
 const TRANSIENT_FS_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const TRANSIENT_FS_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone)]
 pub struct StagedRelease {
     pub version: Version,
+    pub display_version: String,
+    pub expected_binary: ExpectedBinary,
+    pub expected_identity: Option<ExpectedBuildIdentity>,
     pub binary_path: PathBuf,
     pub staging_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedBinary {
+    pub sha256: String,
+    pub size: u64,
+}
+
+impl ExpectedBinary {
+    fn from_path(path: &Path) -> AllpResult<Self> {
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.file_type().is_file() {
+            return Err(AllpError::InvalidInput(format!(
+                "staged binary is not a regular file: {}",
+                path.display()
+            )));
+        }
+        let size = metadata.len();
+        if size == 0 || size > MAX_BINARY_BYTES {
+            return Err(AllpError::InvalidInput(format!(
+                "staged binary size {size} is outside Allp's safety policy"
+            )));
+        }
+        let sha256 = sha256_file(path)?;
+        let current = fs::symlink_metadata(path)?;
+        if !current.file_type().is_file() || current.len() != size {
+            return Err(AllpError::InvalidInput(
+                "staged binary changed while its identity was measured".to_owned(),
+            ));
+        }
+        Ok(Self { sha256, size })
+    }
+
+    pub fn from_internal_args(sha256: &str, size: u64) -> AllpResult<Self> {
+        if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(AllpError::InvalidInput(
+                "internal replacement requires a 64-hex staged binary SHA-256".to_owned(),
+            ));
+        }
+        if size == 0 || size > MAX_BINARY_BYTES {
+            return Err(AllpError::InvalidInput(format!(
+                "internal replacement staged binary size {size} is outside Allp's safety policy"
+            )));
+        }
+        Ok(Self {
+            sha256: sha256.to_ascii_lowercase(),
+            size,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedBuildIdentity {
+    pub git_commit: String,
+    pub build_id: String,
+    pub target: String,
+}
+
+impl ExpectedBuildIdentity {
+    fn from_published(identity: &AllpBuildIdentity) -> AllpResult<Self> {
+        identity
+            .validate_published()
+            .map_err(AllpError::InvalidInput)?;
+        if identity.channel != BuildChannel::Continuous || !identity.official {
+            return Err(AllpError::InvalidInput(
+                "continuous replacement requires an official continuous build identity".to_owned(),
+            ));
+        }
+        Ok(Self {
+            git_commit: identity.git_commit.clone(),
+            build_id: identity.build_id.clone(),
+            target: identity.target.clone(),
+        })
+    }
+
+    pub fn from_internal_args(
+        commit: Option<&str>,
+        build_id: Option<&str>,
+        target: Option<&str>,
+    ) -> AllpResult<Option<Self>> {
+        match (commit, build_id, target) {
+            (None, None, None) => Ok(None),
+            (Some(commit), Some(build_id), Some(target))
+                if valid_full_git_commit(commit)
+                    && !build_id.trim().is_empty()
+                    && !target.trim().is_empty() =>
+            {
+                Ok(Some(Self {
+                    git_commit: commit.to_owned(),
+                    build_id: build_id.to_owned(),
+                    target: target.to_owned(),
+                }))
+            }
+            _ => Err(AllpError::InvalidInput(
+                "internal continuous replacement requires a full 40- or 64-hex commit, build ID, and target together".to_owned(),
+            )),
+        }
+    }
+}
+
+fn valid_full_git_commit(commit: &str) -> bool {
+    matches!(commit.len(), 40 | 64) && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn replacement_verification_arguments(
+    binary: &ExpectedBinary,
+    identity: Option<&ExpectedBuildIdentity>,
+) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from("--binary-sha256"),
+        OsString::from(&binary.sha256),
+        OsString::from("--binary-size"),
+        OsString::from(binary.size.to_string()),
+    ];
+    if let Some(identity) = identity {
+        arguments.extend([
+            OsString::from("--commit"),
+            OsString::from(&identity.git_commit),
+            OsString::from("--build-id"),
+            OsString::from(&identity.build_id),
+            OsString::from("--target"),
+            OsString::from(&identity.target),
+        ]);
+    }
+    arguments
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +187,16 @@ pub fn stage_release(
     validate_release_asset_url(OFFICIAL_REPOSITORY, &release.tag, &url)?;
     let staging_dir = create_staging_directory(&platform.cache_dir, release.version)?;
     let archive_path = staging_dir.join(&asset.archive);
+    let display_version = release
+        .build_identity
+        .as_ref()
+        .map(|identity| identity.display_version())
+        .unwrap_or_else(|| release.version.to_string());
+    let expected_identity = release
+        .build_identity
+        .as_ref()
+        .map(ExpectedBuildIdentity::from_published)
+        .transpose()?;
     let result = (|| -> AllpResult<StagedRelease> {
         download_asset(&url, &archive_path, asset.size)?;
         verify_sha256(&archive_path, &asset.sha256)?;
@@ -60,9 +204,18 @@ pub fn stage_release(
         fs::create_dir(&extract_dir)?;
         extract_archive_safely(&archive_path, &extract_dir, platform.os)?;
         let binary_path = find_staged_binary(&extract_dir, &asset.binary)?;
-        verify_staged_binary(&binary_path, release.version)?;
+        let expected_binary = ExpectedBinary::from_path(&binary_path)?;
+        verify_staged_binary(
+            &binary_path,
+            &display_version,
+            &expected_binary,
+            expected_identity.as_ref(),
+        )?;
         Ok(StagedRelease {
             version: release.version,
+            display_version: display_version.clone(),
+            expected_binary,
+            expected_identity: expected_identity.clone(),
             binary_path,
             staging_dir: staging_dir.clone(),
         })
@@ -83,21 +236,27 @@ pub fn apply_replacement(
         });
     }
     if !platform.executable_writable {
-        let helper = NativeCommand::new(&platform.current_executable).args([
+        let mut helper = NativeCommand::new(&platform.current_executable).args([
             "internal-replace",
             "--staged",
             staged.binary_path.to_string_lossy().as_ref(),
             "--destination",
             platform.current_executable.to_string_lossy().as_ref(),
             "--version",
-            &staged.version.to_string(),
+            &staged.display_version,
         ]);
+        helper = helper.args(replacement_verification_arguments(
+            &staged.expected_binary,
+            staged.expected_identity.as_ref(),
+        ));
         return Ok(ReplacementOutcome::RequiresElevation { command: helper });
     }
-    replace_binary_atomically(
+    replace_binary_atomically_verified(
         &staged.binary_path,
         &platform.current_executable,
-        staged.version,
+        &staged.display_version,
+        &staged.expected_binary,
+        staged.expected_identity.as_ref(),
     )?;
     Ok(ReplacementOutcome::Replaced)
 }
@@ -113,28 +272,43 @@ pub fn schedule_deferred_replacement(
             operation: "deferred replacement outside Windows".to_owned(),
         });
     }
+    verify_binary_evidence(&staged.binary_path, &staged.expected_binary)?;
     let helper = staged.staging_dir.join("allp-replace-helper.exe");
     fs::copy(&platform.current_executable, &helper)?;
-    let mut command = Command::new(&helper);
+    let mut command = deferred_replacement_command(&helper, staged, platform, continuation);
+    command.spawn()?;
+    Ok(())
+}
+
+fn deferred_replacement_command(
+    helper: &Path,
+    staged: &StagedRelease,
+    platform: &PlatformContext,
+    continuation: &[OsString],
+) -> Command {
+    let mut command = Command::new(helper);
+    command.args([
+        "internal-deferred-replace",
+        "--staged",
+        staged.binary_path.to_string_lossy().as_ref(),
+        "--destination",
+        platform.current_executable.to_string_lossy().as_ref(),
+        "--version",
+        &staged.display_version,
+        "--cleanup-dir",
+        staged.staging_dir.to_string_lossy().as_ref(),
+    ]);
+    command.args(replacement_verification_arguments(
+        &staged.expected_binary,
+        staged.expected_identity.as_ref(),
+    ));
     command
-        .args([
-            "internal-deferred-replace",
-            "--staged",
-            staged.binary_path.to_string_lossy().as_ref(),
-            "--destination",
-            platform.current_executable.to_string_lossy().as_ref(),
-            "--version",
-            &staged.version.to_string(),
-            "--cleanup-dir",
-            staged.staging_dir.to_string_lossy().as_ref(),
-        ])
         .arg("--")
         .args(continuation)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    Ok(())
+        .stderr(Stdio::null());
+    command
 }
 
 pub fn run_deferred_replacement(
@@ -144,9 +318,36 @@ pub fn run_deferred_replacement(
     cleanup_dir: &Path,
     continuation: &[OsString],
 ) -> AllpResult<()> {
+    let expected_binary = ExpectedBinary::from_path(staged)?;
+    run_deferred_replacement_verified(
+        staged,
+        destination,
+        &expected_version.to_string(),
+        &expected_binary,
+        None,
+        cleanup_dir,
+        continuation,
+    )
+}
+
+pub fn run_deferred_replacement_verified(
+    staged: &Path,
+    destination: &Path,
+    expected_display_version: &str,
+    expected_binary: &ExpectedBinary,
+    expected_identity: Option<&ExpectedBuildIdentity>,
+    cleanup_dir: &Path,
+    continuation: &[OsString],
+) -> AllpResult<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
-        match replace_binary_atomically(staged, destination, expected_version) {
+        match replace_binary_atomically_verified(
+            staged,
+            destination,
+            expected_display_version,
+            expected_binary,
+            expected_identity,
+        ) {
             Ok(()) => break,
             Err(AllpError::Io(error))
                 if matches!(
@@ -165,7 +366,7 @@ pub fn run_deferred_replacement(
         Command::new(destination)
             .args(continuation)
             .env(super::SELF_UPDATE_COMPLETED_ENV, "1")
-            .env(super::SELF_UPDATE_VERSION_ENV, expected_version.to_string())
+            .env(super::SELF_UPDATE_VERSION_ENV, expected_display_version)
             .env("ALLP_SELF_UPDATE_CLEANUP_DIR", cleanup_dir)
             .spawn()?;
     }
@@ -177,6 +378,24 @@ pub fn replace_binary_atomically(
     destination: &Path,
     expected_version: Version,
 ) -> AllpResult<()> {
+    let expected_binary = ExpectedBinary::from_path(staged)?;
+    replace_binary_atomically_verified(
+        staged,
+        destination,
+        &expected_version.to_string(),
+        &expected_binary,
+        None,
+    )
+}
+
+pub fn replace_binary_atomically_verified(
+    staged: &Path,
+    destination: &Path,
+    expected_display_version: &str,
+    expected_binary: &ExpectedBinary,
+    expected_identity: Option<&ExpectedBuildIdentity>,
+) -> AllpResult<()> {
+    verify_binary_evidence(staged, expected_binary)?;
     let parent = destination.parent().ok_or_else(|| {
         AllpError::InvalidInput(format!(
             "installed executable has no parent directory: {}",
@@ -201,7 +420,12 @@ pub fn replace_binary_atomically(
     fs::set_permissions(&replacement, current_permissions)?;
     preserve_destination_owner(&replacement, &destination_metadata)?;
     sync_file(&replacement)?;
-    verify_staged_binary(&replacement, expected_version)?;
+    verify_staged_binary(
+        &replacement,
+        expected_display_version,
+        expected_binary,
+        expected_identity,
+    )?;
 
     if let Err(error) = rename_with_transient_retry(destination, &backup) {
         let _ = fs::remove_file(&replacement);
@@ -213,7 +437,12 @@ pub fn replace_binary_atomically(
         return Err(error.into());
     }
 
-    if let Err(error) = verify_staged_binary(destination, expected_version) {
+    if let Err(error) = verify_staged_binary(
+        destination,
+        expected_display_version,
+        expected_binary,
+        expected_identity,
+    ) {
         let failed = parent.join(format!(".{name}.failed-{}", std::process::id()));
         let failed_cleanup = remove_or_move_failed_binary(destination, &failed);
         let rollback = rename_with_transient_retry(&backup, destination);
@@ -295,9 +524,7 @@ fn transient_filesystem_error(error: &std::io::Error) -> bool {
 }
 
 fn download_asset(url: &str, destination: &Path, expected_size: u64) -> AllpResult<()> {
-    let curl = find_executable("curl").ok_or_else(|| {
-        AllpError::BackendNotDetected("curl HTTPS client is required for self-update".to_owned())
-    })?;
+    let curl = resolve_self_update_helper("curl")?;
     let output = Command::new(curl)
         .args([
             "--fail",
@@ -346,9 +573,7 @@ fn extract_archive_safely(
 ) -> AllpResult<()> {
     match os {
         OperatingSystem::Linux | OperatingSystem::MacOs => {
-            let tar = find_executable("tar").ok_or_else(|| {
-                AllpError::BackendNotDetected("tar is required to extract this update".to_owned())
-            })?;
+            let tar = resolve_self_update_helper("tar")?;
             let paths = Command::new(&tar).args(["-tzf"]).arg(archive).output()?;
             if !paths.status.success() {
                 return Err(AllpError::CommandFailed {
@@ -387,11 +612,7 @@ fn extract_archive_safely(
             Ok(())
         }
         OperatingSystem::Windows => {
-            let tar = find_executable("tar").ok_or_else(|| {
-                AllpError::BackendNotDetected(
-                    "Windows tar support is required to inspect and extract this update".to_owned(),
-                )
-            })?;
+            let tar = resolve_self_update_helper("tar")?;
             let listing = Command::new(&tar).args(["-tf"]).arg(archive).output()?;
             if !listing.status.success() {
                 return Err(AllpError::CommandFailed {
@@ -509,8 +730,45 @@ fn find_staged_binary(root: &Path, binary_name: &str) -> AllpResult<PathBuf> {
     )))
 }
 
-fn verify_staged_binary(path: &Path, expected: Version) -> AllpResult<()> {
+fn verify_binary_evidence(path: &Path, expected: &ExpectedBinary) -> AllpResult<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(AllpError::InvalidInput(format!(
+            "replacement binary is not a regular file: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() != expected.size {
+        return Err(AllpError::InvalidInput(format!(
+            "replacement binary size mismatch: expected {} bytes, found {}",
+            expected.size,
+            metadata.len()
+        )));
+    }
+    verify_sha256(path, &expected.sha256).map_err(|_| {
+        AllpError::InvalidInput(format!(
+            "replacement binary SHA-256 mismatch for {}",
+            path.display()
+        ))
+    })?;
+    let current = fs::symlink_metadata(path)?;
+    if !current.file_type().is_file() || current.len() != expected.size {
+        return Err(AllpError::InvalidInput(
+            "replacement binary changed during SHA-256 verification".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_staged_binary(
+    path: &Path,
+    expected_display_version: &str,
+    expected_binary: &ExpectedBinary,
+    expected_identity: Option<&ExpectedBuildIdentity>,
+) -> AllpResult<()> {
+    verify_binary_evidence(path, expected_binary)?;
     let output = version_output_with_transient_retry(path)?;
+    verify_binary_evidence(path, expected_binary)?;
     if !output.status.success() {
         return Err(AllpError::InvalidInput(format!(
             "staged binary failed --version with exit code {:?}",
@@ -519,15 +777,53 @@ fn verify_staged_binary(path: &Path, expected: Version) -> AllpResult<()> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed = stdout
-        .split_whitespace()
-        .find_map(|word| word.trim_start_matches('v').parse::<Version>().ok());
-    if parsed != Some(expected) {
+        .lines()
+        .next()
+        .and_then(|line| line.trim().strip_prefix("allp "))
+        .map(str::trim);
+    if parsed != Some(expected_display_version) {
         return Err(AllpError::InvalidInput(format!(
-            "staged binary version mismatch: expected {expected}, got {}",
+            "staged binary version mismatch: expected {expected_display_version}, got {}",
             parsed
-                .map(|version| version.to_string())
+                .map(str::to_owned)
                 .unwrap_or_else(|| "unparseable output".to_owned())
         )));
+    }
+    if let Some(expected) = expected_identity {
+        verify_binary_evidence(path, expected_binary)?;
+        let verbose = version_output_with_transient_retry_verbose(path)?;
+        verify_binary_evidence(path, expected_binary)?;
+        if !verbose.status.success() {
+            return Err(AllpError::InvalidInput(
+                "staged binary failed verbose build-identity verification".to_owned(),
+            ));
+        }
+        let verbose = String::from_utf8_lossy(&verbose.stdout);
+        if diagnostic_value(&verbose, "Commit:") != Some(expected.git_commit.as_str()) {
+            return Err(AllpError::InvalidInput(
+                "staged binary Git commit does not match the continuous manifest".to_owned(),
+            ));
+        }
+        if diagnostic_value(&verbose, "Build ID:") != Some(expected.build_id.as_str()) {
+            return Err(AllpError::InvalidInput(
+                "staged binary build ID does not match the continuous manifest".to_owned(),
+            ));
+        }
+        if diagnostic_value(&verbose, "Target:") != Some(expected.target.as_str()) {
+            return Err(AllpError::InvalidInput(
+                "staged binary target does not match the selected continuous asset".to_owned(),
+            ));
+        }
+        if diagnostic_value(&verbose, "Channel:") != Some("continuous") {
+            return Err(AllpError::InvalidInput(
+                "staged binary is not compiled for the continuous channel".to_owned(),
+            ));
+        }
+        if diagnostic_value(&verbose, "Official build:") != Some("yes") {
+            return Err(AllpError::InvalidInput(
+                "staged binary is not marked as an official CI build".to_owned(),
+            ));
+        }
     }
     Ok(())
 }
@@ -545,6 +841,32 @@ fn version_output_with_transient_retry(path: &Path) -> std::io::Result<Output> {
     }
 }
 
+fn version_output_with_transient_retry_verbose(path: &Path) -> std::io::Result<Output> {
+    let deadline = Instant::now() + TRANSIENT_FS_RETRY_TIMEOUT;
+    loop {
+        match Command::new(path).args(["--version", "--verbose"]).output() {
+            Ok(output) => return Ok(output),
+            Err(error) if transient_filesystem_error(&error) && Instant::now() < deadline => {
+                std::thread::sleep(TRANSIENT_FS_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn diagnostic_value<'a>(output: &'a str, label: &str) -> Option<&'a str> {
+    let mut lines = output.lines();
+    while let Some(line) = lines.next() {
+        if line.trim() == label {
+            return lines
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+        }
+    }
+    None
+}
+
 fn create_staging_directory(root: &Path, version: Version) -> AllpResult<PathBuf> {
     fs::create_dir_all(root)?;
     for attempt in 0..100u32 {
@@ -552,7 +874,10 @@ fn create_staging_directory(root: &Path, version: Version) -> AllpResult<PathBuf
             ".allp-update-{version}-{}-{attempt}",
             std::process::id()
         ));
-        match fs::create_dir(&path) {
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        builder.mode(0o700);
+        match builder.create(&path) {
             Ok(()) => return Ok(path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
@@ -606,6 +931,54 @@ mod tests {
         assert!(error.to_string().contains("symbolic or hard link"));
     }
 
+    #[test]
+    fn internal_identity_requires_a_full_commit_and_preserves_all_arguments() {
+        assert!(ExpectedBuildIdentity::from_internal_args(
+            Some(&"a".repeat(41)),
+            Some("123.1"),
+            Some("x86_64-unknown-linux-gnu"),
+        )
+        .is_err());
+        let identity = ExpectedBuildIdentity::from_internal_args(
+            Some(&"b".repeat(64)),
+            Some("123.1"),
+            Some("x86_64-unknown-linux-gnu"),
+        )
+        .expect("full SHA-256 commit identity should be accepted")
+        .expect("complete internal identity should be present");
+        let binary = ExpectedBinary::from_internal_args(&"c".repeat(64), 123)
+            .expect("complete binary evidence should be accepted");
+        assert_eq!(
+            replacement_verification_arguments(&binary, Some(&identity)),
+            vec![
+                OsString::from("--binary-sha256"),
+                OsString::from("c".repeat(64)),
+                OsString::from("--binary-size"),
+                OsString::from("123"),
+                OsString::from("--commit"),
+                OsString::from("b".repeat(64)),
+                OsString::from("--build-id"),
+                OsString::from("123.1"),
+                OsString::from("--target"),
+                OsString::from("x86_64-unknown-linux-gnu"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_directory_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = replacement_fixture("staging-permissions");
+        let staging = create_staging_directory(&root, Version::new(0, 3, 5))
+            .expect("staging directory should be created");
+        assert_eq!(
+            fs::metadata(&staging).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        fs::remove_dir_all(root).expect("fixture should be removed");
+    }
+
     #[cfg(unix)]
     #[test]
     fn version_mismatch_is_rejected_before_replacement() {
@@ -616,9 +989,104 @@ mod tests {
             .expect("fixture should be written");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
             .expect("fixture should be executable");
-        let error = verify_staged_binary(&path, Version::new(0, 3, 4))
+        let binary = ExpectedBinary::from_path(&path).unwrap();
+        let error = verify_staged_binary(&path, "0.3.4", &binary, None)
             .expect_err("mismatched binary must fail");
         assert!(error.to_string().contains("version mismatch"));
+        fs::remove_dir_all(root).expect("fixture should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_size_staged_tamper_is_rejected_before_execution_or_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = replacement_fixture("same-size-tamper");
+        let destination = root.join("allp");
+        let staged = root.join("staged-allp");
+        let marker = root.join("executed");
+        write_version_script(&destination, "0.3.3", 0o755);
+        let original = format!(
+            "#!/bin/sh\n/usr/bin/touch '{}'\nprintf 'allp 0.3.4\\n'\n# A\n",
+            marker.display()
+        );
+        fs::write(&staged, &original).unwrap();
+        fs::set_permissions(&staged, fs::Permissions::from_mode(0o755)).unwrap();
+        let expected_binary = ExpectedBinary::from_path(&staged).unwrap();
+        fs::write(&staged, original.replace("# A", "# B")).unwrap();
+
+        let error = replace_binary_atomically_verified(
+            &staged,
+            &destination,
+            "0.3.4",
+            &expected_binary,
+            None,
+        )
+        .expect_err("same-size staged tampering must fail SHA-256 verification");
+
+        assert!(error.to_string().contains("SHA-256 mismatch"));
+        assert!(!marker.exists(), "tampered staged binary must not execute");
+        let output = Command::new(&destination)
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stdout).contains("0.3.3"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn continuous_build_identity_mismatch_is_rejected_before_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = replacement_fixture("identity-mismatch");
+        let path = root.join("allp");
+        fs::write(
+            &path,
+            b"#!/bin/sh\nif [ \"$2\" = \"--verbose\" ]; then printf 'Allp 0.3.5.2\\n\\nChannel:\\n  continuous\\n\\nCommit:\\n  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\n\\nBuild ID:\\n  123.1\\n\\nTarget:\\n  x86_64-unknown-linux-gnu\\n\\nOfficial build:\\n  yes\\n'; else printf 'allp 0.3.5.2\\n'; fi\n",
+        )
+        .expect("fixture should be written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .expect("fixture should be executable");
+        let expected = ExpectedBuildIdentity {
+            git_commit: "a".repeat(40),
+            build_id: "123.1".to_owned(),
+            target: "x86_64-unknown-linux-gnu".to_owned(),
+        };
+        let binary = ExpectedBinary::from_path(&path).unwrap();
+        let error = verify_staged_binary(&path, "0.3.5.2", &binary, Some(&expected))
+            .expect_err("wrong compiled commit must fail");
+        assert!(error.to_string().contains("Git commit"));
+        fs::remove_dir_all(root).expect("fixture should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn continuous_staged_binary_requires_full_provenance() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = replacement_fixture("full-provenance");
+        let path = root.join("allp");
+        fs::write(
+            &path,
+            b"#!/bin/sh\nif [ \"$2\" = \"--verbose\" ]; then printf 'Allp 0.3.5.2\\n\\nChannel:\\n  continuous\\n\\nCommit:\\n  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n\\nBuild ID:\\n  123.1\\n\\nTarget:\\n  x86_64-unknown-linux-gnu\\n\\nOfficial build:\\n  yes\\n'; else printf 'allp 0.3.5.2\\n'; fi\n",
+        )
+        .expect("fixture should be written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .expect("fixture should be executable");
+        let expected = ExpectedBuildIdentity {
+            git_commit: "a".repeat(40),
+            build_id: "123.1".to_owned(),
+            target: "x86_64-unknown-linux-gnu".to_owned(),
+        };
+        let binary = ExpectedBinary::from_path(&path).unwrap();
+        verify_staged_binary(&path, "0.3.5.2", &binary, Some(&expected))
+            .expect("all provenance fields should match");
+
+        let wrong_target = ExpectedBuildIdentity {
+            target: "aarch64-unknown-linux-gnu".to_owned(),
+            ..expected
+        };
+        let error = verify_staged_binary(&path, "0.3.5.2", &binary, Some(&wrong_target))
+            .expect_err("wrong target must fail");
+        assert!(error.to_string().contains("target"));
         fs::remove_dir_all(root).expect("fixture should be removed");
     }
 
@@ -685,6 +1153,9 @@ mod tests {
         platform.executable_writable = false;
         let staged = StagedRelease {
             version: Version::new(0, 3, 4),
+            display_version: "0.3.4".to_owned(),
+            expected_binary: expected_binary_fixture(),
+            expected_identity: None,
             binary_path: PathBuf::from("/tmp/allp-staged"),
             staging_dir: PathBuf::from("/tmp/allp-staging"),
         };
@@ -707,8 +1178,95 @@ mod tests {
                 "/usr/local/bin/allp",
                 "--version",
                 "0.3.4",
+                "--binary-sha256",
+                &"d".repeat(64),
+                "--binary-size",
+                "42",
             ]
         );
+    }
+
+    #[test]
+    fn elevated_continuous_replacement_preserves_identity_expectations() {
+        let mut platform = PlatformContext::detect(&RuntimePrivilegeContext::NormalUser);
+        platform.os = OperatingSystem::Linux;
+        platform.current_executable = PathBuf::from("/usr/local/bin/allp");
+        platform.executable_writable = false;
+        let staged = StagedRelease {
+            version: Version::new(0, 3, 5),
+            display_version: "0.3.5.2".to_owned(),
+            expected_binary: expected_binary_fixture(),
+            expected_identity: Some(ExpectedBuildIdentity {
+                git_commit: "a".repeat(40),
+                build_id: "123.1".to_owned(),
+                target: "x86_64-unknown-linux-gnu".to_owned(),
+            }),
+            binary_path: PathBuf::from("/tmp/allp-staged"),
+            staging_dir: PathBuf::from("/tmp/allp-staging"),
+        };
+        let ReplacementOutcome::RequiresElevation { command } =
+            apply_replacement(&staged, &platform).expect("plan should be created")
+        else {
+            panic!("non-writable path should require elevation");
+        };
+        let arguments = command
+            .args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["--commit", &"a".repeat(40)]));
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["--build-id", "123.1"]));
+        assert!(arguments
+            .windows(2)
+            .any(|pair| { pair == ["--target", "x86_64-unknown-linux-gnu"] }));
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["--binary-sha256", &"d".repeat(64)]));
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["--binary-size", "42"]));
+    }
+
+    #[test]
+    fn windows_deferred_command_preserves_binary_and_build_expectations() {
+        let mut platform = PlatformContext::detect(&RuntimePrivilegeContext::NormalUser);
+        platform.os = OperatingSystem::Windows;
+        platform.current_executable = PathBuf::from(r"C:\Program Files\Allp\allp.exe");
+        let staged = StagedRelease {
+            version: Version::new(0, 3, 5),
+            display_version: "0.3.5.2".to_owned(),
+            expected_binary: expected_binary_fixture(),
+            expected_identity: Some(ExpectedBuildIdentity {
+                git_commit: "a".repeat(40),
+                build_id: "123.1".to_owned(),
+                target: "x86_64-pc-windows-msvc".to_owned(),
+            }),
+            binary_path: PathBuf::from(r"C:\Temp\allp.exe"),
+            staging_dir: PathBuf::from(r"C:\Temp\allp-update"),
+        };
+        let command = deferred_replacement_command(
+            Path::new(r"C:\Temp\allp-update\allp-replace-helper.exe"),
+            &staged,
+            &platform,
+            &[OsString::from("update")],
+        );
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        for expected in [
+            ["--binary-sha256", &"d".repeat(64)],
+            ["--binary-size", "42"],
+            ["--commit", &"a".repeat(40)],
+            ["--build-id", "123.1"],
+            ["--target", "x86_64-pc-windows-msvc"],
+        ] {
+            assert!(arguments.windows(2).any(|pair| pair == expected));
+        }
     }
 
     #[test]
@@ -717,6 +1275,9 @@ mod tests {
         platform.os = OperatingSystem::Windows;
         let staged = StagedRelease {
             version: Version::new(0, 3, 4),
+            display_version: "0.3.4".to_owned(),
+            expected_binary: expected_binary_fixture(),
+            expected_identity: None,
             binary_path: PathBuf::from(r"C:\Temp\allp.exe"),
             staging_dir: PathBuf::from(r"C:\Temp\allp-update"),
         };
@@ -753,5 +1314,12 @@ mod tests {
             .expect("version fixture should be written");
         fs::set_permissions(path, fs::Permissions::from_mode(mode))
             .expect("version fixture should be executable");
+    }
+
+    fn expected_binary_fixture() -> ExpectedBinary {
+        ExpectedBinary {
+            sha256: "d".repeat(64),
+            size: 42,
+        }
     }
 }

@@ -125,6 +125,8 @@ allp update --skip-self-update
 allp update --self-only
 allp update --check-only
 allp update --offline
+allp update --update-channel continuous
+allp update --update-channel stable
 ```
 
 Runs a guarded Allp self-update check, refreshes platform/capability state, then runs each detected backend's declared update action. Semantics are backend-owned and shown in the action label.
@@ -146,7 +148,7 @@ Examples:
 
 Mutating backend operations run sequentially and continue after failures. Any failure returns exit code `8`.
 
-`--skip-self-update` bypasses only the GitHub phase. `--self-only` never runs backend updates. `--check-only` and `--dry-run` do not replace the Allp binary. `--offline` contacts neither GitHub nor backend remote sources.
+`--skip-self-update` bypasses only the GitHub phase. `--self-only` never runs backend updates. `--check-only` and `--dry-run` do not replace the Allp binary. `--offline` contacts neither GitHub nor backend remote sources. The documented default is the verified `continuous` main-branch build channel; an explicit `--update-channel stable` choice is persisted.
 
 For real execution, Allp first renders the complete plan, explains child-only privilege elevation for root-required plans, and prompts once for the batch. `--no-interactive` cannot provide that confirmation; use `--dry-run`, run interactively, or provide fully resolved choices with `--yes`.
 
@@ -199,10 +201,11 @@ Default info output is curated: backend, package ID, display name, version, inst
 
 ```bash
 allp doctor
+allp doctor homebrew
 allp doctor --json
 ```
 
-Reports platform, user/privilege context, Allp ownership and writability, resolved executable paths, backend states, Snap socket, Flatpak remotes, trusted update source, release target, and data directories. It is read-only and does not print credentials.
+Reports platform, user/privilege context, Allp ownership and writability, resolved executable paths, backend states, Snap socket, Flatpak remotes, trusted update source, release target, and data directories. A backend argument scopes the report; `doctor homebrew` includes the shared locator's provider attempts, selected and resolved paths, version, prefix, and owner. It is read-only and does not print credentials.
 
 ## `self-update`
 
@@ -210,7 +213,9 @@ Reports platform, user/privilege context, Allp ownership and writability, resolv
 allp self-update
 allp self-update --check-only
 allp self-update --offline
+allp self-update --update-channel continuous
+allp self-update --update-channel stable
 allp self-update --update-channel prerelease
 ```
 
-Checks only the trusted official GitHub repository. Compatible assets are selected from the signed-by-checksum release manifest by OS, architecture, libc, and target. Verification, replacement, rollback, Windows deferral, and guarded re-execution are documented in [SELF_UPDATE.md](SELF_UPDATE.md).
+Checks only the trusted official GitHub repository. Continuous candidates must identify a successful trusted main-branch workflow and an unexpired Actions artifact; stable candidates remain semantic-version releases. Compatible assets are selected from the authoritative manifest by OS, architecture, libc, and target, then checked by SHA-256. Verification, replacement, rollback, Windows deferral, and guarded re-execution are documented in [SELF_UPDATE.md](SELF_UPDATE.md).

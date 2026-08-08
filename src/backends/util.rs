@@ -1,6 +1,6 @@
 use crate::{
     backends::Backend,
-    domain::{AllpError, AllpResult, MatchKind, NativeCommand},
+    domain::{AllpError, AllpResult, MatchKind, NativeCommand, PrivilegeRequirement},
     execution::{CommandOutput, ProcessRunner},
 };
 use std::{collections::BTreeMap, path::Path};
@@ -12,6 +12,17 @@ pub fn capture_checked(
 ) -> AllpResult<String> {
     let rendered = crate::execution::render_native_command(&command);
     let output = runner.capture(&command)?;
+    ensure_success(backend, rendered, output)
+}
+
+pub fn capture_checked_with_privilege(
+    backend: &dyn Backend,
+    runner: &dyn ProcessRunner,
+    command: NativeCommand,
+    privilege: PrivilegeRequirement,
+) -> AllpResult<String> {
+    let rendered = crate::execution::render_native_command(&command);
+    let output = runner.capture_with_privilege(&command, privilege)?;
     ensure_success(backend, rendered, output)
 }
 

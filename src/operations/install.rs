@@ -403,6 +403,13 @@ fn execute_install(
     plan: crate::domain::ExecutionPlan,
     selected_runtime: Option<&crate::discovery::DetectedBackend>,
 ) -> AllpResult<()> {
+    if let Some(runtime) = selected_runtime {
+        runtime.backend.validate_before_execution(
+            &plan,
+            context.runner,
+            context.privilege_context,
+        )?;
+    }
     context
         .renderer
         .execution_started(1, 1, &plan, context.privilege_context);

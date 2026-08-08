@@ -1,4 +1,9 @@
-use crate::{discovery::path::find_executable, platform::PlatformContext};
+use crate::{
+    discovery::{
+        path::find_executable, DiscoveryReport, HomebrewDetectionState, HomebrewDiscovery,
+    },
+    platform::PlatformContext,
+};
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -101,6 +106,80 @@ impl CapabilityRegistry {
 
     pub fn executables(&self) -> impl Iterator<Item = &ExecutableCapability> {
         self.executables.values()
+    }
+
+    /// Synchronize capabilities that use backend-specific validated discovery rather than PATH.
+    pub fn apply_discovery(&mut self, discovery: &DiscoveryReport) {
+        if let Some(homebrew) = discovery
+            .entries
+            .iter()
+            .find(|entry| entry.backend_id == "brew")
+            .and_then(|entry| entry.homebrew.as_ref())
+        {
+            self.apply_homebrew_discovery(homebrew);
+        }
+    }
+
+    fn apply_homebrew_discovery(&mut self, discovery: &HomebrewDiscovery) {
+        let capability = self
+            .executables
+            .entry("brew".to_owned())
+            .or_insert_with(|| ExecutableCapability {
+                name: "brew".to_owned(),
+                availability: CapabilityAvailability::Unavailable,
+                resolved_path: None,
+                version: None,
+                owner_uid: None,
+                configuration_state: None,
+                failure_reason: None,
+                diagnostics: Vec::new(),
+                can_bootstrap: false,
+                bootstrap_methods: Vec::new(),
+            });
+        capability.diagnostics = discovery
+            .attempts
+            .iter()
+            .map(|attempt| {
+                let path = attempt
+                    .executable
+                    .as_ref()
+                    .map(|path| format!(" · {}", path.display()))
+                    .unwrap_or_default();
+                format!(
+                    "{}: {}{path}",
+                    attempt.source.label(),
+                    attempt.status.label()
+                )
+            })
+            .collect();
+        match &discovery.state {
+            HomebrewDetectionState::Ready(installation) => {
+                capability.availability = CapabilityAvailability::Available;
+                capability.resolved_path = Some(installation.executable.clone());
+                capability.version = Some(installation.version.clone());
+                capability.owner_uid = installation.owner.uid;
+                capability.configuration_state = Some("validated_ready".to_owned());
+                capability.failure_reason = None;
+            }
+            HomebrewDetectionState::NotInstalled => {
+                capability.availability = CapabilityAvailability::Unavailable;
+                capability.resolved_path = None;
+                capability.version = None;
+                capability.owner_uid = None;
+                capability.configuration_state = Some("not_installed".to_owned());
+                capability.failure_reason =
+                    Some("no validated Homebrew installation was found".to_owned());
+            }
+            state => {
+                capability.availability = CapabilityAvailability::Error;
+                capability.resolved_path =
+                    state.problem().map(|problem| problem.executable.clone());
+                capability.version = None;
+                capability.owner_uid = None;
+                capability.configuration_state = Some("installed_unusable".to_owned());
+                capability.failure_reason = state.problem().map(|problem| problem.message.clone());
+            }
+        }
     }
 }
 

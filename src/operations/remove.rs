@@ -112,6 +112,9 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         context.renderer.plain_message("0 commands executed");
         return Ok(());
     }
+    runtime
+        .backend
+        .validate_before_execution(&plan, context.runner, context.privilege_context)?;
     context
         .renderer
         .execution_started(1, 1, &plan, context.privilege_context);

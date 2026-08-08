@@ -30,6 +30,12 @@ pub fn sha256_file(path: &Path) -> AllpResult<String> {
     Ok(hasher.finish_hex())
 }
 
+pub fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finish_hex()
+}
+
 pub fn verify_sha256(path: &Path, expected: &str) -> AllpResult<()> {
     let actual = sha256_file(path)?;
     if !constant_time_hex_eq(&actual, expected) {
@@ -160,7 +166,7 @@ fn constant_time_hex_eq(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{verify_sha256, Sha256};
+    use super::{sha256_bytes, verify_sha256, Sha256};
 
     #[test]
     fn sha256_matches_known_vector() {
@@ -168,6 +174,10 @@ mod tests {
         hasher.update(b"abc");
         assert_eq!(
             hasher.finish_hex(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_bytes(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }

@@ -9,7 +9,7 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(
     name = "allp",
-    version,
+    version = crate::build_identity::DISPLAY_VERSION,
     about = "A transparent package-manager orchestrator for Linux",
     long_about = "Allp detects package managers already installed on the system, delegates work to their native commands, and keeps the user in control."
 )]
@@ -176,7 +176,7 @@ pub struct UpdateArgs {
     #[arg(long)]
     pub offline: bool,
 
-    /// Select stable or prerelease Allp updates.
+    /// Select continuous, stable, or prerelease Allp updates.
     #[arg(long, value_parser = parse_update_channel)]
     pub update_channel: Option<UpdateChannel>,
 
@@ -194,7 +194,7 @@ pub struct SelfUpdateArgs {
     #[arg(long)]
     pub offline: bool,
 
-    /// Select stable or prerelease Allp updates.
+    /// Select continuous, stable, or prerelease Allp updates.
     #[arg(long, value_parser = parse_update_channel)]
     pub update_channel: Option<UpdateChannel>,
 
@@ -236,6 +236,16 @@ pub struct InternalReplaceArgs {
     pub destination: PathBuf,
     #[arg(long)]
     pub version: String,
+    #[arg(long)]
+    pub binary_sha256: String,
+    #[arg(long)]
+    pub binary_size: u64,
+    #[arg(long)]
+    pub commit: Option<String>,
+    #[arg(long)]
+    pub build_id: Option<String>,
+    #[arg(long)]
+    pub target: Option<String>,
     #[command(flatten)]
     pub common: CommonOptions,
 }
@@ -248,6 +258,16 @@ pub struct InternalDeferredReplaceArgs {
     pub destination: PathBuf,
     #[arg(long)]
     pub version: String,
+    #[arg(long)]
+    pub binary_sha256: String,
+    #[arg(long)]
+    pub binary_size: u64,
+    #[arg(long)]
+    pub commit: Option<String>,
+    #[arg(long)]
+    pub build_id: Option<String>,
+    #[arg(long)]
+    pub target: Option<String>,
     #[arg(long)]
     pub cleanup_dir: PathBuf,
     #[arg(last = true, allow_hyphen_values = true)]
@@ -465,8 +485,9 @@ fn parse_developer_target(value: &str) -> Result<DeveloperTarget, String> {
 
 fn parse_update_channel(value: &str) -> Result<UpdateChannel, String> {
     match value.to_ascii_lowercase().as_str() {
+        "continuous" | "main" => Ok(UpdateChannel::Continuous),
         "stable" => Ok(UpdateChannel::Stable),
         "prerelease" | "pre" => Ok(UpdateChannel::Prerelease),
-        _ => Err("update channel must be stable or prerelease".to_owned()),
+        _ => Err("update channel must be continuous, stable, or prerelease".to_owned()),
     }
 }

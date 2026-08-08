@@ -1,8 +1,14 @@
 use crate::{
     backends::{backend_matches_filter, Backend, CommandMap},
-    discovery::path::find_executable,
-    domain::{BackendCategory, Capability, PackageDomain},
-    execution::ProcessRunner,
+    discovery::{
+        homebrew::{
+            HomebrewDetectionState, HomebrewDiscovery, HomebrewLocator, SystemHomebrewLocator,
+        },
+        path::find_executable,
+    },
+    domain::{BackendCategory, Capability, PackageDomain, RuntimePrivilegeContext},
+    execution::{privilege::runtime_context, ProcessRunner},
+    platform::PlatformContext,
 };
 use serde::Serialize;
 use std::{collections::BTreeMap, sync::Arc};
@@ -43,6 +49,8 @@ pub struct BackendDetection {
     pub commands: BTreeMap<String, String>,
     pub missing: Vec<String>,
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homebrew: Option<HomebrewDiscovery>,
 }
 
 #[derive(Clone)]
@@ -88,18 +96,118 @@ pub struct DiscoveryResult {
 
 pub struct BackendDiscovery {
     catalog: Vec<Arc<dyn Backend>>,
+    homebrew_locator: Arc<dyn HomebrewLocator>,
 }
 
 impl BackendDiscovery {
     pub fn new(catalog: Vec<Arc<dyn Backend>>) -> Self {
-        Self { catalog }
+        Self {
+            catalog,
+            homebrew_locator: Arc::new(SystemHomebrewLocator::new()),
+        }
+    }
+
+    pub fn with_homebrew_locator(
+        catalog: Vec<Arc<dyn Backend>>,
+        homebrew_locator: Arc<dyn HomebrewLocator>,
+    ) -> Self {
+        Self {
+            catalog,
+            homebrew_locator,
+        }
     }
 
     pub fn discover(&self, runner: &dyn ProcessRunner) -> DiscoveryResult {
+        let privilege = runtime_context();
+        let platform = PlatformContext::detect(&privilege);
+        self.discover_with_context(runner, &platform, &privilege)
+    }
+
+    pub fn discover_with_context(
+        &self,
+        runner: &dyn ProcessRunner,
+        platform: &PlatformContext,
+        privilege: &RuntimePrivilegeContext,
+    ) -> DiscoveryResult {
+        self.discover_with_context_filtered(runner, platform, privilege, None)
+    }
+
+    pub fn discover_with_context_filtered(
+        &self,
+        runner: &dyn ProcessRunner,
+        platform: &PlatformContext,
+        privilege: &RuntimePrivilegeContext,
+        backend_filter: Option<&str>,
+    ) -> DiscoveryResult {
         let mut report_entries = Vec::new();
         let mut detected_entries = Vec::new();
 
         for backend in &self.catalog {
+            if backend_filter
+                .is_some_and(|filter| !backend_matches_filter(backend.as_ref(), filter))
+            {
+                continue;
+            }
+            if backend.id() == "brew" {
+                let homebrew = self.homebrew_locator.locate(platform, privilege, runner);
+                let mut commands = CommandMap::new();
+                let mut printable_commands = BTreeMap::new();
+                let (state, missing, message) = match &homebrew.state {
+                    HomebrewDetectionState::Ready(installation) => {
+                        commands.insert("brew".to_owned(), installation.executable.clone());
+                        printable_commands.insert(
+                            "brew".to_owned(),
+                            installation.executable.display().to_string(),
+                        );
+                        (
+                            DetectionState::Ready,
+                            Vec::new(),
+                            Some(format!(
+                                "Homebrew {} · prefix {} · owner {}",
+                                installation.version,
+                                installation.prefix.display(),
+                                installation.owner.name
+                            )),
+                        )
+                    }
+                    HomebrewDetectionState::NotInstalled => (
+                        DetectionState::NotFound,
+                        vec!["brew".to_owned()],
+                        Some("no validated Homebrew installation was found".to_owned()),
+                    ),
+                    state => (
+                        DetectionState::FoundButUnavailable,
+                        Vec::new(),
+                        state.problem().map(|problem| problem.message.clone()),
+                    ),
+                };
+
+                report_entries.push(BackendDetection {
+                    backend_id: backend.id().to_owned(),
+                    backend_name: backend.display_name().to_owned(),
+                    category: backend.category(),
+                    package_domains: backend.package_domains().to_vec(),
+                    state,
+                    capabilities: backend.capabilities().to_vec(),
+                    aliases: backend
+                        .aliases()
+                        .iter()
+                        .map(|alias| (*alias).to_owned())
+                        .collect(),
+                    commands: printable_commands,
+                    missing,
+                    message,
+                    homebrew: Some(homebrew),
+                });
+                if state == DetectionState::Ready {
+                    detected_entries.push(DetectedBackend {
+                        backend: Arc::clone(backend),
+                        commands,
+                    });
+                }
+                continue;
+            }
+
             let mut commands = CommandMap::new();
             let mut printable_commands = BTreeMap::new();
             let mut missing = Vec::new();
@@ -183,6 +291,7 @@ impl BackendDiscovery {
                 commands: printable_commands,
                 missing,
                 message,
+                homebrew: None,
             });
 
             if matches!(

@@ -6,7 +6,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, Flatpak, Snap, Homebrew/Linuxbrew, Python installers, and Node installers, then shows the exact native command or local API request before anything mutates the system.
 
-Current version: **0.3.5**
+Current build version: **0.3.5.1** (Cargo base version **0.3.5**)
 Maturity: **public alpha**
 
 ## Why Allp Exists
@@ -61,6 +61,8 @@ allp --version
 allp update && allp upgrade
 ```
 
+`allp --version` prints the display/build version; `allp --version --verbose` also prints the base version, build revision, channel, commit, build ID, target, timestamp, and whether CI marked the build official. `allp update` defaults to verified continuous main-branch builds so fixes can update `0.3.5.1` to `0.3.5.2` without changing Cargo SemVer. Use `--update-channel stable` to persist the tagged-release channel.
+
 `make install` builds the release binary and installs it as
 `/usr/local/bin/allp`. It uses `sudo install` for that one file copy. For a
 user-local install without sudo:
@@ -100,7 +102,7 @@ allp search git --json
 
 `update` refreshes backend metadata; it does not upgrade Snap, Flatpak, or Homebrew packages. `upgrade` upgrades installed software. When APT needs a metadata refresh first, that refresh is a required dependency: a failure defers the APT upgrade. `--allow-stale-metadata` is an explicit override, never the default.
 
-Homebrew metadata refresh prefers `brew update-if-needed`. Upgrade discovery and execution set `HOMEBREW_NO_AUTO_UPDATE=1`, use structured `brew outdated --json=v2` evidence, skip empty upgrades, and verify outdated state afterward. Homebrew runs in its user context even when Allp was launched through sudo.
+Homebrew discovery uses one validated locator across detect, doctor, and package operations. It checks configured/custom locations, PATH, revalidated state, deterministic original-user paths, and the official Linux/macOS prefixes, so `sudo` omitting Linuxbrew from root's PATH does not make an existing installation disappear. Homebrew metadata refresh prefers `brew update-if-needed`. Upgrade discovery and execution set `HOMEBREW_NO_AUTO_UPDATE=1`, use structured `brew outdated --json=v2` evidence, skip empty upgrades, and verify outdated state afterward. Homebrew probes and operations run in its validated owner's user context even when Allp was launched through sudo.
 
 Use `--from` for a precise backend:
 
@@ -239,7 +241,7 @@ allp update --offline
 allp update --update-channel prerelease
 ```
 
-Stable is the default channel; prerelease selection is explicit and persisted. Release metadata must contain `allp-release-manifest.json`. Allp strictly compares semantic versions, selects an asset by OS, architecture, libc, executable format, and target, and refuses unsupported targets.
+Continuous verified main-branch builds are the default channel; stable and prerelease selections are explicit and persisted. Stable release metadata must contain `allp-release-manifest.json`, while continuous builds use their dedicated manifest and trusted workflow identity. Allp compares base SemVer before build revision, selects an asset by OS, architecture, libc, executable format, and target, and reports unsupported targets without staging an update.
 
 Downloads are HTTPS-only, bounded by redirects, time, and size, restricted to the exact official repository/tag/asset, and verified with SHA-256 before safe extraction. The staged binary must report the expected version. Linux and macOS replacement uses same-directory staging, a rollback backup, post-install verification, and minimal elevation for non-writable installations. Windows uses a verified deferred helper. A guarded relaunch continues `allp update` once without entering an update loop. Offline mode contacts neither GitHub nor backend remote sources.
 
