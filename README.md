@@ -48,7 +48,7 @@ Build from source:
 
 ```bash
 git clone https://github.com/allp-manager/allp-manager.git
-cd allp
+cd allp-manager
 cargo build --release
 ./target/release/allp --version
 ```
