@@ -38,7 +38,7 @@ Both capture operations and mutations travel through the same elevated `Original
 
 ## Update and upgrade orchestration
 
-Allp treats Homebrew metadata refresh and installed-package upgrade as separate operations. `allp update` capability-probes and prefers `brew update-if-needed`, falling back to `brew update` only when the command is unsupported.
+Allp treats Homebrew metadata refresh and installed-package upgrade as separate operations. `allp update` capability-probes and prefers `brew update-if-needed`, falling back to `brew update` only when the command is unsupported. Refreshes set `HOMEBREW_NO_UPDATE_REPORT_NEW=1` to avoid Homebrew's potentially enormous post-update formula and cask report; update errors and normal progress remain visible.
 
 `allp upgrade` establishes metadata freshness, then runs `brew outdated --json=v2` with `HOMEBREW_NO_AUTO_UPDATE=1`. An empty formula/cask result is evidence that no upgrade command is needed. Non-empty results are included in the execution plan; the upgrade also receives `HOMEBREW_NO_AUTO_UPDATE=1`, and Allp queries JSON v2 again afterward to report updated and remaining counts.
 

@@ -2750,6 +2750,7 @@ fn homebrew_update_prefers_update_if_needed() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(stdout(&output).contains("brew update-if-needed"));
     assert!(!stdout(&output).contains("brew update\n"));
+    assert!(stdout(&output).contains("HOMEBREW_NO_UPDATE_REPORT_NEW=1"));
 }
 
 #[test]
@@ -2780,6 +2781,7 @@ fn homebrew_update_falls_back_only_after_capability_probe() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(stdout(&output).contains("brew update"));
     assert!(!stdout(&output).contains("brew update-if-needed"));
+    assert!(stdout(&output).contains("HOMEBREW_NO_UPDATE_REPORT_NEW=1"));
 }
 
 #[test]

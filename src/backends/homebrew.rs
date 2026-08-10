@@ -318,7 +318,7 @@ impl Backend for HomebrewBackend {
             "Refresh Homebrew formula and cask metadata",
             None,
             Some("Homebrew".to_owned()),
-            NativeCommand::new(brew).arg(operation),
+            suppress_update_report(NativeCommand::new(brew).arg(operation)),
         )]))
     }
 
@@ -452,6 +452,10 @@ impl Backend for HomebrewBackend {
 
 fn no_auto_update(command: NativeCommand) -> NativeCommand {
     command.env("HOMEBREW_NO_AUTO_UPDATE", "1")
+}
+
+fn suppress_update_report(command: NativeCommand) -> NativeCommand {
+    command.env("HOMEBREW_NO_UPDATE_REPORT_NEW", "1")
 }
 
 fn supports_update_if_needed(brew: &std::path::Path, runner: &dyn ProcessRunner) -> bool {
