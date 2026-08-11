@@ -16,6 +16,7 @@ use std::{
 const DEFAULT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIRST_HEARTBEAT_AFTER: Duration = Duration::from_secs(12);
 const REPEAT_HEARTBEAT_AFTER: Duration = Duration::from_secs(15);
+const MAX_CAPTURE_OUTPUT: usize = * 1024 * 1024; // 8 Mib
 
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
