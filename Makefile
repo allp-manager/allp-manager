@@ -11,6 +11,7 @@ RELEASE_PREFIX ?= allp
 BUMP ?= patch
 VERSION ?=
 CURRENT_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+CURRENT_GIT_SHA := $(shell git rev-parse --verify HEAD 2>/dev/null || printf unknown)
 
 .DEFAULT_GOAL := help
 
@@ -70,10 +71,10 @@ architecture:
 	$(BASH) scripts/check-architecture.sh
 
 build:
-	$(CARGO) build
+	ALLP_GIT_SHA="$(CURRENT_GIT_SHA)" $(CARGO) build
 
 release:
-	$(CARGO) build --release
+	ALLP_GIT_SHA="$(CURRENT_GIT_SHA)" $(CARGO) build --release
 
 quality: fmt-check check clippy test architecture release docs-check
 

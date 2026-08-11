@@ -149,6 +149,12 @@ pub fn compare_builds(
     if same_known_commit {
         return Ok(BuildComparison::SameSource);
     }
+    // A local development build represents an explicitly selected checkout.
+    // Workflow run numbers are not revisions of that checkout and must not
+    // silently replace it when the base SemVer is otherwise equal.
+    if installed.channel == BuildChannel::Development {
+        return Ok(BuildComparison::LocalAhead);
+    }
     Ok(if remote.build_revision > installed.build_revision {
         BuildComparison::UpdateAvailable
     } else {
@@ -245,6 +251,19 @@ mod tests {
         assert_eq!(
             compare_builds(&installed, &rebuilt),
             Ok(BuildComparison::SameSource)
+        );
+    }
+
+    #[test]
+    fn continuous_revision_does_not_replace_different_local_development_source() {
+        let mut installed = identity(Version::new(0, 3, 5), 1, &"a".repeat(40));
+        installed.channel = BuildChannel::Development;
+        installed.official = false;
+        let remote = identity(Version::new(0, 3, 5), 4, &"b".repeat(40));
+
+        assert_eq!(
+            compare_builds(&installed, &remote),
+            Ok(BuildComparison::LocalAhead)
         );
     }
 
