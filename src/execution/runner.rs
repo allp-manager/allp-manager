@@ -63,12 +63,18 @@ impl StdProcessRunner {
         command: &NativeCommand,
         mut process: Command,
     ) -> AllpResult<CommandOutput> {
-        let mut child = process
+        let mut process = process;
+
+        process
             .env("LC_ALL", "C")
             .env("LANG", "C")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        #[cfg(unix)]
+        process.process_group(0);
+
+        let mut child = process.spawn()?;
         let stdout = child.stdout.take().ok_or_else(|| {
             AllpError::Io(std::io::Error::other("failed to capture child stdout"))
         })?;
