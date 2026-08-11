@@ -129,7 +129,7 @@ impl Backend for HomebrewBackend {
         append_search(
             self,
             runner.capture_with_privilege(
-                &NativeCommand::new(brew).args(["search", "--formula", query]),
+                &homebrew_command(brew).args(["search", "--formula", query]),
                 PrivilegeRequirement::OriginalUserRequired,
             ),
             query,
@@ -140,7 +140,7 @@ impl Backend for HomebrewBackend {
         append_search(
             self,
             runner.capture_with_privilege(
-                &NativeCommand::new(brew).args(["search", "--cask", query]),
+                &homebrew_command(brew).args(["search", "--cask", query]),
                 PrivilegeRequirement::OriginalUserRequired,
             ),
             query,
@@ -153,7 +153,7 @@ impl Backend for HomebrewBackend {
             let output = capture_checked_with_privilege(
                 self,
                 runner,
-                NativeCommand::new(brew).args(["search", query]),
+                homebrew_command(brew).args(["search", query]),
                 PrivilegeRequirement::OriginalUserRequired,
             )?;
             append_lines(
@@ -181,7 +181,7 @@ impl Backend for HomebrewBackend {
             &capture_checked_with_privilege(
                 self,
                 runner,
-                NativeCommand::new(brew).args(["list", "--formula", "--versions"]),
+                homebrew_command(brew).args(["list", "--formula", "--versions"]),
                 PrivilegeRequirement::OriginalUserRequired,
             )
             .unwrap_or_default(),
@@ -194,7 +194,7 @@ impl Backend for HomebrewBackend {
             &capture_checked_with_privilege(
                 self,
                 runner,
-                NativeCommand::new(brew).args(["list", "--cask", "--versions"]),
+                homebrew_command(brew).args(["list", "--cask", "--versions"]),
                 PrivilegeRequirement::OriginalUserRequired,
             )
             .unwrap_or_default(),
@@ -215,7 +215,7 @@ impl Backend for HomebrewBackend {
         let output = capture_checked_with_privilege(
             self,
             runner,
-            NativeCommand::new(brew).args(["info", package_id]),
+            homebrew_command(brew).args(["info", package_id]),
             PrivilegeRequirement::OriginalUserRequired,
         )?;
         Ok(PackageInfo {
@@ -245,7 +245,7 @@ impl Backend for HomebrewBackend {
         capture_checked_with_privilege(
             self,
             runner,
-            NativeCommand::new(brew).args(["info", package_id]),
+            homebrew_command(brew).args(["info", package_id]),
             PrivilegeRequirement::OriginalUserRequired,
         )
     }
@@ -256,7 +256,7 @@ impl Backend for HomebrewBackend {
         candidate: &PackageCandidate,
     ) -> AllpResult<ExecutionPlan> {
         let brew = command_path(self, commands, "brew")?;
-        let mut command = NativeCommand::new(brew).arg("install");
+        let mut command = homebrew_command(brew).arg("install");
         if candidate
             .artifact_kind
             .eq_ignore_ascii_case("Homebrew cask")
@@ -280,7 +280,7 @@ impl Backend for HomebrewBackend {
         package: &InstalledPackage,
     ) -> AllpResult<ExecutionPlan> {
         let brew = command_path(self, commands, "brew")?;
-        let mut command = NativeCommand::new(brew).arg("uninstall");
+        let mut command = homebrew_command(brew).arg("uninstall");
         if package
             .source
             .as_deref()
@@ -318,7 +318,7 @@ impl Backend for HomebrewBackend {
             "Refresh Homebrew formula and cask metadata",
             None,
             Some("Homebrew".to_owned()),
-            suppress_update_report(NativeCommand::new(brew).arg(operation)),
+            suppress_update_report(homebrew_command(brew).arg(operation)),
         )]))
     }
 
@@ -330,7 +330,7 @@ impl Backend for HomebrewBackend {
         _target: Option<DeveloperTarget>,
     ) -> AllpResult<MaintenancePlan> {
         let brew = command_path(self, commands, "brew")?;
-        let command = no_auto_update(NativeCommand::new(brew).args(["outdated", "--json=v2"]));
+        let command = no_auto_update(homebrew_command(brew).args(["outdated", "--json=v2"]));
         let output =
             runner.capture_with_privilege(&command, PrivilegeRequirement::OriginalUserRequired)?;
         if !output.success {
@@ -359,7 +359,7 @@ impl Backend for HomebrewBackend {
             "Upgrade installed Homebrew packages",
             None,
             Some("Homebrew".to_owned()),
-            no_auto_update(NativeCommand::new(brew).arg("upgrade")),
+            no_auto_update(homebrew_command(brew).arg("upgrade")),
         );
         upgrade.details.push((
             "Outdated formulae".to_owned(),
@@ -454,6 +454,13 @@ fn no_auto_update(command: NativeCommand) -> NativeCommand {
     command.env("HOMEBREW_NO_AUTO_UPDATE", "1")
 }
 
+fn homebrew_command(brew: &std::path::Path) -> NativeCommand {
+    NativeCommand::new(brew)
+        .env("HOMEBREW_NO_ANALYTICS", "1")
+        .env("HOMEBREW_NO_UPDATE_REPORT_NEW", "1")
+        .env("HOMEBREW_NO_ENV_HINTS", "1")
+}
+
 fn suppress_update_report(command: NativeCommand) -> NativeCommand {
     command.env("HOMEBREW_NO_UPDATE_REPORT_NEW", "1")
 }
@@ -461,7 +468,7 @@ fn suppress_update_report(command: NativeCommand) -> NativeCommand {
 fn supports_update_if_needed(brew: &std::path::Path, runner: &dyn ProcessRunner) -> bool {
     runner
         .capture_with_privilege(
-            &NativeCommand::new(brew).args(["help", "update-if-needed"]),
+            &homebrew_command(brew).args(["help", "update-if-needed"]),
             PrivilegeRequirement::OriginalUserRequired,
         )
         .is_ok_and(|output| output.success)
@@ -541,7 +548,7 @@ fn verify_upgrade(
             message: "upgrade plan did not preserve the pre-upgrade outdated count".to_owned(),
         })?;
     let command =
-        no_auto_update(NativeCommand::new(&plan.command.program).args(["outdated", "--json=v2"]));
+        no_auto_update(homebrew_command(&plan.command.program).args(["outdated", "--json=v2"]));
     let output =
         runner.capture_with_privilege(&command, PrivilegeRequirement::OriginalUserRequired)?;
     if !output.success {
@@ -699,7 +706,30 @@ fn first_version(output: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_busy_output, parse_outdated};
+    use super::{homebrew_command, is_busy_output, parse_outdated};
+
+    #[test]
+    fn every_homebrew_command_suppresses_process_local_analytics_and_hints() {
+        let command = homebrew_command(std::path::Path::new("/opt/homebrew/bin/brew"));
+        let environment: std::collections::HashMap<_, _> = command
+            .env
+            .iter()
+            .map(|(key, value)| (key, value))
+            .collect();
+
+        assert_eq!(
+            environment.get(&std::ffi::OsString::from("HOMEBREW_NO_ANALYTICS")),
+            Some(&&std::ffi::OsString::from("1"))
+        );
+        assert_eq!(
+            environment.get(&std::ffi::OsString::from("HOMEBREW_NO_UPDATE_REPORT_NEW")),
+            Some(&&std::ffi::OsString::from("1"))
+        );
+        assert_eq!(
+            environment.get(&std::ffi::OsString::from("HOMEBREW_NO_ENV_HINTS")),
+            Some(&&std::ffi::OsString::from("1"))
+        );
+    }
 
     #[test]
     fn parses_formulae_casks_and_pinned_state() {
