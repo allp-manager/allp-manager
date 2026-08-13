@@ -118,7 +118,7 @@ Enter       select the highlighted/first visible result where supported
 
 Non-TTY and JSON output never start the interactive selector.
 
-Mutating commands support `--yes` / `-y`. This bypasses only Allp's ordinary final confirmation prompt after all package, installer, scope, and target choices are resolved. It never adds native auto-confirm flags, bypasses ambiguity or ownership/registry safety, or approves prerequisite/repository changes. Non-interactive bootstrap requires `--yes --allow-bootstrap` after the plan is displayed.
+Mutating commands support `--yes` / `-y`. This bypasses only Allp's ordinary final confirmation prompt after all package, installer, scope, and target choices are resolved. It does not indiscriminately add native auto-confirm flags, bypass ambiguity or ownership/registry safety, or approve prerequisite/repository changes. Operation-specific flags remain explicit in the plan: APT upgrades use `-y`, while APT metadata refreshes do not. Non-interactive bootstrap requires `--yes --allow-bootstrap` after the plan is displayed.
 
 Development maintenance supports `--target`:
 

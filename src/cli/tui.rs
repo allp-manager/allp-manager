@@ -4,7 +4,8 @@ use crate::{
         RuntimePrivilegeContext,
     },
     execution::{
-        render_execution_plan_with_context, ExecutionObserver, ProcessEvent, ProcessOutputStream,
+        render_execution_plan_with_context, render_execution_plan_with_privilege_session,
+        ExecutionObserver, ProcessEvent, ProcessOutputStream,
     },
 };
 use std::{
@@ -41,7 +42,6 @@ pub struct MaintenanceTui {
 
 #[derive(Debug, Clone)]
 struct ActiveOperation {
-    index: usize,
     backend_name: String,
     action: String,
     elapsed: Duration,
@@ -96,14 +96,13 @@ impl MaintenanceTui {
                 ),
                 format!(
                     "Command preview: {}",
-                    render_execution_plan_with_context(plan, privilege_context)
+                    render_execution_plan_with_privilege_session(plan, privilege_context)
                 ),
                 "The runtime preserves the validated privilege boundary and sanitized environment."
                     .to_owned(),
             ],
         );
         self.active = Some(ActiveOperation {
-            index,
             backend_name: plan.backend_name.clone(),
             action: plan.action.clone(),
             elapsed: Duration::ZERO,
@@ -326,26 +325,21 @@ impl MaintenanceTui {
             return;
         }
         let total = self.total.max(1);
-        let (index, backend, action, elapsed) = self
+        let (backend, action, elapsed) = self
             .active
             .as_ref()
             .map(|active| {
                 (
-                    active.index,
                     active.backend_name.as_str(),
                     active.action.as_str(),
                     active.elapsed,
                 )
             })
-            .unwrap_or((
-                self.completed.min(total),
-                "waiting",
-                "finalizing results",
-                Duration::ZERO,
-            ));
-        let bar = progress_bar(self.completed, self.active.is_some(), total, elapsed);
+            .unwrap_or(("waiting", "finalizing results", Duration::ZERO));
+        let completed = self.completed.min(total);
+        let bar = progress_bar(completed, total);
         let text = format!(
-            " {bar} {index}/{total} · {backend} · {} · {} ",
+            " {bar} Queue: {completed}/{total} complete · {backend} · {} · {} ",
             truncate(action, 34),
             format_duration(elapsed)
         );
@@ -502,9 +496,10 @@ fn tone_for_status(status: &OperationStatus) -> Tone {
         | OperationStatus::AlreadyInstalled
         | OperationStatus::Success => Tone::Success,
         OperationStatus::Failed => Tone::Error,
-        OperationStatus::Protected | OperationStatus::Busy | OperationStatus::Deferred => {
-            Tone::Warning
-        }
+        OperationStatus::Protected
+        | OperationStatus::Busy
+        | OperationStatus::Blocked
+        | OperationStatus::Deferred => Tone::Warning,
         OperationStatus::DryRun | OperationStatus::Available | OperationStatus::Selected => {
             Tone::Info
         }
@@ -556,26 +551,21 @@ fn summary_lines(report: &MultiOperationReport, dry_run: bool) -> Vec<String> {
             count(|status| matches!(status, OperationStatus::UpToDate)),
         ),
         format!(
-            "{} deferred · {} not applicable · {} protected · {} busy · {} cancelled · {} failed",
+            "{} deferred · {} not applicable · {} protected · {} busy · {} blocked · {} cancelled · {} failed",
             count(|status| matches!(status, OperationStatus::Deferred)),
             count(|status| matches!(status, OperationStatus::NotApplicable)),
             count(|status| matches!(status, OperationStatus::Protected)),
             count(|status| matches!(status, OperationStatus::Busy)),
+            count(|status| matches!(status, OperationStatus::Blocked)),
             count(|status| matches!(status, OperationStatus::Cancelled)),
             count(|status| matches!(status, OperationStatus::Failed)),
         ),
     ]
 }
 
-fn progress_bar(completed: usize, active: bool, total: usize, elapsed: Duration) -> String {
+fn progress_bar(completed: usize, total: usize) -> String {
     let total = total.max(1);
-    let settled_width = completed.min(total) * FOOTER_BAR_WIDTH / total;
-    let pulse_width = if active && settled_width < FOOTER_BAR_WIDTH {
-        1 + (elapsed.as_secs() as usize % 3)
-    } else {
-        0
-    };
-    let filled = (settled_width + pulse_width).min(FOOTER_BAR_WIDTH);
+    let filled = completed.min(total) * FOOTER_BAR_WIDTH / total;
     format!(
         "[{}{}]",
         "█".repeat(filled),
@@ -697,7 +687,6 @@ fn format_duration(duration: Duration) -> String {
 mod tests {
     use super::{progress_bar, sanitize_terminal_text, summary_lines, wrap_line};
     use crate::domain::{BackendOperationRecord, MultiOperationReport, OperationStatus};
-    use std::time::Duration;
 
     #[test]
     fn terminal_projection_removes_control_sequences_but_keeps_text() {
@@ -715,8 +704,8 @@ mod tests {
 
     #[test]
     fn progress_bar_handles_a_growing_queue() {
-        let before_follow_up = progress_bar(1, true, 2, Duration::from_secs(4));
-        let after_follow_up = progress_bar(1, true, 3, Duration::from_secs(4));
+        let before_follow_up = progress_bar(1, 2);
+        let after_follow_up = progress_bar(1, 3);
 
         assert!(before_follow_up.contains('█'));
         assert!(after_follow_up.contains('░'));
@@ -755,6 +744,7 @@ mod tests {
             command: None,
             status,
             message: None,
+            privilege_status: None,
         }
     }
 }

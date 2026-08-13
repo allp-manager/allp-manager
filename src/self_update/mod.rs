@@ -142,6 +142,9 @@ pub struct SelfUpdateState {
 pub enum UpdateAvailability {
     Offline,
     UpToDate,
+    /// The installed build is newer than the selected update channel. This is
+    /// intentionally distinct from `UpToDate`: Allp will not downgrade it.
+    LocalAhead,
     Available,
     UnsupportedTarget,
     UpdaterTooOld,
@@ -288,44 +291,47 @@ impl<'a> SelfUpdater<'a> {
             BuildComparison::SameBuild
         };
 
-        let (availability, asset, message) = if matches!(
-            comparison,
-            BuildComparison::SameBuild | BuildComparison::SameSource | BuildComparison::LocalAhead
-        ) {
-            let message = match comparison {
-                BuildComparison::SameSource => Some(
+        let (availability, asset, message) = match comparison {
+            BuildComparison::SameBuild => (UpdateAvailability::UpToDate, None, None),
+            BuildComparison::SameSource => (
+                UpdateAvailability::UpToDate,
+                None,
+                Some(
                     "a newer workflow rebuild has the same source commit; reinstall was not forced"
                         .to_owned(),
                 ),
-                BuildComparison::LocalAhead => {
-                    Some("the installed Allp build is newer than the selected channel".to_owned())
+            ),
+            BuildComparison::LocalAhead => (
+                UpdateAvailability::LocalAhead,
+                None,
+                Some("No downgrade will be performed.".to_owned()),
+            ),
+            BuildComparison::UpdateAvailable => {
+                if release.manifest.minimum_updater_version > current_version {
+                    (
+                        UpdateAvailability::UpdaterTooOld,
+                        None,
+                        Some(format!(
+                            "release {} requires updater {} or newer",
+                            release.version, release.manifest.minimum_updater_version
+                        )),
+                    )
+                } else if let Some(asset) = compatible_asset {
+                    (UpdateAvailability::Available, Some(asset), None)
+                } else {
+                    (
+                        UpdateAvailability::UnsupportedTarget,
+                        None,
+                        Some(format!(
+                            "release {} has no compatible asset for {}",
+                            release.version,
+                            self.platform
+                                .target_triple()
+                                .unwrap_or_else(|| "this platform".to_owned())
+                        )),
+                    )
                 }
-                _ => None,
-            };
-            (UpdateAvailability::UpToDate, None, message)
-        } else if release.manifest.minimum_updater_version > current_version {
-            (
-                UpdateAvailability::UpdaterTooOld,
-                None,
-                Some(format!(
-                    "release {} requires updater {} or newer",
-                    release.version, release.manifest.minimum_updater_version
-                )),
-            )
-        } else if let Some(asset) = compatible_asset {
-            (UpdateAvailability::Available, Some(asset), None)
-        } else {
-            (
-                UpdateAvailability::UnsupportedTarget,
-                None,
-                Some(format!(
-                    "release {} has no compatible asset for {}",
-                    release.version,
-                    self.platform
-                        .target_triple()
-                        .unwrap_or_else(|| "this platform".to_owned())
-                )),
-            )
+            }
         };
         state::write_json_atomically(&self.state_path, &persisted)?;
 
@@ -594,6 +600,36 @@ mod tests {
             .expect("state should read")
             .expect("state should exist");
         assert_eq!(persisted.etag.as_deref(), Some("etag-current"));
+        let _ = std::fs::remove_file(state_path);
+    }
+
+    #[test]
+    fn local_ahead_is_distinct_and_never_selects_an_asset() {
+        let release = release_descriptor(true);
+        let mut current = AllpBuildIdentity::current();
+        current.base_version = Version::new(
+            release.version.major,
+            release.version.minor,
+            release.version.patch + 1,
+        );
+        let source = StaticSource {
+            calls: Mutex::new(0),
+            release: Some(release),
+            etag: None,
+        };
+        let platform = linux_x86_platform();
+        let state_path = temporary_state("local-ahead");
+
+        let check = SelfUpdater::new(&source, &platform, state_path.clone())
+            .check_with_current_build(UpdateChannel::Stable, false, current)
+            .expect("a local-ahead check should succeed");
+
+        assert_eq!(check.availability, UpdateAvailability::LocalAhead);
+        assert!(check.asset.is_none());
+        assert_eq!(
+            check.message.as_deref(),
+            Some("No downgrade will be performed.")
+        );
         let _ = std::fs::remove_file(state_path);
     }
 

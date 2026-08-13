@@ -1,16 +1,587 @@
 use crate::domain::{
-    AllpError, AllpResult, NativeCommand, OriginalUser, PrivilegeRequirement,
-    RuntimePrivilegeContext,
+    AllpError, AllpResult, ExecutionPlan, NativeCommand, OriginalUser, PrivilegeRequirement,
+    PrivilegeStatus, RuntimePrivilegeContext,
 };
 use std::{
     collections::BTreeSet,
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, ExitStatus, Output, Stdio},
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::{
+    fs::{MetadataExt, PermissionsExt},
+    io::AsRawFd,
+};
+
+const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(60);
+const AUTHENTICATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const AUTHENTICATION_STOP_GRACE: Duration = Duration::from_secs(1);
+const MAX_PRIVILEGE_DIAGNOSTIC_BYTES: usize = 32 * 1024;
+
+fn authentication_timeout() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(milliseconds) = env::var("ALLP_TEST_SUDO_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        return Duration::from_millis(milliseconds.max(1));
+    }
+
+    AUTHENTICATION_TIMEOUT
+}
+
+/// How the current privilege session was established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivilegeAuthMethod {
+    NotAttempted,
+    NotRequired,
+    AlreadyRoot,
+    InteractiveValidation,
+    NonInteractiveValidation,
+}
+
+/// Reusable administrator-authentication state for one Allp execution run.
+///
+/// Allp validates sudo once before a live maintenance UI starts.  Every
+/// privileged child then runs with `sudo -n`, so an expired credential can be
+/// represented as a structured state rather than opening an interactive
+/// password prompt while the UI owns terminal rendering.
+#[derive(Debug, Clone)]
+pub struct PrivilegeSession {
+    required: bool,
+    authenticated: bool,
+    authentication_method: PrivilegeAuthMethod,
+    validated_at: Option<Instant>,
+    context: RuntimePrivilegeContext,
+    status: Option<PrivilegeStatus>,
+    sudo: Option<PathBuf>,
+}
+
+impl PrivilegeSession {
+    pub fn for_plans(plans: &[ExecutionPlan], context: &RuntimePrivilegeContext) -> Self {
+        let required = plans
+            .iter()
+            .any(|plan| plan.privilege == PrivilegeRequirement::RootRequired);
+        let (authenticated, authentication_method, status) = if !required {
+            (
+                false,
+                PrivilegeAuthMethod::NotRequired,
+                Some(PrivilegeStatus::NotRequired),
+            )
+        } else if context.is_root() {
+            (
+                true,
+                PrivilegeAuthMethod::AlreadyRoot,
+                Some(PrivilegeStatus::AlreadyRoot),
+            )
+        } else {
+            (false, PrivilegeAuthMethod::NotAttempted, None)
+        };
+
+        Self {
+            required,
+            authenticated,
+            authentication_method,
+            validated_at: None,
+            context: context.clone(),
+            status,
+            sudo: None,
+        }
+    }
+
+    pub fn context(&self) -> &RuntimePrivilegeContext {
+        &self.context
+    }
+
+    pub fn required(&self) -> bool {
+        self.required
+    }
+
+    pub fn authenticated(&self) -> bool {
+        self.authenticated
+    }
+
+    pub fn authentication_method(&self) -> PrivilegeAuthMethod {
+        self.authentication_method
+    }
+
+    pub fn validated_at(&self) -> Option<Instant> {
+        self.validated_at
+    }
+
+    pub fn status(&self) -> Option<PrivilegeStatus> {
+        self.status
+    }
+
+    /// Records that a dynamically planned operation will require sudo.
+    ///
+    /// Maintenance follow-up plans can be discovered after the initial queue
+    /// was authenticated. They join the same session and are authenticated at
+    /// their own execution boundary rather than falling back to legacy sudo.
+    pub fn ensure_for_plan(&mut self, plan: &ExecutionPlan) -> bool {
+        if plan.privilege != PrivilegeRequirement::RootRequired {
+            return false;
+        }
+        if !self.required {
+            self.required = true;
+            self.status = None;
+            self.authenticated = false;
+            self.authentication_method = PrivilegeAuthMethod::NotAttempted;
+            self.validated_at = None;
+        }
+        true
+    }
+
+    /// Performs the one authentication preflight that may be interactive.
+    ///
+    /// It deliberately launches sudo directly with all three standard streams
+    /// inherited.  In particular, callers must invoke this before a live TUI
+    /// starts observing child output.
+    pub fn preflight(&mut self, interactive: bool) -> PrivilegeStatus {
+        if !self.required {
+            self.authentication_method = PrivilegeAuthMethod::NotRequired;
+            return self.set_status(PrivilegeStatus::NotRequired, false);
+        }
+        if self.context.is_root() {
+            self.authentication_method = PrivilegeAuthMethod::AlreadyRoot;
+            return self.set_status(PrivilegeStatus::AlreadyRoot, true);
+        }
+
+        let sudo = match resolve_sudo() {
+            Ok(sudo) => sudo,
+            Err(_) => return self.set_status(PrivilegeStatus::Unavailable, false),
+        };
+
+        let authentication_method = if interactive {
+            PrivilegeAuthMethod::InteractiveValidation
+        } else {
+            PrivilegeAuthMethod::NonInteractiveValidation
+        };
+        let result = if interactive {
+            run_interactive_validation(&sudo)
+                .map(|status| classify_interactive_validation_failure(&status))
+        } else {
+            run_noninteractive_validation(&sudo)
+                .map(|output| classify_noninteractive_validation_output(&output))
+        };
+
+        match result {
+            Ok(PrivilegeStatus::Authenticated) => {
+                self.sudo = Some(sudo);
+                self.authentication_method = authentication_method;
+                self.set_status(PrivilegeStatus::Authenticated, true)
+            }
+            Ok(status) => {
+                self.authentication_method = authentication_method;
+                self.set_status(status, false)
+            }
+            Err(status) => {
+                self.authentication_method = authentication_method;
+                self.set_status(status, false)
+            }
+        }
+    }
+
+    /// Verifies that a preflighted sudo credential is still usable without
+    /// ever allowing a password prompt.  This runs before a root-required
+    /// operation is rendered as running by the live UI.
+    pub fn validate_for(&mut self, plan: &ExecutionPlan) -> PrivilegeStatus {
+        if !plan.privilege.requires_sudo(&self.context) {
+            return self.current_status_for(plan);
+        }
+
+        self.ensure_for_plan(plan);
+
+        if !self.authenticated {
+            // A dynamically added root plan has not had an initial preflight
+            // yet. Treat it like expired credentials so the operation layer
+            // can safely leave the TUI and authenticate once.
+            return self.status.unwrap_or(PrivilegeStatus::CredentialExpired);
+        }
+        let Some(sudo) = self.sudo.as_deref() else {
+            return self.set_status(PrivilegeStatus::Unavailable, false);
+        };
+
+        match run_noninteractive_validation(sudo) {
+            Ok(output) => self.set_status(
+                classify_noninteractive_validation_output(&output),
+                output.status.success(),
+            ),
+            Err(status) => self.set_status(status, false),
+        }
+    }
+
+    /// Returns the cached privilege outcome for a plan without spawning a
+    /// process.  The central runner uses this as a final guard after the
+    /// operation layer has completed its noninteractive validation.
+    pub fn current_status_for(&self, plan: &ExecutionPlan) -> PrivilegeStatus {
+        if !plan.privilege.requires_sudo(&self.context) {
+            return if plan.privilege == PrivilegeRequirement::RootRequired && self.context.is_root()
+            {
+                PrivilegeStatus::AlreadyRoot
+            } else {
+                PrivilegeStatus::NotRequired
+            };
+        }
+        if self.authenticated {
+            PrivilegeStatus::Authenticated
+        } else {
+            self.status.unwrap_or(PrivilegeStatus::Unavailable)
+        }
+    }
+
+    pub fn mark_noninteractive_failure(&mut self, status: PrivilegeStatus) {
+        debug_assert!(matches!(
+            status,
+            PrivilegeStatus::CredentialExpired | PrivilegeStatus::Unavailable
+        ));
+        self.set_status(status, false);
+    }
+
+    fn sudo_path(&self) -> Option<&Path> {
+        self.sudo.as_deref()
+    }
+
+    fn set_status(&mut self, status: PrivilegeStatus, authenticated: bool) -> PrivilegeStatus {
+        self.status = Some(status);
+        self.authenticated = authenticated;
+        self.validated_at = authenticated.then(Instant::now);
+        status
+    }
+}
+
+fn classify_interactive_validation_failure(status: &ExitStatus) -> PrivilegeStatus {
+    if status.success() {
+        return PrivilegeStatus::Authenticated;
+    }
+    #[cfg(unix)]
+    if std::os::unix::process::ExitStatusExt::signal(status) == Some(libc::SIGINT) {
+        return PrivilegeStatus::AuthenticationCancelled;
+    }
+
+    if status.code() == Some(130) {
+        return PrivilegeStatus::AuthenticationCancelled;
+    }
+    PrivilegeStatus::AuthenticationFailed
+}
+
+/// Executes `sudo -n -v` with a real stdin/TTY but captures its small
+/// diagnostics. `-n` guarantees sudo cannot read a password, while inheriting
+/// stdin avoids a false failure on installations using `requiretty`.
+fn run_noninteractive_validation(sudo: &Path) -> Result<Output, PrivilegeStatus> {
+    let _signals = AuthenticationSignalGuard::install();
+    let mut child = Command::new(sudo)
+        .args(["-n", "-v"])
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("LC_MESSAGES", "C")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::Interrupted => PrivilegeStatus::AuthenticationCancelled,
+            std::io::ErrorKind::TimedOut => PrivilegeStatus::AuthenticationTimedOut,
+            _ => PrivilegeStatus::Unavailable,
+        })?;
+    let (sender, receiver) = mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        drain_validation_stream(stdout, sender.clone(), true);
+    }
+    if let Some(stderr) = child.stderr.take() {
+        drain_validation_stream(stderr, sender.clone(), false);
+    }
+    drop(sender);
+    let started = Instant::now();
+    let status = loop {
+        if AuthenticationSignalGuard::interrupted() {
+            stop_authentication_child(&mut child);
+            return Err(PrivilegeStatus::AuthenticationCancelled);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= authentication_timeout() => {
+                stop_authentication_child(&mut child);
+                return Err(PrivilegeStatus::AuthenticationTimedOut);
+            }
+            Ok(None) => thread::sleep(AUTHENTICATION_POLL_INTERVAL),
+            Err(error) => {
+                stop_authentication_child(&mut child);
+                return Err(match error.kind() {
+                    std::io::ErrorKind::Interrupted => PrivilegeStatus::AuthenticationCancelled,
+                    _ => PrivilegeStatus::Unavailable,
+                });
+            }
+        }
+    };
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    for _ in 0..2 {
+        match receiver.recv_timeout(AUTHENTICATION_STOP_GRACE) {
+            Ok((is_stdout, bytes)) if is_stdout => stdout = bytes,
+            Ok((_, bytes)) => stderr = bytes,
+            Err(_) => return Err(PrivilegeStatus::Unavailable),
+        }
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn drain_validation_stream<R>(mut stream: R, sender: mpsc::Sender<(bool, Vec<u8>)>, stdout: bool)
+where
+    R: std::io::Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    let remaining = MAX_PRIVILEGE_DIAGNOSTIC_BYTES.saturating_sub(bytes.len());
+                    bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+                }
+            }
+        }
+        let _ = sender.send((stdout, bytes));
+    });
+}
+
+fn classify_noninteractive_validation_output(output: &Output) -> PrivilegeStatus {
+    if output.status.success() {
+        return PrivilegeStatus::Authenticated;
+    }
+    #[cfg(unix)]
+    if std::os::unix::process::ExitStatusExt::signal(&output.status) == Some(libc::SIGINT) {
+        return PrivilegeStatus::AuthenticationCancelled;
+    }
+    if output.status.code() == Some(130) {
+        return PrivilegeStatus::AuthenticationCancelled;
+    }
+    let diagnostics = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    classify_noninteractive_sudo_diagnostics(&diagnostics)
+}
+
+/// Maps C-locale `sudo -n` diagnostics to an administrator boundary state.
+///
+/// A password-specific failure means a previously authenticated credential
+/// may be renewed outside the TUI. Policy, TTY, and helper failures are not
+/// retried interactively because doing so would only repeat an unavailable
+/// configuration.
+pub(crate) fn classify_noninteractive_sudo_diagnostics(diagnostics: &str) -> PrivilegeStatus {
+    let diagnostics = diagnostics.to_ascii_lowercase();
+    if diagnostics.contains("a password is required")
+        || diagnostics.contains("password is required")
+        || diagnostics.contains("password is needed")
+        || diagnostics.contains("no password was provided")
+    {
+        PrivilegeStatus::CredentialExpired
+    } else {
+        PrivilegeStatus::Unavailable
+    }
+}
+
+/// Runs the only interactive sudo command with a short, owned deadline.
+///
+/// The standard streams remain inherited so sudo owns the real terminal. The
+/// terminal snapshot is restored on every return path as a defensive guard
+/// for current and future TUI implementations.
+fn run_interactive_validation(sudo: &Path) -> Result<ExitStatus, PrivilegeStatus> {
+    let terminal_state = TerminalState::capture();
+    let _signals = AuthenticationSignalGuard::install();
+    let child = Command::new(sudo)
+        .arg("-v")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("LC_MESSAGES", "C")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            #[cfg(unix)]
+            if let Some(terminal_state) = terminal_state {
+                terminal_state.restore();
+            }
+            #[cfg(not(unix))]
+            terminal_state.restore();
+            return Err(match error.kind() {
+                std::io::ErrorKind::Interrupted => PrivilegeStatus::AuthenticationCancelled,
+                std::io::ErrorKind::TimedOut => PrivilegeStatus::AuthenticationTimedOut,
+                _ => PrivilegeStatus::Unavailable,
+            });
+        }
+    };
+    let started = Instant::now();
+    let result = loop {
+        if AuthenticationSignalGuard::interrupted() {
+            stop_authentication_child(&mut child);
+            break Err(PrivilegeStatus::AuthenticationCancelled);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if started.elapsed() >= authentication_timeout() => {
+                stop_authentication_child(&mut child);
+                break Err(PrivilegeStatus::AuthenticationTimedOut);
+            }
+            Ok(None) => thread::sleep(AUTHENTICATION_POLL_INTERVAL),
+            Err(error) => {
+                stop_authentication_child(&mut child);
+                break Err(match error.kind() {
+                    std::io::ErrorKind::Interrupted => PrivilegeStatus::AuthenticationCancelled,
+                    _ => PrivilegeStatus::Unavailable,
+                });
+            }
+        }
+    };
+    #[cfg(unix)]
+    if let Some(terminal_state) = terminal_state {
+        terminal_state.restore();
+    }
+    #[cfg(not(unix))]
+    terminal_state.restore();
+    result
+}
+
+fn stop_authentication_child(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + AUTHENTICATION_STOP_GRACE;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) => thread::sleep(AUTHENTICATION_POLL_INTERVAL),
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct TerminalState {
+    fd: libc::c_int,
+    attributes: libc::termios,
+}
+
+#[cfg(unix)]
+impl TerminalState {
+    fn capture() -> Option<Self> {
+        let fd = std::io::stdin().as_raw_fd();
+        if unsafe { libc::isatty(fd) } != 1 {
+            return None;
+        }
+        let mut attributes = unsafe { std::mem::zeroed::<libc::termios>() };
+        (unsafe { libc::tcgetattr(fd, &mut attributes) } == 0).then_some(Self { fd, attributes })
+    }
+
+    fn restore(self) {
+        unsafe {
+            libc::tcsetattr(self.fd, libc::TCSANOW, &self.attributes);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct TerminalState;
+
+#[cfg(not(unix))]
+impl TerminalState {
+    fn capture() -> Self {
+        Self
+    }
+
+    fn restore(self) {}
+}
+
+#[cfg(unix)]
+static AUTHENTICATION_INTERRUPTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn authentication_signal_handler(_: libc::c_int) {
+    AUTHENTICATION_INTERRUPTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Temporarily owns SIGINT/SIGTERM while the authentication child owns the
+/// terminal. The parent remains alive long enough to restore its terminal
+/// snapshot and return a structured cancellation result.
+#[cfg(unix)]
+struct AuthenticationSignalGuard {
+    previous_int: libc::sigaction,
+    previous_term: libc::sigaction,
+}
+
+#[cfg(unix)]
+impl AuthenticationSignalGuard {
+    fn install() -> Option<Self> {
+        AUTHENTICATION_INTERRUPTED.store(false, std::sync::atomic::Ordering::Relaxed);
+        let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        action.sa_sigaction = authentication_signal_handler as *const () as usize;
+        unsafe {
+            libc::sigemptyset(&mut action.sa_mask);
+        }
+        let mut previous_int = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        let mut previous_term = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        if unsafe { libc::sigaction(libc::SIGINT, &action, &mut previous_int) } != 0 {
+            return None;
+        }
+        if unsafe { libc::sigaction(libc::SIGTERM, &action, &mut previous_term) } != 0 {
+            unsafe {
+                libc::sigaction(libc::SIGINT, &previous_int, std::ptr::null_mut());
+            }
+            return None;
+        }
+        Some(Self {
+            previous_int,
+            previous_term,
+        })
+    }
+
+    fn interrupted() -> bool {
+        AUTHENTICATION_INTERRUPTED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for AuthenticationSignalGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::sigaction(libc::SIGINT, &self.previous_int, std::ptr::null_mut());
+            libc::sigaction(libc::SIGTERM, &self.previous_term, std::ptr::null_mut());
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct AuthenticationSignalGuard;
+
+#[cfg(not(unix))]
+impl AuthenticationSignalGuard {
+    fn install() -> Option<Self> {
+        None
+    }
+
+    fn interrupted() -> bool {
+        false
+    }
+}
 
 pub fn is_effective_root() -> bool {
     runtime_context().is_root()
@@ -79,12 +650,61 @@ pub fn prepare_command_with_context(
     )
 }
 
+/// Prepares a command for a privilege session that has already completed its
+/// sudo preflight.  Root-required children are deliberately noninteractive:
+/// `sudo -n -- <native-command>` can never steal terminal input from a live
+/// TUI.
+pub fn prepare_command_with_privilege_session(
+    command: &NativeCommand,
+    privilege: PrivilegeRequirement,
+    session: &PrivilegeSession,
+) -> AllpResult<Command> {
+    if privilege.requires_sudo(session.context()) && !session.authenticated {
+        return Err(AllpError::InvalidInput(
+            "refusing to start a privileged child without an authenticated privilege session"
+                .to_owned(),
+        ));
+    }
+    prepare_command_with_context_for_effective_uid_with_sudo_mode(
+        command,
+        privilege,
+        session.context(),
+        effective_uid(),
+        session.sudo_path(),
+        RootSudoMode::NonInteractive,
+    )
+}
+
 fn prepare_command_with_context_for_effective_uid(
     command: &NativeCommand,
     privilege: PrivilegeRequirement,
     context: &RuntimePrivilegeContext,
     current_uid: Option<u32>,
     sudo_override: Option<&Path>,
+) -> AllpResult<Command> {
+    prepare_command_with_context_for_effective_uid_with_sudo_mode(
+        command,
+        privilege,
+        context,
+        current_uid,
+        sudo_override,
+        RootSudoMode::Interactive,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RootSudoMode {
+    Interactive,
+    NonInteractive,
+}
+
+fn prepare_command_with_context_for_effective_uid_with_sudo_mode(
+    command: &NativeCommand,
+    privilege: PrivilegeRequirement,
+    context: &RuntimePrivilegeContext,
+    current_uid: Option<u32>,
+    sudo_override: Option<&Path>,
+    root_sudo_mode: RootSudoMode,
 ) -> AllpResult<Command> {
     let root_required_program = (privilege == PrivilegeRequirement::RootRequired)
         .then(|| resolve_root_required_executable(&command.program))
@@ -96,6 +716,9 @@ fn prepare_command_with_context_for_effective_uid(
             .map(Path::to_path_buf)
             .map_or_else(resolve_sudo, Ok)?;
         let mut process = Command::new(sudo);
+        if root_sudo_mode == RootSudoMode::NonInteractive {
+            process.arg("-n");
+        }
         process.arg("--").arg(program);
         process
     } else if privilege.requires_original_user(context) {
@@ -123,6 +746,12 @@ fn prepare_command_with_context_for_effective_uid(
     }
     for (key, value) in &command.env {
         process.env(key, value);
+    }
+    if root_sudo_mode == RootSudoMode::NonInteractive && privilege.requires_sudo(context) {
+        // Diagnostics at the sudo boundary have a stable locale. Native
+        // programs may still select their own locale after sudo execs them.
+        process.env("LC_ALL", "C");
+        process.env("LANG", "C");
     }
 
     Ok(process)
@@ -709,6 +1338,118 @@ fn validate_elevated_executable(path: &Path) -> AllpResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::{
+        ExecutionPlan, NativeCommand, OperationKind, PrivilegeRequirement, RuntimePrivilegeContext,
+    };
+
+    fn root_plan() -> ExecutionPlan {
+        ExecutionPlan {
+            backend_id: "test".to_owned(),
+            backend_name: "Test".to_owned(),
+            operation: OperationKind::Update,
+            action: "Test administrator boundary".to_owned(),
+            package_id: None,
+            source: None,
+            scope: None,
+            details: Vec::new(),
+            command: NativeCommand::new("/bin/true"),
+            privilege: PrivilegeRequirement::RootRequired,
+            requires_root: true,
+            interactive: false,
+        }
+    }
+
+    #[test]
+    fn noninteractive_sudo_diagnostics_preserve_expiry_vs_unavailable() {
+        assert_eq!(
+            super::classify_noninteractive_sudo_diagnostics("SUDO: A PASSWORD IS REQUIRED"),
+            crate::domain::PrivilegeStatus::CredentialExpired
+        );
+        assert_eq!(
+            super::classify_noninteractive_sudo_diagnostics("sudo: no password was provided"),
+            crate::domain::PrivilegeStatus::CredentialExpired
+        );
+        for diagnostics in [
+            "sudo: user is not in the sudoers file",
+            "sudo: sorry, you must have a tty to run sudo",
+            "sudo: policy denied this command",
+            "",
+        ] {
+            assert_eq!(
+                super::classify_noninteractive_sudo_diagnostics(diagnostics),
+                crate::domain::PrivilegeStatus::Unavailable,
+                "diagnostics: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn privilege_session_distinguishes_no_requirement_root_and_dynamic_root_plan() {
+        let no_plan = super::PrivilegeSession::for_plans(&[], &RuntimePrivilegeContext::NormalUser);
+        assert_eq!(
+            no_plan.status(),
+            Some(crate::domain::PrivilegeStatus::NotRequired)
+        );
+        assert!(!no_plan.required());
+
+        let plan = root_plan();
+        let root_session = super::PrivilegeSession::for_plans(
+            std::slice::from_ref(&plan),
+            &RuntimePrivilegeContext::RootDirect,
+        );
+        assert_eq!(
+            root_session.status(),
+            Some(crate::domain::PrivilegeStatus::AlreadyRoot)
+        );
+        assert!(root_session.authenticated());
+
+        let mut dynamic =
+            super::PrivilegeSession::for_plans(&[], &RuntimePrivilegeContext::NormalUser);
+        assert!(dynamic.ensure_for_plan(&plan));
+        assert!(dynamic.required());
+        assert!(!dynamic.authenticated());
+        assert_eq!(
+            dynamic.authentication_method(),
+            super::PrivilegeAuthMethod::NotAttempted
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn noninteractive_validation_uses_allps_bounded_deadline() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        let _lock = ENV_LOCK.lock().expect("test environment lock");
+        let path = std::env::temp_dir().join(format!(
+            "allp-sudo-validation-timeout-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed")
+        ));
+        std::fs::write(&path, "#!/bin/sh\nwhile :; do :; done\n")
+            .expect("fake sudo should be written");
+        let mut permissions = std::fs::metadata(&path)
+            .expect("fake sudo metadata")
+            .permissions();
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&path, permissions).expect("fake sudo should be executable");
+
+        std::env::set_var("ALLP_TEST_SUDO_TIMEOUT_MS", "50");
+        let started = std::time::Instant::now();
+        let result = super::run_noninteractive_validation(&path);
+        std::env::remove_var("ALLP_TEST_SUDO_TIMEOUT_MS");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            result,
+            Err(crate::domain::PrivilegeStatus::AuthenticationTimedOut)
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "validation must use Allp's deadline rather than sudo's multi-minute prompt timeout"
+        );
+    }
+
     #[cfg(unix)]
     fn non_root_account() -> super::UserAccount {
         super::system_accounts()

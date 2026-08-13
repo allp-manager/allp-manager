@@ -596,6 +596,7 @@ impl Backend for SnapBackend {
                     command: None,
                     status: operation_status,
                     message: Some(message),
+                    privilege_status: None,
                 }]
             },
         )

@@ -530,6 +530,7 @@ impl Backend for FlatpakBackend {
                     command: None,
                     status: operation_status,
                     message: Some(message),
+                    privilege_status: None,
                 }]
             },
         )

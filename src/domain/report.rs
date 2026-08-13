@@ -1,4 +1,4 @@
-use crate::domain::PackageCandidate;
+use crate::domain::{PackageCandidate, PrivilegeStatus};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,6 +53,7 @@ pub enum OperationStatus {
     Unavailable,
     Protected,
     Busy,
+    Blocked,
     Cancelled,
     Success,
     Failed,
@@ -75,6 +76,7 @@ impl OperationStatus {
             Self::Unavailable => "Unavailable",
             Self::Protected => "Protected",
             Self::Busy => "Busy",
+            Self::Blocked => "Blocked",
             Self::Cancelled => "Cancelled",
             Self::Success => "Success",
             Self::Failed => "Failed",
@@ -84,7 +86,7 @@ impl OperationStatus {
     }
 
     pub fn is_failure(&self) -> bool {
-        matches!(self, Self::Failed | Self::Busy)
+        matches!(self, Self::Failed | Self::Busy | Self::Blocked)
     }
 
     pub fn is_optional_unavailable(&self) -> bool {
@@ -107,6 +109,8 @@ pub struct BackendOperationRecord {
     pub command: Option<String>,
     pub status: OperationStatus,
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privilege_status: Option<PrivilegeStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -157,6 +161,7 @@ impl MaintenancePlan {
             command: None,
             status,
             message: (!message.is_empty()).then_some(message),
+            privilege_status: None,
         }
     }
 }

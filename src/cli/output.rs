@@ -7,7 +7,10 @@ use crate::{
         MultiOperationReport, NativeCommand, PackageCandidate, PackageInfo, ResultSection,
         RuntimePrivilegeContext, SearchReport, SearchScope,
     },
-    execution::{render_execution_plan_with_context, render_native_argv, render_native_command},
+    execution::{
+        render_execution_plan_with_context, render_execution_plan_with_privilege_session,
+        render_native_argv, render_native_command,
+    },
     self_update::{SelfUpdateCheck, UpdateAvailability},
 };
 use serde::Serialize;
@@ -296,6 +299,19 @@ impl Renderer {
                     println!("  {message}");
                 }
             }
+            UpdateAvailability::LocalAhead => {
+                println!(
+                    "Allp {} is newer than the latest build in the selected channel.",
+                    check.current_build.display_version()
+                );
+                println!(
+                    "{}",
+                    check
+                        .message
+                        .as_deref()
+                        .unwrap_or("No downgrade will be performed.")
+                );
+            }
             UpdateAvailability::Offline => {
                 println!("Allp self-update check skipped in offline mode.");
             }
@@ -581,7 +597,7 @@ impl Renderer {
             );
         } else if root_required {
             eprintln!(
-                "\n{} Administrator access is required for selected operations.\nAllp itself is running as your normal user.\nOnly the native child commands listed above will be elevated.\nYou may be asked for your sudo password.",
+                "\n{} Administrator access is required for selected operations.\nAllp itself is running as your normal user.\nAllp validates sudo once after confirmation and before live execution begins.\nOnly the native child commands listed above will be elevated.",
                 self.warning("⚠")
             );
         } else if direct_root && !root_context_notice_shown {
@@ -1137,7 +1153,12 @@ impl Renderer {
         let failed = report
             .records
             .iter()
-            .filter(|record| record.status.is_failure())
+            .filter(|record| matches!(record.status, crate::domain::OperationStatus::Failed))
+            .count();
+        let blocked = report
+            .records
+            .iter()
+            .filter(|record| matches!(record.status, crate::domain::OperationStatus::Blocked))
             .count();
         if report
             .records
@@ -1150,6 +1171,9 @@ impl Renderer {
         println!("{executed} command(s) executed");
         if failed > 0 {
             println!("{failed} backend operation(s) failed");
+        }
+        if blocked > 0 {
+            println!("{blocked} backend operation(s) blocked by administrator access");
         }
     }
 
@@ -1277,6 +1301,9 @@ impl Renderer {
         let busy = count_status(report, |status| {
             matches!(status, crate::domain::OperationStatus::Busy)
         });
+        let blocked = count_status(report, |status| {
+            matches!(status, crate::domain::OperationStatus::Blocked)
+        });
         let cancelled = count_status(report, |status| {
             matches!(status, crate::domain::OperationStatus::Cancelled)
         });
@@ -1300,6 +1327,7 @@ impl Renderer {
             println!("{not_applicable} not applicable");
             println!("{protected} protected");
             println!("{busy} busy");
+            println!("{blocked} blocked");
             println!("{cancelled} cancelled");
             println!("{failed} failed");
             if verbose {
@@ -1352,6 +1380,33 @@ impl Renderer {
         eprintln!(
             "  Command: {}",
             render_execution_plan_with_context(plan, context)
+        );
+    }
+
+    /// Announces an operation that is running through an authenticated
+    /// maintenance privilege session. The ordinary execution announcement is
+    /// deliberately kept for install/remove flows that still use their normal
+    /// confirmed wrapper.
+    pub fn execution_started_with_privilege_session(
+        &self,
+        index: usize,
+        total: usize,
+        plan: &ExecutionPlan,
+        context: &RuntimePrivilegeContext,
+    ) {
+        if self.json {
+            return;
+        }
+        eprintln!(
+            "{} [{index}/{total}] {} {} started",
+            self.info_style("●"),
+            plan.backend_name,
+            plan.operation.as_str()
+        );
+        eprintln!("  Action: {}", plan.action);
+        eprintln!(
+            "  Command: {}",
+            render_execution_plan_with_privilege_session(plan, context)
         );
     }
 
@@ -1417,6 +1472,7 @@ impl Renderer {
             crate::domain::OperationStatus::Failed => self.error("✖"),
             crate::domain::OperationStatus::Protected
             | crate::domain::OperationStatus::Busy
+            | crate::domain::OperationStatus::Blocked
             | crate::domain::OperationStatus::Deferred => self.warning("⚠"),
             crate::domain::OperationStatus::DryRun
             | crate::domain::OperationStatus::Available
@@ -1473,6 +1529,7 @@ fn update_availability_label(availability: UpdateAvailability) -> &'static str {
     match availability {
         UpdateAvailability::Offline => "offline",
         UpdateAvailability::UpToDate => "up_to_date",
+        UpdateAvailability::LocalAhead => "local_ahead",
         UpdateAvailability::Available => "available",
         UpdateAvailability::UnsupportedTarget => "unsupported_target",
         UpdateAvailability::UpdaterTooOld => "updater_too_old",
@@ -1597,7 +1654,8 @@ fn wrap_text(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Renderer;
+    use super::{update_availability_label, Renderer};
+    use crate::self_update::UpdateAvailability;
 
     #[test]
     fn status_styles_use_expected_colors_when_enabled() {
@@ -1625,5 +1683,13 @@ mod tests {
 
         assert_eq!(renderer.success("✔"), "✔");
         assert!(renderer.json());
+    }
+
+    #[test]
+    fn local_ahead_has_a_distinct_json_status() {
+        assert_eq!(
+            update_availability_label(UpdateAvailability::LocalAhead),
+            "local_ahead"
+        );
     }
 }

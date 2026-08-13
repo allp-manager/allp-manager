@@ -155,10 +155,14 @@ For real execution, Allp first renders the complete plan, explains child-only pr
 
 In a real interactive terminal, execution is shown in the live maintenance
 dashboard: native logs remain in normal scrollback, outcome cards identify
-successes and failures, and a footer shows live action/progress. Use
+successes and failures, and a footer shows the explicit queue count
+`Queue: completed/total` rather than time-based package progress. Use
 `allp update --no-tui` to force the classic stream. The dashboard is disabled
 for JSON, dry runs, redirected/non-TTY output, `TERM=dumb`, and
-`--no-interactive`; it never changes the native plan or privilege behavior.
+`--no-interactive`. For selected root-required maintenance plans, Allp performs
+one `sudo -v` preflight after final confirmation and before the dashboard starts,
+then uses `sudo -n --` for those children. The dashboard does not rewrite the
+planned native argv or plan-level privilege requirement.
 
 ## `upgrade`
 
@@ -231,4 +235,4 @@ allp self-update --update-channel stable
 allp self-update --update-channel prerelease
 ```
 
-Checks only the trusted official GitHub repository. Continuous candidates must identify a successful trusted main-branch workflow and an unexpired Actions artifact; stable candidates remain semantic-version releases. Compatible assets are selected from the authoritative manifest by OS, architecture, libc, and target, then checked by SHA-256. Verification, replacement, rollback, Windows deferral, and guarded re-execution are documented in [SELF_UPDATE.md](SELF_UPDATE.md).
+Checks only the trusted official GitHub repository. Continuous candidates must identify a successful trusted main-branch workflow and an unexpired Actions artifact; stable candidates remain semantic-version releases. Compatible assets are selected from the authoritative manifest by OS, architecture, libc, and target, then checked by SHA-256. If the installed build is newer than the selected channel, Allp reports that distinct local-ahead state and does not downgrade. Verification, replacement, rollback, Windows deferral, and guarded re-execution are documented in [SELF_UPDATE.md](SELF_UPDATE.md).

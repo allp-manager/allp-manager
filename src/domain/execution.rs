@@ -1,4 +1,46 @@
+use serde::Serialize;
 use std::{ffi::OsString, path::PathBuf, time::Duration};
+
+/// The result at the administrator-privilege boundary.
+///
+/// This is deliberately distinct from a package-manager exit result. A
+/// blocked privilege operation is useful both to the terminal renderer and to
+/// machine-readable reports, without attributing an authentication problem to
+/// the backend that was not allowed to start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivilegeStatus {
+    NotRequired,
+    AlreadyRoot,
+    Authenticated,
+    AuthenticationFailed,
+    AuthenticationCancelled,
+    AuthenticationTimedOut,
+    CredentialExpired,
+    Unavailable,
+}
+
+impl PrivilegeStatus {
+    pub fn permits_execution(self) -> bool {
+        matches!(
+            self,
+            Self::NotRequired | Self::AlreadyRoot | Self::Authenticated
+        )
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::NotRequired => "administrator access was not required",
+            Self::AlreadyRoot => "already running as administrator",
+            Self::Authenticated => "administrator authentication succeeded",
+            Self::AuthenticationFailed => "administrator authentication failed",
+            Self::AuthenticationCancelled => "administrator authentication cancelled",
+            Self::AuthenticationTimedOut => "administrator authentication timed out",
+            Self::CredentialExpired => "administrator credentials expired",
+            Self::Unavailable => "administrator authentication unavailable",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationKind {

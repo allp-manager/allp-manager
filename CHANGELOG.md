@@ -4,6 +4,22 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Confirmed maintenance runs validate administrator access with `sudo -v`
+  before the live dashboard starts, then use noninteractive `sudo -n --` for
+  root-required children.
+- The maintenance footer now labels queue completion explicitly and advances
+  only when queued operations finish, never merely because time elapsed.
+
+### Fixed
+
+- Self-update now reports an installed build newer than the selected channel as
+  `LocalAhead` and explicitly declines to downgrade instead of calling it up to
+  date.
+- APT metadata refreshes no longer receive `-y`; the flag remains limited to
+  confirmed APT upgrades.
+
 ## [0.4.0] - 2026-08-13
 
 ### Release Title

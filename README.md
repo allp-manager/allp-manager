@@ -130,9 +130,11 @@ details and macOS/Linuxbrew limits.
 On a real interactive `update` or `upgrade`, Allp 0.4.0 presents an inline live
 dashboard during execution. Native logs remain in normal terminal scrollback;
 status and error cards make important events stand out; and the footer shows
-the active backend, exact action, elapsed time, and queue progress. It is not a
-full-screen terminal takeover, so native prompts and Ctrl+C retain their normal
-terminal behavior.
+the active backend, exact action, elapsed time, and explicit queue completion.
+It is not a full-screen terminal takeover, so Ctrl+C does not require raw-mode
+restoration. When selected maintenance plans need administrator access, Allp
+validates it with `sudo -v` before the dashboard starts, then runs those
+children with `sudo -n --` so a password prompt never appears in the footer.
 
 ![Illustrative Allp live update dashboard](docs/assets/tui-maintenance.svg)
 
@@ -146,8 +148,9 @@ allp upgrade --no-tui
 The dashboard is intentionally absent from JSON, dry runs, redirected/non-TTY
 output, `TERM=dumb`, and `--no-interactive` runs. `--no-color` keeps the layout
 but removes color. The dashboard only observes the process runner: it never
-alters the displayed plan, native argv, privilege handling, or final exit
-status. Full behavior and fallback rules are in
+rewrites the planned native argv or plan-level privilege requirement; the
+privilege boundary is fixed before rendering begins. Full behavior and fallback
+rules are in
 [docs/TERMINAL_UI.md](docs/TERMINAL_UI.md).
 
 Use `--from` for a precise backend:
@@ -179,7 +182,14 @@ Preferred:
 allp update
 ```
 
-Allp itself should normally run as your user. Root-required child plans use `sudo --` only after the plan is shown and confirmed. Dry runs never invoke sudo.
+Allp itself should normally run as your user. For a confirmed maintenance run,
+Allp validates administrator access once with `sudo -v` before the live
+dashboard starts, then runs root-required children with `sudo -n --`. This
+keeps password prompts out of the dashboard. If a later cached credential
+expires, Allp clears the footer, revalidates with `sudo -v` outside the
+dashboard, and resumes only after success; an unsuccessful revalidation is a
+blocked operation rather than a package-manager failure. Dry runs never invoke
+sudo.
 
 If you intentionally run:
 
@@ -189,7 +199,10 @@ sudo allp update
 
 Allp does not add nested sudo. Root-required system plans run directly, and user-scoped plans such as Homebrew, Python, Node, and Flatpak-user run as the original sudo user when that identity is available.
 
-`--yes` bypasses only Allp's final confirmation after choices are resolved. It never adds native `-y`, `--assumeyes`, or equivalent flags.
+`--yes` bypasses only Allp's final confirmation after choices are resolved. It
+does not indiscriminately add native confirmation flags: APT upgrades receive
+their documented `-y` flag, while APT metadata refreshes remain `apt-get update`
+without `-y`.
 
 ## Snap Discovery And Resolution
 
@@ -288,6 +301,10 @@ allp update --update-channel prerelease
 ```
 
 Continuous verified main-branch builds are the default channel; stable and prerelease selections are explicit and persisted. Stable release metadata must contain `allp-release-manifest.json`, while continuous builds use their dedicated manifest and trusted workflow identity. Allp compares base SemVer before build revision, selects an asset by OS, architecture, libc, executable format, and target, and reports unsupported targets without staging an update.
+
+If the installed build is newer than the selected channel, Allp reports the
+distinct `LocalAhead` state and does not downgrade it; this is not described as
+up to date.
 
 A binary installed with `make reinstall` is marked as a local development build, but it still follows a newer verified continuous build from `main` (including the local revision-1 collision). That means a merged GitHub change is detected by the default `allp update` channel once its successful continuous build is published; the normal replacement confirmation remains in place.
 
@@ -403,7 +420,7 @@ conflicting release.
 
 ## Security Model
 
-Allp stores commands as program plus argument vector and never executes package-manager work through `sh -c`. Native package output is data, not trusted code. Dry runs do not execute installers. Bootstrap actions are separate plans. Self-update rejects foreign repositories, unsafe asset names, malformed manifests, checksum mismatches, archive traversal, and staged-version mismatches. State files contain no credentials. Allp does not store sudo passwords, collect telemetry, or add native confirmation flags.
+Allp stores commands as program plus argument vector and never executes package-manager work through `sh -c`. Native package output is data, not trusted code. Dry runs do not execute installers. Bootstrap actions are separate plans. Self-update rejects foreign repositories, unsafe asset names, malformed manifests, checksum mismatches, archive traversal, and staged-version mismatches. State files contain no credentials. Allp does not store sudo passwords or collect telemetry; any operation-specific native confirmation flag is explicit in its reviewed plan.
 
 Read [SECURITY.md](SECURITY.md) for reporting and alpha limitations.
 

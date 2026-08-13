@@ -415,6 +415,7 @@ impl Backend for HomebrewBackend {
                 } else {
                     "Homebrew metadata already current".to_owned()
                 }),
+                privilege_status: None,
             }]);
         }
         if plan.operation == OperationKind::Upgrade {
@@ -432,6 +433,7 @@ impl Backend for HomebrewBackend {
                 message: Some(format!(
                     "native upgrade completed for {count} outdated package(s); post-upgrade state requires verification"
                 )),
+                privilege_status: None,
             }]);
         }
         None
@@ -570,6 +572,7 @@ fn verify_upgrade(
         message: Some(format!(
             "before: {before} outdated · updated: {updated} · remaining: {remaining}"
         )),
+        privilege_status: None,
     })
 }
 

@@ -9,7 +9,9 @@ allp update
 Every mutating backend returns an immutable `ExecutionPlan` with a plan-level privilege requirement:
 
 - `NoElevation`: run as the current user.
-- `RootRequired`: run as root, using `sudo --` only when Allp itself is not already root.
+- `RootRequired`: run as root. Ordinary confirmed flows use `sudo --` only
+  when Allp itself is not already root; confirmed maintenance runs first share
+  a `sudo -v` preflight, then use `sudo -n --` while the dashboard is active.
 - `OriginalUserRequired`: run as the invoking user when Allp was started through sudo.
 - `Conditional`: reserved for backends whose scope decides at plan time.
 
@@ -19,7 +21,13 @@ Runtime context is detected once per invocation:
 - `RootDirect`
 - `SudoRootWithOriginalUser`
 
-Normal-user root-required plans are shown first, then Allp explains that only native child commands will be elevated and asks for confirmation before real mutating execution.
+Normal-user root-required plans are shown first, then Allp explains that only native child commands will be elevated and asks for confirmation before real mutating execution. For a live maintenance run, confirmation is followed by one privilege preflight while the real terminal still owns stdin, stdout, and stderr:
+
+```text
+confirmation → sudo -v → live dashboard → sudo -n -- native-command
+```
+
+Allp never collects a password itself. The single initial `sudo -v` validation is shared by every root-required backend selected for that maintenance run. Once the dashboard is active, root-required children use `sudo -n -- …`. Before each later root operation Allp performs `sudo -n -v`; if a cached credential has expired, it clears the footer, restores the saved terminal settings, runs one interactive `sudo -v` outside the dashboard, and redraws the footer only after success. A failed, cancelled, timed-out, or unavailable revalidation becomes a structured blocked privilege result rather than a native APT, Snap, or other backend failure.
 
 Install and remove follow the same confirmation rule as update and upgrade:
 
@@ -37,13 +45,16 @@ Owner-sensitive probes use `UserContextExecutor`, which accepts an exact `UserAc
 
 The generic `OriginalUserRequired` path uses that same validated-account executor whenever Allp is elevated, for captured probes as well as mutating plans. Normal-user Python and Node commands continue to inherit the invoking user's ordinary environment. Allp resolves the privilege helper from fixed `/usr/bin/sudo` and `/bin/sudo` candidates before absolute PATH candidates, canonicalizes it, and accepts it only when the executable and every canonical ancestor are root-owned and not group/world-writable. This prevents a PATH-shadowed helper from collecting credentials or crossing the privilege boundary.
 
-`RootRequired` has a separate, stricter executable policy from user-context de-escalation. Before either `sudo -- <program>` or already-root direct execution, Allp canonicalizes the planned program and requires the canonical target to be a root-owned executable regular file whose every ancestor is a root-owned directory without group or world write permission. The canonical path is the path actually executed, so a package manager found through a user-controlled `PATH` cannot cross the root boundary. Debug integration builds have an explicit `ALLP_TEST_SUDO_EXECUTABLE`-gated fake-executable boundary; that boundary is not compiled into release builds.
+`RootRequired` has a separate, stricter executable policy from user-context de-escalation. Before ordinary `sudo -- <program>`, maintenance `sudo -n -- <program>`, or already-root direct execution, Allp canonicalizes the planned program and requires the canonical target to be a root-owned executable regular file whose every ancestor is a root-owned directory without group or world write permission. The canonical path is the path actually executed, so a package manager found through a user-controlled `PATH` cannot cross the root boundary. Debug integration builds have an explicit `ALLP_TEST_SUDO_EXECUTABLE`-gated fake-executable boundary; that boundary is not compiled into release builds.
 
 Dry runs never invoke sudo, never request passwords, and never execute native installers.
 
 When Allp is launched through sudo and an interactive scope selector is needed, it prints one concise administrator-context notice before search scope selection. It does not ask to use sudo again and root-required system plans never receive nested sudo.
 
-`--yes` bypasses only Allp's final confirmation. It does not add native auto-confirm flags, does not bypass package ambiguity, and does not bypass Python, Node, Homebrew, or original-user safety checks.
+`--yes` bypasses only Allp's final confirmation. It does not indiscriminately
+add native auto-confirm flags or bypass package ambiguity, Python, Node,
+Homebrew, or original-user safety checks. Operation-specific flags remain
+explicit in the plan: APT upgrades use `-y`, while metadata refreshes do not.
 
 Prerequisite installation, service activation, and remote/repository setup are separate mutations. `--yes` alone cannot approve them in non-interactive mode; `--allow-bootstrap` is also required after the complete plan is displayed.
 

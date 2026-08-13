@@ -128,9 +128,11 @@ sudo allp update --from homebrew --yes --skip-self-update
 در اجرای واقعی و تعاملی `update` یا `upgrade`، نسخهٔ ۰.۴.۰ Allp در مرحلهٔ اجرا
 یک داشبورد زندهٔ inline نشان می‌دهد. لاگ‌های Native در scrollback معمول
 ترمینال باقی می‌مانند، cardهای وضعیت و خطا اتفاق‌های مهم را جدا می‌کنند، و
-footer نام Backend فعال، action دقیق، زمان سپری‌شده و پیشرفت صف را نشان می‌دهد.
-این یک takeover تمام‌صفحه نیست؛ بنابراین promptهای Native و Ctrl+C رفتار عادی
-ترمینال را حفظ می‌کنند.
+footer نام Backend فعال، action دقیق، زمان سپری‌شده و تکمیل صریح صف را نشان
+می‌دهد. این یک takeover تمام‌صفحه نیست؛ بنابراین Ctrl+C به بازیابی raw mode
+نیاز ندارد. اگر planهای نگهداری انتخاب‌شده دسترسی مدیر بخواهند، Allp پیش از
+شروع داشبورد با `sudo -v` آن را اعتبارسنجی می‌کند و سپس childهای مربوط را با
+`sudo -n --` اجرا می‌کند تا password prompt وارد footer نشود.
 
 ![نمونهٔ داشبورد زندهٔ Allp](docs/assets/tui-maintenance.svg)
 
@@ -145,8 +147,9 @@ allp upgrade --no-tui
 در JSON، dry run، خروجی redirected/non-TTY، `TERM=dumb` و اجرای
 `--no-interactive` داشبورد عمدا فعال نمی‌شود. `--no-color` فقط رنگ را حذف
 می‌کند و layout را نگه می‌دارد. داشبورد تنها observer مربوط به runner است و
-Plan نمایش‌داده‌شده، argv Native، privilege یا exit status نهایی را تغییر
-نمی‌دهد. قواعد کامل rendering و fallback در
+argv Native برنامه‌ریزی‌شده یا نیاز privilege در سطح Plan را بازنویسی نمی‌کند؛
+مرز privilege پیش از شروع rendering تعیین می‌شود. قواعد کامل rendering و
+fallback در
 [docs/TERMINAL_UI.md](docs/TERMINAL_UI.md) آمده است.
 
 برای انتخاب دقیق Backend از `--from` استفاده کنید:
@@ -178,7 +181,14 @@ allp install typescript --from pnpm --dry-run
 allp update
 ```
 
-Allp معمولا باید با کاربر عادی اجرا شود. اگر یک Child Command دسترسی Root بخواهد، Allp بعد از نمایش Plan و گرفتن تایید، فقط همان Child را با `sudo --` اجرا می کند. Dry run هیچ وقت sudo را اجرا نمی کند.
+Allp معمولا باید با کاربر عادی اجرا شود. در اجرای نگهداری تاییدشده (`update`
+یا `upgrade`)، اگر planی دسترسی Root بخواهد، Allp پس از تایید و پیش از داشبورد
+یک‌بار `sudo -v` را اجرا می‌کند و سپس هر child ریشه‌ای را با `sudo -n --`
+اجرا می‌کند. اگر credential بعداً منقضی شود، footer پاک می‌شود، `sudo -v`
+خارج از داشبورد دوباره اجرا می‌شود و فقط پس از موفقیت داشبورد ادامه می‌یابد؛
+شکست آن به‌صورت عملیات مسدودشده گزارش می‌شود. Allp گذرواژه را نمی‌خواند یا
+ذخیره نمی‌کند. در جریان‌های دیگر، فقط childی که plan به Root نیاز دارد elevated
+می‌شود. Dry run هیچ وقت sudo را اجرا نمی‌کند.
 
 اگر عمدا اجرا کنید:
 
@@ -188,7 +198,9 @@ sudo allp update
 
 Allp دوباره sudo اضافه نمی کند. عملیات Root مستقیم اجرا می شوند و عملیات user-scoped مثل Homebrew، Python، Node و Flatpak-user در صورت وجود `SUDO_USER` با کاربر اصلی اجرا می شوند.
 
-گزینه `--yes` فقط تایید نهایی خود Allp را رد می کند. این گزینه هیچ وقت فلگ هایی مثل `-y` یا `--assumeyes` را به ابزار Native اضافه نمی کند.
+گزینه `--yes` فقط تایید نهایی خود Allp را رد می‌کند و به‌طور عمومی فلگ تایید
+به ابزار Native اضافه نمی‌کند: APT upgrade فلگ مستند `-y` را می‌گیرد، اما APT
+metadata refresh همچنان `apt-get update` و بدون `-y` است.
 
 ## Snap، discovery و exact resolution
 
@@ -285,6 +297,10 @@ allp update --update-channel prerelease
 ```
 
 channel پیش‌فرض، buildهای verified و continuous شاخه `main` است؛ انتخاب stable و prerelease صریح و persist می‌شود. Release پایدار باید `allp-release-manifest.json` معتبر داشته باشد و build continuous از manifest اختصاصی و workflow identity مورد اعتماد استفاده می‌کند. ابتدا SemVer پایه و سپس build revision مقایسه می‌شود؛ asset بر اساس OS، معماری، libc، فرمت executable و target انتخاب می‌شود و target ناسازگار بدون staging گزارش می‌شود.
+
+اگر build نصب‌شده از channel انتخاب‌شده جدیدتر باشد، Allp وضعیت جداگانهٔ
+`LocalAhead` را گزارش می‌کند و downgrade انجام نمی‌دهد؛ این وضعیت «up to date»
+نامیده نمی‌شود.
 
 باینری‌ای که با `make reinstall` نصب می‌شود provenance محلی/development دارد، اما همچنان build جدید و verifiedِ continuous از `main` را دنبال می‌کند؛ حتی اگر revision محلیِ `1` با revision CI یکسان باشد. بنابراین پس از merge شدن تغییر در GitHub و publish موفق continuous build، channel پیش‌فرض `allp update` آن را تشخیص می‌دهد و فقط تأیید معمول برای جایگزینی باقی می‌ماند.
 
@@ -401,7 +417,7 @@ x86_64 build و test می شوند؛ archive و checksum آنها، source archi
 
 ## مدل امنیتی
 
-Allp دستورها را به صورت executable path و argument vector نگه می دارد و Package Managerها را از طریق `sh -c` اجرا نمی کند. خروجی ابزارهای Native داده است، نه کد. Bootstrapها Planهای جدا هستند. Self-update repository خارجی، asset name ناامن، manifest خراب، checksum اشتباه، archive traversal و staged version اشتباه را رد می کند. state شامل credential نیست. Allp sudo password ذخیره نمی کند، telemetry ندارد، و confirmation flagهای Native اضافه نمی کند.
+Allp دستورها را به صورت executable path و argument vector نگه می دارد و Package Managerها را از طریق `sh -c` اجرا نمی کند. خروجی ابزارهای Native داده است، نه کد. Bootstrapها Planهای جدا هستند. Self-update repository خارجی، asset name ناامن، manifest خراب، checksum اشتباه، archive traversal و staged version اشتباه را رد می کند. state شامل credential نیست. Allp sudo password ذخیره نمی کند و telemetry ندارد؛ هر confirmation flag مخصوص یک عملیات در Plan بررسی‌شدهٔ آن صریح است.
 
 برای گزارش مشکل امنیتی [SECURITY.md](SECURITY.md) را ببینید.
 

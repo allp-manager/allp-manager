@@ -3,11 +3,13 @@
 use serde_json::Value;
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::mpsc,
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -133,6 +135,108 @@ fn run_allp_pty_with_tui(path: &Path, args: &[&str], input: &str) -> Output {
         .expect("script child should complete")
 }
 
+/// Starts a TUI run without preloading terminal input, then supplies the input
+/// only after a fake sudo password prompt is visibly rendered on the PTY.
+///
+/// This models the ownership boundary that matters here: the preflight sudo
+/// prompt owns the terminal before the live dashboard starts; a dashboard must
+/// never be able to consume or obscure that password input.
+fn run_allp_pty_with_tui_after_prompt(
+    path: &Path,
+    args: &[&str],
+    prompt: &str,
+    input: &str,
+) -> Output {
+    let command_line = std::iter::once(env!("CARGO_BIN_EXE_allp"))
+        .chain(args.iter().copied())
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut command = Command::new("/usr/bin/script");
+    command
+        .args(["-qfec", &command_line, "/dev/null"])
+        .env("PATH", path)
+        .env("ALLP_DISABLE_STANDARD_PATHS", "1")
+        .env("ALLP_SELF_UPDATE_TEST_OFFLINE", "1")
+        .env("ALLP_SNAPD_SOCKET", path.join("missing-snapd.socket"))
+        .env("XDG_CACHE_HOME", path.join("xdg-cache"))
+        .env("XDG_STATE_HOME", path.join("xdg-state"))
+        .env("XDG_CONFIG_HOME", path.join("xdg-config"))
+        .env("TERM", "xterm-256color")
+        .env_remove("NO_COLOR")
+        .env_remove("ALLP_TEST_SUDO_EXECUTABLE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_test_sudo(&mut command, path);
+
+    let mut child = command.spawn().expect("script should start");
+    let mut child_stdout = child.stdout.take().expect("script stdout should be piped");
+    let mut child_stderr = child.stderr.take().expect("script stderr should be piped");
+    let prompt = prompt.to_owned();
+    let (prompt_seen, prompt_ready) = mpsc::channel();
+    let stdout_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut buffer = [0; 1024];
+        let mut notified = false;
+        loop {
+            let bytes_read = child_stdout
+                .read(&mut buffer)
+                .expect("script stdout should be readable");
+            if bytes_read == 0 {
+                break;
+            }
+            output.extend_from_slice(&buffer[..bytes_read]);
+            if !notified && String::from_utf8_lossy(&output).contains(&prompt) {
+                let _ = prompt_seen.send(());
+                notified = true;
+            }
+        }
+        output
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        child_stderr
+            .read_to_end(&mut output)
+            .expect("script stderr should be readable");
+        output
+    });
+
+    if let Err(error) = prompt_ready.recv_timeout(Duration::from_secs(5)) {
+        let _ = child.kill();
+        let _ = child.wait();
+        let stdout = stdout_reader.join().unwrap_or_default();
+        let stderr = stderr_reader.join().unwrap_or_default();
+        panic!(
+            "fake sudo password prompt was not rendered ({error}); stdout: {}; stderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+    }
+    child
+        .stdin
+        .as_mut()
+        .expect("script stdin should be piped")
+        .write_all(input.as_bytes())
+        .expect("password input should be written after the prompt");
+    child
+        .stdin
+        .as_mut()
+        .expect("script stdin should be piped")
+        .flush()
+        .expect("password input should be flushed");
+    drop(child.stdin.take());
+
+    let status = child.wait().expect("script child should complete");
+    let stdout = stdout_reader.join().expect("stdout reader should complete");
+    let stderr = stderr_reader.join().expect("stderr reader should complete");
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
 fn run_allp_with_live_self_update(path: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_allp"));
     command
@@ -247,10 +351,149 @@ fn install_fake_sudo_marker(dir: &Path, marker: &Path) {
         &format!(
             r#"#!/bin/sh
 printf '%s\n' sudo >> '{marker}'
+if [ "$1" = "-v" ]; then
+  exit 0
+fi
+if [ "$1" = "-n" ]; then
+  shift
+fi
+if [ "$1" = "-v" ]; then
+  exit 0
+fi
 if [ "$1" = "--" ]; then
   shift
 fi
 exec "$@"
+"#
+        ),
+    );
+}
+
+fn install_fake_sudo_trace(dir: &Path, trace: &Path, validation_exit: i32) {
+    let trace = trace.display();
+    write_executable(
+        dir,
+        "sudo",
+        &format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> '{trace}'
+if [ "$1" = "-v" ]; then
+  exit {validation_exit}
+fi
+if [ "$1" = "-n" ]; then
+  shift
+fi
+if [ "$1" = "-v" ]; then
+  exit 0
+fi
+if [ "$1" = "--" ]; then
+  shift
+fi
+exec "$@"
+"#
+        ),
+    );
+}
+
+/// A strict fake sudo used for the pre-TUI authentication boundary.  It only
+/// accepts a password from the controlling terminal and records the terminal
+/// mode seen by the interactive `sudo -v` invocation.
+fn install_fake_sudo_password_prompt(dir: &Path, trace: &Path, tty_trace: &Path) {
+    let trace = trace.display();
+    let tty_trace = tty_trace.display();
+    write_executable(
+        dir,
+        "sudo",
+        &format!(
+            r#"#!/bin/sh
+printf 'argv:%s\n' "$*" >> '{trace}'
+if [ "$1" = "-v" ]; then
+  if ! {{ [ -t 0 ] && [ -t 1 ] && [ -t 2 ]; }}; then
+    printf '%s\n' 'interactive-stdio-not-a-tty' >> '{trace}'
+    exit 99
+  fi
+  printf '%s\n' 'interactive-stdio-is-a-tty' >> '{trace}'
+  /usr/bin/stty -a </dev/tty > '{tty_trace}'
+  printf '%s\n' 'ALLP_TEST_SUDO_PASSWORD_PROMPT' >/dev/tty
+  IFS= read -r password </dev/tty || exit 1
+  printf '%s\n' 'password-read-from-tty' >> '{trace}'
+  exit 0
+fi
+if [ "$1" = "-n" ] && [ "$2" = "-v" ]; then
+  exit 0
+fi
+if [ "$1" = "-n" ] && [ "$2" = "--" ]; then
+  shift 2
+  exec "$@"
+fi
+printf '%s\n' 'ALLP_TEST_UNEXPECTED_INTERACTIVE_CHILD_PROMPT' >/dev/tty
+exit 1
+"#
+        ),
+    );
+}
+
+/// A stateful fake sudo that lets the first privileged operation run, reports
+/// an expired credential on the next `sudo -n -v`, then requires a second
+/// interactive `sudo -v` before allowing the remaining children.
+fn install_fake_sudo_expiring_session(
+    dir: &Path,
+    trace: &Path,
+    tty_trace: &Path,
+    reauthentication_exit: i32,
+) {
+    let trace = trace.display();
+    let tty_trace = tty_trace.display();
+    let initial_auth = dir.join("sudo-initial-auth").display().to_string();
+    let first_validation = dir.join("sudo-first-validation").display().to_string();
+    let reauthenticated = dir.join("sudo-reauthenticated").display().to_string();
+    write_executable(
+        dir,
+        "sudo",
+        &format!(
+            r#"#!/bin/sh
+printf 'argv:%s\n' "$*" >> '{trace}'
+if [ "$1" = "-v" ]; then
+  if [ -f '{initial_auth}' ]; then
+    if ! {{ [ -t 0 ] && [ -t 1 ] && [ -t 2 ]; }}; then
+      printf '%s\n' 'reauth-stdio-not-a-tty' >> '{trace}'
+      exit 99
+    fi
+    printf '%s\n' 'reauth-stdio-is-a-tty' >> '{trace}'
+    /usr/bin/stty -a </dev/tty > '{tty_trace}'
+    printf '%s\n' 'ALLP_TEST_SUDO_REAUTH_PROMPT' >/dev/tty
+    IFS= read -r password </dev/tty || exit 1
+    printf '%s\n' 'reauth-password-read-from-tty' >> '{trace}'
+    if [ {reauthentication_exit} -ne 0 ]; then
+      exit {reauthentication_exit}
+    fi
+    : > '{reauthenticated}'
+  else
+    printf '%s\n' 'initial-authenticated' >> '{trace}'
+    : > '{initial_auth}'
+  fi
+  exit 0
+fi
+if [ "$1" = "-n" ] && [ "$2" = "-v" ]; then
+  if [ -f '{reauthenticated}' ]; then
+    printf '%s\n' 'validation-after-reauthenticated' >> '{trace}'
+    exit 0
+  fi
+  if [ -f '{first_validation}' ]; then
+    printf '%s\n' 'credential-expired' >> '{trace}'
+    printf '%s\n' 'sudo: a password is required' >&2
+    exit 1
+  fi
+  printf '%s\n' 'first-validation-ok' >> '{trace}'
+  : > '{first_validation}'
+  exit 0
+fi
+if [ "$1" = "-n" ] && [ "$2" = "--" ]; then
+  shift 2
+  exec "$@"
+fi
+printf '%s\n' 'ALLP_TEST_UNEXPECTED_INTERACTIVE_CHILD_PROMPT' >/dev/tty
+exit 1
 "#
         ),
     );
@@ -428,11 +671,11 @@ if [ "$1" = "-o" ]; then
 fi
 if [ "$1" = "update" ]; then
   printf '%s\n' "apt update native output"
-  printf '%s\n' apt-update >> '{marker}'
+  printf '%s\n' "apt-update args=$*" >> '{marker}'
   exit 0
 fi
 if [ "$1" = "upgrade" ]; then
-  printf '%s\n' apt-upgrade >> '{marker}'
+  printf '%s\n' "apt-upgrade args=$*" >> '{marker}'
   printf '%s\n' 'Reading package lists...'
   printf '%s\n' 'Building dependency tree...'
   printf '%s\n' 'Calculating upgrade...'
@@ -2717,6 +2960,31 @@ fn apt_upgrade_parses_updated_and_phased_deferred_results() {
 }
 
 #[test]
+fn apt_metadata_refresh_omits_yes_while_follow_up_upgrade_includes_it() {
+    let dir = temp_dir("apt-update-without-yes");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt_phased_upgrade(&dir, &marker);
+
+    let output = run_allp(&dir, &["upgrade", "--from", "apt", "--yes", "--no-color"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let executed = fs::read_to_string(marker).expect("APT operations should execute");
+    assert!(
+        executed
+            .lines()
+            .any(|line| line == "apt-update args=update"),
+        "apt-get update must never receive the noninteractive -y flag: {executed}"
+    );
+    assert!(
+        executed
+            .lines()
+            .any(|line| line == "apt-upgrade args=upgrade -y"),
+        "the actual apt-get upgrade should receive -y after ALLP confirmation: {executed}"
+    );
+}
+
+#[test]
 fn apt_upgrade_is_deferred_when_required_metadata_refresh_fails() {
     let dir = temp_dir("apt-refresh-dependency");
     let marker = dir.join("executed");
@@ -2778,6 +3046,441 @@ fn maintenance_tui_streams_native_logs_cards_and_live_progress_in_a_pty() {
     assert!(rendered.contains("apt update native output"));
     assert!(rendered.contains("UPDATE SUMMARY"));
     assert!(rendered.contains("["), "footer progress bar should render");
+}
+
+#[test]
+fn maintenance_tui_sudo_preflight_owns_a_normal_tty_before_live_rendering() {
+    let dir = temp_dir("maintenance-tui-sudo-preflight-tty");
+    let marker = dir.join("executed");
+    let trace = dir.join("sudo-trace");
+    let tty_trace = dir.join("sudo-tty-mode");
+    install_fake_apt_phased_upgrade(&dir, &marker);
+    install_fake_sudo_password_prompt(&dir, &trace, &tty_trace);
+
+    let output = run_allp_pty_with_tui_after_prompt(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "apt",
+            "--yes",
+            "--skip-self-update",
+            "--no-color",
+        ],
+        "ALLP_TEST_SUDO_PASSWORD_PROMPT",
+        "correct-horse-battery-staple\n",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    let prompt = rendered
+        .find("ALLP_TEST_SUDO_PASSWORD_PROMPT")
+        .expect("the fake sudo password prompt should be rendered");
+    let dashboard = rendered
+        .find("ALLP · UPDATE · LIVE")
+        .expect("live dashboard should render after sudo preflight");
+    assert!(
+        prompt < dashboard,
+        "the password prompt must occur before the dashboard takes terminal ownership: {rendered}"
+    );
+    assert!(
+        !rendered[dashboard..].contains("ALLP_TEST_SUDO_PASSWORD_PROMPT"),
+        "no interactive sudo prompt may appear after the live dashboard starts: {rendered}"
+    );
+    assert!(
+        !rendered.contains("ALLP_TEST_UNEXPECTED_INTERACTIVE_CHILD_PROMPT"),
+        "privileged children must not be allowed to open their own password prompt"
+    );
+
+    let trace = fs::read_to_string(trace).expect("sudo calls should be traced");
+    let invocations = trace
+        .lines()
+        .filter(|line| line.starts_with("argv:"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        invocations.first().copied(),
+        Some("argv:-v"),
+        "the first sudo call must be the interactive preflight"
+    );
+    assert_eq!(
+        invocations
+            .iter()
+            .filter(|invocation| **invocation == "argv:-v")
+            .count(),
+        1,
+        "a healthy one-backend run must authenticate exactly once"
+    );
+    assert!(
+        invocations.contains(&"argv:-n -v"),
+        "the preflighted credential must be checked noninteractively before the child"
+    );
+    assert!(
+        invocations
+            .iter()
+            .any(|invocation| invocation.starts_with("argv:-n -- ")),
+        "the root-required child must use sudo -n --"
+    );
+    assert!(
+        !invocations
+            .iter()
+            .any(|invocation| invocation.starts_with("argv:-- ")),
+        "a root-required child must never bypass the noninteractive sudo wrapper"
+    );
+    assert!(
+        trace.contains("interactive-stdio-is-a-tty") && trace.contains("password-read-from-tty"),
+        "sudo -v must read its password from the controlling terminal: {trace}"
+    );
+
+    let tty_mode = fs::read_to_string(tty_trace).expect("sudo should capture terminal mode");
+    let flags = tty_mode
+        .split(|character: char| character.is_whitespace() || character == ';')
+        .collect::<Vec<_>>();
+    assert!(
+        flags.contains(&"icanon"),
+        "sudo preflight must see canonical TTY mode: {tty_mode}"
+    );
+    assert!(
+        flags.contains(&"echo"),
+        "sudo preflight must see echo enabled: {tty_mode}"
+    );
+    assert!(
+        !flags.contains(&"-icanon") && !flags.contains(&"-echo"),
+        "the live TUI must not put the terminal in raw/no-echo mode before sudo -v: {tty_mode}"
+    );
+}
+
+#[test]
+fn maintenance_tui_reuses_one_preflight_for_apt_and_snap_and_wraps_every_child_in_sudo_n() {
+    let dir = temp_dir("maintenance-tui-sudo-multi-backend");
+    let apt_marker = dir.join("apt-executed");
+    let snap_marker = dir.join("snap-executed");
+    let trace = dir.join("sudo-trace");
+    install_fake_apt_phased_upgrade(&dir, &apt_marker);
+    install_fake_snap(&dir, &snap_marker, 0);
+    install_fake_sudo_trace(&dir, &trace, 0);
+
+    let output = run_allp_pty_with_tui(&dir, &["upgrade", "--yes", "--no-color"], "");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let invocations = fs::read_to_string(&trace)
+        .expect("sudo calls should be traced")
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        invocations.first().map(String::as_str),
+        Some("-v"),
+        "the selected root backends share one interactive sudo -v preflight"
+    );
+    assert_eq!(
+        invocations
+            .iter()
+            .filter(|invocation| invocation.as_str() == "-v")
+            .count(),
+        1,
+        "APT and Snap must not each prompt separately"
+    );
+    assert!(
+        invocations
+            .iter()
+            .filter(|invocation| invocation.as_str() == "-n -v")
+            .count()
+            >= 2,
+        "each root plan should validate the shared sudo credential noninteractively"
+    );
+    let children = invocations
+        .iter()
+        .filter(|invocation| invocation.starts_with("-n -- "))
+        .collect::<Vec<_>>();
+    assert!(
+        children.iter().any(|child| child.contains("apt-get")),
+        "APT must execute through sudo -n --: {invocations:?}"
+    );
+    assert!(
+        children.iter().any(|child| child.contains("snap refresh")),
+        "Snap must execute through sudo -n --: {invocations:?}"
+    );
+    assert!(
+        !invocations
+            .iter()
+            .any(|invocation| invocation.starts_with("-- ")),
+        "no privileged child may be launched through interactive sudo: {invocations:?}"
+    );
+
+    let apt_runs = fs::read_to_string(apt_marker)
+        .expect("APT metadata refresh and follow-up upgrade should run")
+        .lines()
+        .count();
+    let snap_runs = fs::read_to_string(snap_marker)
+        .expect("Snap refresh should run")
+        .lines()
+        .count();
+    assert_eq!(
+        children.len(),
+        apt_runs + snap_runs,
+        "every native APT/Snap process must have a matching sudo -n -- invocation"
+    );
+}
+
+#[test]
+fn mixed_maintenance_keeps_homebrew_in_current_user_context() {
+    let dir = temp_dir("maintenance-tui-apt-homebrew-privilege-boundary");
+    let apt_marker = dir.join("apt-executed");
+    let brew_marker = dir.join("brew-executed");
+    let trace = dir.join("sudo-trace");
+    install_fake_apt_phased_upgrade(&dir, &apt_marker);
+    install_fake_homebrew(
+        &dir,
+        &brew_marker,
+        true,
+        0,
+        r#"{"formulae":[],"casks":[]}"#,
+        r#"{"formulae":[],"casks":[]}"#,
+    );
+    install_fake_sudo_trace(&dir, &trace, 0);
+
+    let output = run_allp_pty_with_tui(
+        &dir,
+        &["update", "--yes", "--skip-self-update", "--no-color"],
+        "",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let sudo = fs::read_to_string(trace).expect("sudo calls should be traced");
+    assert_eq!(
+        sudo.lines().filter(|line| *line == "-v").count(),
+        1,
+        "only APT should require the maintenance sudo preflight: {sudo}"
+    );
+    assert!(
+        sudo.lines()
+            .any(|line| line.starts_with("-n -- ") && line.contains("apt-get")),
+        "APT must remain behind sudo -n: {sudo}"
+    );
+    assert!(
+        sudo.lines()
+            .filter(|line| line.starts_with("-n -- "))
+            .all(|line| line.contains("apt-get")),
+        "Homebrew must never be sent through sudo: {sudo}"
+    );
+    let brew = fs::read_to_string(brew_marker).expect("Homebrew update should execute");
+    assert!(
+        brew.contains("update-if-needed HOME=") && brew.contains(" USER="),
+        "Homebrew must retain its current-user environment: {brew}"
+    );
+    assert!(
+        apt_marker.exists(),
+        "APT should still execute as the root plan"
+    );
+}
+
+#[test]
+fn failed_maintenance_privilege_preflight_blocks_backends_before_tui_or_native_execution() {
+    let dir = temp_dir("maintenance-tui-sudo-preflight-failure");
+    let apt_marker = dir.join("apt-executed");
+    let snap_marker = dir.join("snap-executed");
+    let trace = dir.join("sudo-trace");
+    install_fake_apt_phased_upgrade(&dir, &apt_marker);
+    install_fake_snap(&dir, &snap_marker, 0);
+    install_fake_sudo_trace(&dir, &trace, 1);
+
+    let output = run_allp_pty_with_tui(&dir, &["upgrade", "--yes", "--no-color"], "");
+
+    assert_eq!(output.status.code(), Some(8), "stderr: {}", stderr(&output));
+    let rendered = normalized_stdout(&output);
+    assert!(rendered.contains("Administrator authentication failed"));
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("APT") && line.contains("Blocked")),
+        "APT should be reported as privilege-blocked, not as a native failure: {rendered}"
+    );
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("Snap") && line.contains("Blocked")),
+        "Snap should be reported as privilege-blocked, not as a native failure: {rendered}"
+    );
+    assert!(
+        rendered.contains("0 failed"),
+        "the privilege failure must not be classified as a native backend failure: {rendered}"
+    );
+    assert!(!rendered.contains("ALLP · UPGRADE · LIVE"));
+    assert!(!rendered.contains("still running"));
+    assert!(
+        !apt_marker.exists(),
+        "APT must not start after failed sudo -v"
+    );
+    assert!(
+        !snap_marker.exists(),
+        "Snap must not start after failed sudo -v"
+    );
+    let trace = fs::read_to_string(trace).expect("preflight should invoke sudo once");
+    assert_eq!(trace.lines().collect::<Vec<_>>(), ["-v"]);
+}
+
+#[test]
+fn maintenance_tui_reauthenticates_after_credential_expiry_and_resumes_cleanly() {
+    let dir = temp_dir("maintenance-tui-sudo-credential-expiry");
+    let apt_marker = dir.join("apt-executed");
+    let snap_marker = dir.join("snap-executed");
+    let trace = dir.join("sudo-trace");
+    let tty_trace = dir.join("sudo-reauth-tty-mode");
+    install_fake_apt_phased_upgrade(&dir, &apt_marker);
+    install_fake_snap(&dir, &snap_marker, 0);
+    install_fake_sudo_expiring_session(&dir, &trace, &tty_trace, 0);
+
+    let output = run_allp_pty_with_tui_after_prompt(
+        &dir,
+        &["upgrade", "--yes", "--no-color"],
+        "ALLP_TEST_SUDO_REAUTH_PROMPT",
+        "reauthentication-password\n",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    let dashboard = rendered
+        .find("ALLP · UPGRADE · LIVE")
+        .expect("the live dashboard should start after initial preflight");
+    let reauth_prompt = rendered
+        .find("ALLP_TEST_SUDO_REAUTH_PROMPT")
+        .expect("expired credentials should invoke a second sudo -v outside the footer");
+    assert!(
+        dashboard < reauth_prompt,
+        "the credential-expiry prompt should happen after the dashboard has begun"
+    );
+    let before_prompt = &rendered[..reauth_prompt];
+    let footer_clear = before_prompt
+        .rfind("\x1b[2K")
+        .expect("the dashboard footer should be cleared before reauthentication");
+    assert!(
+        before_prompt[footer_clear + "\x1b[2K".len()..].ends_with('\n'),
+        "the password prompt must start on a fresh line after the footer is cleared: {rendered}"
+    );
+    let after_reauth = &rendered[reauth_prompt..];
+    let resumed_running = after_reauth
+        .find("RUNNING ·")
+        .expect("the dashboard should resume with a pending privileged operation");
+    assert!(
+        resumed_running > 0,
+        "no pending operation may begin until the reauthentication prompt is resolved"
+    );
+    assert!(
+        rendered.contains("UPGRADE SUMMARY"),
+        "the dashboard should finish normally after reauthentication"
+    );
+    assert!(
+        !rendered.contains("ALLP_TEST_UNEXPECTED_INTERACTIVE_CHILD_PROMPT"),
+        "children after reauthentication must remain noninteractive"
+    );
+
+    let trace = fs::read_to_string(trace).expect("sudo calls should be traced");
+    let lines = trace.lines().collect::<Vec<_>>();
+    let interactive_validations = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (*line == "argv:-v").then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        interactive_validations.len(),
+        2,
+        "credential expiry must trigger exactly one additional interactive sudo -v: {trace}"
+    );
+    let expired = lines
+        .iter()
+        .position(|line| *line == "credential-expired")
+        .expect("the second sudo -n -v should report expired credentials");
+    assert!(
+        expired < interactive_validations[1],
+        "the reauthentication must follow the failed noninteractive validation: {trace}"
+    );
+    let apt_child = lines
+        .iter()
+        .position(|line| line.starts_with("argv:-n -- ") && line.contains("apt-get"))
+        .expect("APT should run before the simulated credential expiry");
+    let snap_child = lines
+        .iter()
+        .position(|line| line.starts_with("argv:-n -- ") && line.contains("snap refresh"))
+        .expect("Snap should run after the reauthentication");
+    assert!(
+        apt_child < expired && interactive_validations[1] < snap_child,
+        "the first child must finish, then sudo must reauthenticate, then the pending child may run: {trace}"
+    );
+    assert!(
+        trace.contains("reauth-stdio-is-a-tty") && trace.contains("reauth-password-read-from-tty"),
+        "the second sudo -v must own the real terminal while it reads the password: {trace}"
+    );
+
+    let tty_mode = fs::read_to_string(tty_trace).expect("reauthentication should capture TTY mode");
+    let flags = tty_mode
+        .split(|character: char| character.is_whitespace() || character == ';')
+        .collect::<Vec<_>>();
+    assert!(flags.contains(&"icanon") && flags.contains(&"echo"));
+    assert!(!flags.contains(&"-icanon") && !flags.contains(&"-echo"));
+    assert!(
+        apt_marker.exists(),
+        "APT should have completed before expiry"
+    );
+    assert!(
+        snap_marker.exists(),
+        "Snap should resume after reauthentication"
+    );
+}
+
+#[test]
+fn failed_tui_reauthentication_keeps_the_dashboard_suspended() {
+    let dir = temp_dir("maintenance-tui-sudo-reauthentication-failure");
+    let apt_marker = dir.join("apt-executed");
+    let snap_marker = dir.join("snap-executed");
+    let trace = dir.join("sudo-trace");
+    let tty_trace = dir.join("sudo-reauth-tty-mode");
+    install_fake_apt_phased_upgrade(&dir, &apt_marker);
+    install_fake_snap(&dir, &snap_marker, 0);
+    install_fake_sudo_expiring_session(&dir, &trace, &tty_trace, 1);
+
+    let output = run_allp_pty_with_tui_after_prompt(
+        &dir,
+        &["upgrade", "--yes", "--no-color"],
+        "ALLP_TEST_SUDO_REAUTH_PROMPT",
+        "wrong-password\n",
+    );
+
+    assert_eq!(output.status.code(), Some(8), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    let prompt = rendered
+        .find("ALLP_TEST_SUDO_REAUTH_PROMPT")
+        .expect("the failed reauthentication should own the normal terminal");
+    let after_prompt = &rendered[prompt..];
+    assert!(
+        !after_prompt.contains("Queue:"),
+        "the live footer must not resume after failed reauthentication: {rendered}"
+    );
+    assert!(
+        !after_prompt.contains("RUNNING ·"),
+        "no subsequent operation may start after failed reauthentication: {rendered}"
+    );
+    assert!(
+        !after_prompt.contains("ALLP · UPGRADE · LIVE"),
+        "the dashboard header must not be re-entered after failed reauthentication: {rendered}"
+    );
+    assert!(
+        after_prompt.contains("Blocked"),
+        "the pending root plan should be classified as blocked: {rendered}"
+    );
+    assert!(
+        apt_marker.exists(),
+        "the first root operation should have run"
+    );
+    assert!(
+        !snap_marker.exists(),
+        "the pending root operation must not start after failed reauthentication"
+    );
+    let trace = fs::read_to_string(trace).expect("sudo calls should be traced");
+    assert_eq!(
+        trace.lines().filter(|line| *line == "argv:-v").count(),
+        2,
+        "the failed reauthentication must not retry another interactive sudo prompt: {trace}"
+    );
 }
 
 #[test]

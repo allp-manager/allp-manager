@@ -19,9 +19,9 @@ allp update
 
 Allp elevates only the child command whose plan declares `RootRequired`.
 
-Before a root-required child is launched, Allp canonicalizes its executable and requires the target to be a root-owned executable regular file. Every directory in the canonical path must also be root-owned and not group/world-writable. The canonical path is passed to `sudo --` or executed directly when Allp is already root; a user-controlled `PATH` entry therefore cannot substitute a package-manager executable at the privilege boundary. This policy is deliberately separate from validation of user-owned executables run while dropping privileges.
+Before a root-required child is launched, Allp canonicalizes its executable and requires the target to be a root-owned executable regular file. Every directory in the canonical path must also be root-owned and not group/world-writable. The canonical path is passed to `sudo --` for ordinary elevation, or `sudo -n --` after a maintenance privilege preflight, or executed directly when Allp is already root; a user-controlled `PATH` entry therefore cannot substitute a package-manager executable at the privilege boundary. This policy is deliberately separate from validation of user-owned executables run while dropping privileges.
 
-Before execution, Allp renders the planned native commands and marks root-required operations. Every real mutating operation asks for final Allp confirmation after the privilege explanation and before any sudo prompt can appear. In `--no-interactive` mode, real mutation that requires confirmation is refused before native execution unless choices are fully resolved and `--yes` is supplied.
+Before execution, Allp renders the planned native commands and marks root-required operations. Every real mutating operation asks for final Allp confirmation after the privilege explanation and before any sudo prompt can appear. Maintenance runs then validate sudo once before the live dashboard owns terminal rendering. A later expired credential clears the dashboard footer and is revalidated interactively outside it; failed, cancelled, timed-out, or unavailable revalidation is classified as blocked instead of allowing an interactive prompt inside the UI. In `--no-interactive` mode, real mutation that requires confirmation is refused before native execution unless choices are fully resolved and `--yes` is supplied.
 
 Dry runs never request elevation or execute mutation. Discovery normally executes without elevation; when an already-elevated `sudo allp` process validates a user-scoped Homebrew installation, it may invoke `sudo -H -u <validated-owner>` solely to drop privileges for read-only `brew --version` and `brew --prefix` probes. It never executes Homebrew as root.
 
@@ -65,7 +65,10 @@ Allp does not provide:
 - automatic source recommendation;
 - automatic confirmation flags.
 
-`--yes` is an Allp-only final-confirmation bypass. It never adds native `-y`, `--assumeyes`, or equivalent flags.
+`--yes` is an Allp-only final-confirmation bypass. It does not indiscriminately
+add native `-y`, `--assumeyes`, or equivalent flags; operation-specific choices
+remain explicit in the reviewed plan. APT upgrades use `-y`, while metadata
+refreshes do not.
 
 ## Alpha Limitations
 

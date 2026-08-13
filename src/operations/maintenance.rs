@@ -5,7 +5,10 @@ use crate::{
         AllpResult, BackendOperationRecord, Capability, ExecutionPlan, MultiOperationReport,
         OperationKind, OperationStatus,
     },
-    execution::render_execution_plan_with_context,
+    execution::{
+        render_execution_plan_with_context, render_execution_plan_with_privilege_session,
+        MaintenanceHookRunner, PrivilegeSession, PrivilegeStatus, ProcessExecutionOutcome,
+    },
     operations::OperationContext,
     state,
 };
@@ -49,6 +52,7 @@ pub fn run(
                         .backend
                         .operation_not_applicable_message(capability, operation_capability),
                 ),
+                privilege_status: None,
             });
             continue;
         }
@@ -101,6 +105,7 @@ pub fn run(
                         message: Some(format!(
                             "could not plan required metadata refresh before upgrade: {error}"
                         )),
+                        privilege_status: None,
                     });
                     continue;
                 }
@@ -137,6 +142,7 @@ pub fn run(
                         command: None,
                         status: OperationStatus::NotApplicable,
                         message: Some(error.to_string()),
+                        privilege_status: None,
                     });
                 } else {
                     records.push(BackendOperationRecord {
@@ -146,6 +152,7 @@ pub fn run(
                         command: None,
                         status: OperationStatus::Failed,
                         message: Some(error.to_string()),
+                        privilege_status: None,
                     });
                 }
             }
@@ -248,6 +255,7 @@ pub fn run(
             command: None,
             status: OperationStatus::Cancelled,
             message: Some("cancelled by user before execution".to_owned()),
+            privilege_status: None,
         });
         let report = MultiOperationReport {
             operation: operation_name.to_owned(),
@@ -258,6 +266,18 @@ pub fn run(
             .renderer
             .maintenance_summary(&report, context.verbose > 0, context.dry_run);
         return Ok(report);
+    }
+
+    let mut privilege_session = PrivilegeSession::for_plans(&plans, context.privilege_context);
+    let privilege_status = privilege_session.preflight(!context.no_interactive);
+    if !privilege_status.permits_execution() {
+        return finish_before_execution_for_privilege_failure(
+            context,
+            operation_name,
+            records,
+            operations,
+            privilege_status,
+        );
     }
 
     update_phase(context, operation_name, "Phase 5: Execution");
@@ -301,10 +321,60 @@ pub fn run(
             records.push(record);
             continue;
         }
+        let mut privilege_status = privilege_session.validate_for(&plan);
+        if privilege_status == PrivilegeStatus::CredentialExpired && !context.no_interactive {
+            if let Some(tui) = live_tui.as_mut() {
+                tui.prepare_for_prompt();
+            }
+            privilege_status = privilege_session.preflight(true);
+            if privilege_status.permits_execution() {
+                if let Some(tui) = live_tui.as_mut() {
+                    tui.resume_after_prompt();
+                }
+            } else {
+                // The footer was deliberately cleared before sudo took the
+                // terminal. Do not redraw a live dashboard after a failed,
+                // cancelled, or timed-out reauthentication: continue the
+                // remaining report in the classic stream instead.
+                live_tui = None;
+            }
+        }
+        if !privilege_status.permits_execution() {
+            failed.insert(operation_id);
+            defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
+            let mut record = record_from_plan(
+                plan,
+                OperationStatus::Blocked,
+                Some(privilege_status.message().to_owned()),
+                context.privilege_context,
+            );
+            record.privilege_status = Some(privilege_status);
+            if let Some(tui) = live_tui.as_mut() {
+                tui.record_outcome(
+                    index,
+                    total,
+                    &record.backend_name,
+                    &record.status,
+                    record.message.as_deref(),
+                );
+            } else {
+                context.renderer.execution_finished(
+                    index,
+                    total,
+                    &record.backend_name,
+                    &record.status,
+                    record.message.as_deref(),
+                    Duration::ZERO,
+                );
+            }
+            records.push(record);
+            continue;
+        }
         let runtime = context.backend(&plan.backend_id)?;
+        let hook_runner = MaintenanceHookRunner::new(context.runner, &privilege_session);
         if let Err(error) = runtime.backend.validate_before_execution(
             &plan,
-            context.runner,
+            &hook_runner,
             context.privilege_context,
         ) {
             failed.insert(operation_id);
@@ -327,26 +397,37 @@ pub fn run(
             records.push(record);
             continue;
         }
-        let command = render_execution_plan_with_context(&plan, context.privilege_context);
+        let command =
+            render_execution_plan_with_privilege_session(&plan, context.privilege_context);
         if let Some(tui) = live_tui.as_mut() {
             tui.start_operation(index, total, &plan, context.privilege_context);
         } else {
-            context
-                .renderer
-                .execution_started(index, total, &plan, context.privilege_context);
+            context.renderer.execution_started_with_privilege_session(
+                index,
+                total,
+                &plan,
+                context.privilege_context,
+            );
         }
         let started = Instant::now();
         let execution = if let Some(tui) = live_tui.as_mut() {
-            context.runner.execute_with_observer(&plan, tui)
+            context.runner.execute_with_observer_and_privilege_session(
+                &plan,
+                &mut privilege_session,
+                tui,
+            )
         } else {
-            context.runner.execute(&plan)
+            context
+                .runner
+                .execute_with_privilege_session(&plan, &mut privilege_session)
         };
         match execution {
-            Ok(status) if status.success => {
+            Ok(ProcessExecutionOutcome::Process(status)) if status.success => {
+                let hook_runner = MaintenanceHookRunner::new(context.runner, &privilege_session);
                 let verification = context.backend(&plan.backend_id).and_then(|runtime| {
                     runtime
                         .backend
-                        .post_execution_verification(&plan, context.runner)
+                        .post_execution_verification(&plan, &hook_runner)
                 });
                 let mut parsed = match verification {
                     Ok(Some(record)) => vec![record],
@@ -357,6 +438,7 @@ pub fn run(
                         command: None,
                         status: OperationStatus::Failed,
                         message: Some(format!("post-upgrade verification failed: {error}")),
+                        privilege_status: None,
                     }],
                     Ok(None) => {
                         classify_success(context, &plan, &status, &command).unwrap_or_else(|| {
@@ -367,6 +449,7 @@ pub fn run(
                                 command: Some(command.clone()),
                                 status: OperationStatus::Completed,
                                 message: None,
+                                privilege_status: None,
                             }]
                         })
                     }
@@ -406,9 +489,11 @@ pub fn run(
                     && upgrades_pending_refresh.remove(&plan.backend_id)
                 {
                     let runtime = context.backend(&plan.backend_id)?;
+                    let hook_runner =
+                        MaintenanceHookRunner::new(context.runner, &privilege_session);
                     match runtime.backend.plan_upgrade(
                         &runtime.commands,
-                        context.runner,
+                        &hook_runner,
                         context.backend_filter,
                         context.target,
                     ) {
@@ -469,6 +554,7 @@ pub fn run(
                                     message: Some(
                                         "cancelled before package upgrade execution".to_owned(),
                                     ),
+                                    privilege_status: None,
                                 });
                             }
                             records.append(&mut follow_up.records);
@@ -477,7 +563,7 @@ pub fn run(
                     }
                 }
             }
-            Ok(status) => {
+            Ok(ProcessExecutionOutcome::Process(status)) => {
                 failed.insert(operation_id);
                 let error = classify_failure(context, &plan, &status);
                 let cancelled = status.code == Some(130);
@@ -506,6 +592,7 @@ pub fn run(
                             )
                         })
                     }),
+                    privilege_status: None,
                 };
                 if let Some(tui) = live_tui.as_mut() {
                     tui.finish_operation(
@@ -529,6 +616,39 @@ pub fn run(
                 records.push(record);
                 defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
             }
+            Ok(ProcessExecutionOutcome::PrivilegeBlocked(privilege_status)) => {
+                failed.insert(operation_id);
+                defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
+                let record = BackendOperationRecord {
+                    backend_id: plan.backend_id,
+                    backend_name: plan.backend_name,
+                    action: Some(plan.action),
+                    command: Some(command),
+                    status: OperationStatus::Blocked,
+                    message: Some(privilege_status.message().to_owned()),
+                    privilege_status: Some(privilege_status),
+                };
+                if let Some(tui) = live_tui.as_mut() {
+                    tui.finish_operation(
+                        index,
+                        total,
+                        &record.backend_name,
+                        &record.status,
+                        record.message.as_deref(),
+                        started.elapsed(),
+                    );
+                } else {
+                    context.renderer.execution_finished(
+                        index,
+                        total,
+                        &record.backend_name,
+                        &record.status,
+                        record.message.as_deref(),
+                        started.elapsed(),
+                    );
+                }
+                records.push(record);
+            }
             Err(error) => {
                 failed.insert(operation_id);
                 defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
@@ -539,6 +659,7 @@ pub fn run(
                     command: Some(command),
                     status: OperationStatus::Failed,
                     message: Some(error.to_string()),
+                    privilege_status: None,
                 };
                 if let Some(tui) = live_tui.as_mut() {
                     tui.finish_operation(
@@ -579,6 +700,58 @@ pub fn run(
     Ok(report)
 }
 
+fn finish_before_execution_for_privilege_failure(
+    context: &OperationContext<'_>,
+    operation_name: &str,
+    mut records: Vec<BackendOperationRecord>,
+    operations: Vec<PlannedOperation>,
+    privilege_status: PrivilegeStatus,
+) -> AllpResult<MultiOperationReport> {
+    context
+        .renderer
+        .warn(&format!("{}.", title_case(privilege_status.message())));
+    for operation in operations {
+        let requires_administrator = operation
+            .plan
+            .privilege
+            .requires_sudo(context.privilege_context);
+        let (status, message) = if requires_administrator {
+            (
+                OperationStatus::Blocked,
+                privilege_status.message().to_owned(),
+            )
+        } else {
+            (
+                OperationStatus::Deferred,
+                format!(
+                    "execution did not start because {}",
+                    privilege_status.message()
+                ),
+            )
+        };
+        let mut record = record_from_plan(
+            operation.plan,
+            status,
+            Some(message),
+            context.privilege_context,
+        );
+        if requires_administrator {
+            record.privilege_status = Some(privilege_status);
+        }
+        records.push(record);
+    }
+
+    let report = MultiOperationReport {
+        operation: operation_name.to_owned(),
+        records,
+    };
+    update_phase(context, operation_name, "Phase 6: Summary");
+    context
+        .renderer
+        .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+    Ok(report)
+}
+
 fn confirm_follow_up(context: &OperationContext<'_>, operation_name: &str) -> AllpResult<bool> {
     confirm_execution(
         context.no_interactive,
@@ -606,6 +779,7 @@ fn defer_pending_upgrade(
             command: None,
             status: OperationStatus::Deferred,
             message: Some("required metadata refresh failed".to_owned()),
+            privilege_status: None,
         });
     }
 }
@@ -646,6 +820,7 @@ fn planning_failure(
             OperationStatus::Failed
         },
         message: Some(error.to_string()),
+        privilege_status: None,
     }
 }
 
@@ -771,5 +946,6 @@ fn record_from_plan(
         command: Some(command),
         status,
         message,
+        privilege_status: None,
     }
 }

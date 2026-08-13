@@ -1,6 +1,11 @@
 use crate::{
-    domain::{AllpError, AllpResult, ExecutionPlan, NativeCommand, PrivilegeRequirement},
-    execution::privilege::{prepare_command, UserAccount, UserContextExecutor},
+    domain::{
+        AllpError, AllpResult, ExecutionPlan, NativeCommand, PrivilegeRequirement, PrivilegeStatus,
+    },
+    execution::privilege::{
+        prepare_command, prepare_command_with_privilege_session, PrivilegeSession, UserAccount,
+        UserContextExecutor,
+    },
     execution::render_native_command,
 };
 #[cfg(unix)]
@@ -36,6 +41,18 @@ pub struct ProcessStatus {
     pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+}
+
+/// The result of attempting one plan through a privilege session.
+///
+/// `PrivilegeBlocked` is emitted before the native child is spawned: when the
+/// session is unavailable or the already-validated sudo helper itself cannot
+/// start. A nonzero child status remains a native result; stdout/stderr text
+/// alone cannot prove whether sudo reached the native executable.
+#[derive(Debug, Clone)]
+pub enum ProcessExecutionOutcome {
+    Process(ProcessStatus),
+    PrivilegeBlocked(PrivilegeStatus),
 }
 
 /// Origin of native output observed while an execution plan is running.
@@ -103,6 +120,121 @@ pub trait ProcessRunner: Send + Sync {
         _observer: &mut dyn ExecutionObserver,
     ) -> AllpResult<ProcessStatus> {
         self.execute(plan)
+    }
+
+    fn execute_with_privilege_session(
+        &self,
+        plan: &ExecutionPlan,
+        session: &mut PrivilegeSession,
+    ) -> AllpResult<ProcessExecutionOutcome> {
+        if plan.privilege.requires_sudo(session.context()) {
+            return Ok(ProcessExecutionOutcome::PrivilegeBlocked(
+                PrivilegeStatus::Unavailable,
+            ));
+        }
+        self.execute(plan).map(ProcessExecutionOutcome::Process)
+    }
+
+    fn execute_with_observer_and_privilege_session(
+        &self,
+        plan: &ExecutionPlan,
+        session: &mut PrivilegeSession,
+        observer: &mut dyn ExecutionObserver,
+    ) -> AllpResult<ProcessExecutionOutcome> {
+        if plan.privilege.requires_sudo(session.context()) {
+            return Ok(ProcessExecutionOutcome::PrivilegeBlocked(
+                PrivilegeStatus::Unavailable,
+            ));
+        }
+        self.execute_with_observer(plan, observer)
+            .map(ProcessExecutionOutcome::Process)
+    }
+}
+
+/// Restricts backend maintenance hooks while a privilege session is active.
+///
+/// Hook APIs predate privilege sessions and expose legacy
+/// `capture_with_privilege`, which could otherwise construct interactive
+/// `sudo --`. The live maintenance path gives hooks this adapter instead of
+/// the raw runner. Root-required hook work must be modelled as an execution
+/// plan, where the session can validate it before it reaches the TUI.
+pub struct MaintenanceHookRunner<'a> {
+    inner: &'a dyn ProcessRunner,
+    context: &'a crate::domain::RuntimePrivilegeContext,
+}
+
+impl<'a> MaintenanceHookRunner<'a> {
+    pub fn new(inner: &'a dyn ProcessRunner, session: &'a PrivilegeSession) -> Self {
+        Self {
+            inner,
+            context: session.context(),
+        }
+    }
+
+    fn allow(&self, privilege: PrivilegeRequirement) -> AllpResult<()> {
+        if privilege == PrivilegeRequirement::Conditional || privilege.requires_sudo(self.context) {
+            return Err(AllpError::InvalidInput(
+                "root-required maintenance hooks are forbidden while a privilege session is active; create an execution plan instead".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ProcessRunner for MaintenanceHookRunner<'_> {
+    fn capture(&self, command: &NativeCommand) -> AllpResult<CommandOutput> {
+        self.inner.capture(command)
+    }
+
+    fn capture_with_privilege(
+        &self,
+        command: &NativeCommand,
+        privilege: PrivilegeRequirement,
+    ) -> AllpResult<CommandOutput> {
+        self.allow(privilege)?;
+        self.inner.capture_with_privilege(command, privilege)
+    }
+
+    fn capture_in_user_context(
+        &self,
+        command: &NativeCommand,
+        user: &UserAccount,
+    ) -> AllpResult<CommandOutput> {
+        self.inner.capture_in_user_context(command, user)
+    }
+
+    fn execute(&self, plan: &ExecutionPlan) -> AllpResult<ProcessStatus> {
+        self.allow(plan.privilege)?;
+        self.inner.execute(plan)
+    }
+
+    fn execute_with_observer(
+        &self,
+        plan: &ExecutionPlan,
+        observer: &mut dyn ExecutionObserver,
+    ) -> AllpResult<ProcessStatus> {
+        self.allow(plan.privilege)?;
+        self.inner.execute_with_observer(plan, observer)
+    }
+
+    fn execute_with_privilege_session(
+        &self,
+        plan: &ExecutionPlan,
+        session: &mut PrivilegeSession,
+    ) -> AllpResult<ProcessExecutionOutcome> {
+        self.allow(plan.privilege)?;
+        self.inner.execute_with_privilege_session(plan, session)
+    }
+
+    fn execute_with_observer_and_privilege_session(
+        &self,
+        plan: &ExecutionPlan,
+        session: &mut PrivilegeSession,
+        observer: &mut dyn ExecutionObserver,
+    ) -> AllpResult<ProcessExecutionOutcome> {
+        self.allow(plan.privilege)?;
+        self.inner
+            .execute_with_observer_and_privilege_session(plan, session, observer)
     }
 }
 
@@ -213,6 +345,23 @@ impl ProcessRunner for StdProcessRunner {
     ) -> AllpResult<ProcessStatus> {
         self.execute_internal(plan, Some(observer))
     }
+
+    fn execute_with_privilege_session(
+        &self,
+        plan: &ExecutionPlan,
+        session: &mut PrivilegeSession,
+    ) -> AllpResult<ProcessExecutionOutcome> {
+        self.execute_internal_with_privilege_session(plan, session, None)
+    }
+
+    fn execute_with_observer_and_privilege_session(
+        &self,
+        plan: &ExecutionPlan,
+        session: &mut PrivilegeSession,
+        observer: &mut dyn ExecutionObserver,
+    ) -> AllpResult<ProcessExecutionOutcome> {
+        self.execute_internal_with_privilege_session(plan, session, Some(observer))
+    }
 }
 
 impl StdProcessRunner {
@@ -221,7 +370,50 @@ impl StdProcessRunner {
         plan: &ExecutionPlan,
         observer: Option<&mut dyn ExecutionObserver>,
     ) -> AllpResult<ProcessStatus> {
-        let mut process = prepare_command(&plan.command, plan.privilege)?;
+        let process = prepare_command(&plan.command, plan.privilege)?;
+        self.execute_prepared(plan, process, observer, true)
+    }
+
+    fn execute_internal_with_privilege_session(
+        &self,
+        plan: &ExecutionPlan,
+        session: &mut PrivilegeSession,
+        observer: Option<&mut dyn ExecutionObserver>,
+    ) -> AllpResult<ProcessExecutionOutcome> {
+        let privilege_status = session.current_status_for(plan);
+        if !privilege_status.permits_execution() {
+            return Ok(ProcessExecutionOutcome::PrivilegeBlocked(privilege_status));
+        }
+
+        let uses_sudo = plan.privilege.requires_sudo(session.context());
+        let process =
+            prepare_command_with_privilege_session(&plan.command, plan.privilege, session)?;
+        // `sudo -n` cannot ask for a password, but it is still a wrapper.  It
+        // can fail or linger before it execs the native program, and a wrapper
+        // spawn is not evidence that APT/Snap/etc. has started.  Suppress
+        // heartbeats in that narrow case rather than claiming backend progress
+        // before we have a trusted native-start protocol.
+        let status = match self.execute_prepared(plan, process, observer, !uses_sudo) {
+            Ok(status) => status,
+            Err(error) if uses_sudo && is_sudo_wrapper_spawn_error(&error) => {
+                session.mark_noninteractive_failure(PrivilegeStatus::Unavailable);
+                return Ok(ProcessExecutionOutcome::PrivilegeBlocked(
+                    PrivilegeStatus::Unavailable,
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(ProcessExecutionOutcome::Process(status))
+    }
+
+    fn execute_prepared(
+        &self,
+        plan: &ExecutionPlan,
+        process: Command,
+        observer: Option<&mut dyn ExecutionObserver>,
+        heartbeat_allowed: bool,
+    ) -> AllpResult<ProcessStatus> {
+        let mut process = process;
         let mut child = process
             .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
@@ -239,7 +431,7 @@ impl StdProcessRunner {
         let started = Instant::now();
         let mut last_output = started;
         let mut next_heartbeat = FIRST_HEARTBEAT_AFTER;
-        let heartbeat_enabled = std::io::stderr().is_terminal();
+        let heartbeat_enabled = heartbeat_allowed && std::io::stderr().is_terminal();
         let mut last_tick = started;
         let mut observer = observer;
         let mut captured_stdout = Vec::new();
@@ -310,6 +502,23 @@ fn status_signal(status: &std::process::ExitStatus) -> Option<i32> {
 #[cfg(not(unix))]
 fn status_signal(_status: &std::process::ExitStatus) -> Option<i32> {
     None
+}
+
+#[cfg(unix)]
+fn is_sudo_wrapper_spawn_error(error: &AllpError) -> bool {
+    matches!(
+        error,
+        AllpError::Io(error)
+            if matches!(
+                error.raw_os_error(),
+                Some(libc::ENOENT | libc::EACCES | libc::ENOTDIR | libc::EPERM)
+            )
+    )
+}
+
+#[cfg(not(unix))]
+fn is_sudo_wrapper_spawn_error(_error: &AllpError) -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -511,10 +720,105 @@ fn format_elapsed(duration: Duration) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Default)]
     struct RecordingObserver {
         events: Vec<ProcessEvent>,
+    }
+
+    #[derive(Default)]
+    struct HookRecordingRunner {
+        privileged_captures: AtomicUsize,
+        executes: AtomicUsize,
+    }
+
+    impl ProcessRunner for HookRecordingRunner {
+        fn capture(&self, _command: &NativeCommand) -> AllpResult<CommandOutput> {
+            Ok(CommandOutput {
+                success: true,
+                code: Some(0),
+                signal: None,
+                duration: Duration::ZERO,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+
+        fn capture_with_privilege(
+            &self,
+            command: &NativeCommand,
+            _privilege: PrivilegeRequirement,
+        ) -> AllpResult<CommandOutput> {
+            self.privileged_captures.fetch_add(1, Ordering::Relaxed);
+            self.capture(command)
+        }
+
+        fn execute(&self, _plan: &ExecutionPlan) -> AllpResult<ProcessStatus> {
+            self.executes.fetch_add(1, Ordering::Relaxed);
+            Ok(ProcessStatus {
+                success: true,
+                code: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+    }
+
+    fn hook_plan(privilege: PrivilegeRequirement) -> ExecutionPlan {
+        ExecutionPlan {
+            backend_id: "test".to_owned(),
+            backend_name: "Test".to_owned(),
+            operation: crate::domain::OperationKind::Update,
+            action: "Test hook".to_owned(),
+            package_id: None,
+            source: None,
+            scope: None,
+            details: Vec::new(),
+            command: NativeCommand::new("/bin/true"),
+            privilege,
+            requires_root: privilege == PrivilegeRequirement::RootRequired,
+            interactive: false,
+        }
+    }
+
+    #[test]
+    fn maintenance_hook_runner_rejects_sudo_capable_hooks_without_calling_inner_runner() {
+        let inner = HookRecordingRunner::default();
+        let root_plan = hook_plan(PrivilegeRequirement::RootRequired);
+        let session = PrivilegeSession::for_plans(
+            std::slice::from_ref(&root_plan),
+            &crate::domain::RuntimePrivilegeContext::NormalUser,
+        );
+        let hooks = MaintenanceHookRunner::new(&inner, &session);
+
+        assert!(hooks
+            .capture_with_privilege(
+                &NativeCommand::new("/bin/true"),
+                PrivilegeRequirement::RootRequired
+            )
+            .is_err());
+        assert!(hooks.execute(&root_plan).is_err());
+        assert!(hooks
+            .capture_with_privilege(
+                &NativeCommand::new("/bin/true"),
+                PrivilegeRequirement::Conditional
+            )
+            .is_err());
+        assert_eq!(inner.privileged_captures.load(Ordering::Relaxed), 0);
+        assert_eq!(inner.executes.load(Ordering::Relaxed), 0);
+
+        hooks
+            .capture_with_privilege(
+                &NativeCommand::new("/bin/true"),
+                PrivilegeRequirement::NoElevation,
+            )
+            .expect("non-root hook capture remains available");
+        hooks
+            .execute(&hook_plan(PrivilegeRequirement::NoElevation))
+            .expect("non-root hook execution remains available");
+        assert_eq!(inner.privileged_captures.load(Ordering::Relaxed), 1);
+        assert_eq!(inner.executes.load(Ordering::Relaxed), 1);
     }
 
     impl ExecutionObserver for RecordingObserver {

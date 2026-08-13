@@ -72,7 +72,10 @@ impl Backend for AptBackend {
     }
 
     fn authorize_noninteractive(&self, plan: &mut ExecutionPlan) {
-        if plan.interactive && !plan.command.args.iter().any(|arg| arg == "-y") {
+        if plan.operation == OperationKind::Upgrade
+            && plan.interactive
+            && !plan.command.args.iter().any(|arg| arg == "-y")
+        {
             plan.command.args.push("-y".into());
             plan.interactive = false;
         }
@@ -395,6 +398,7 @@ impl Backend for AptBackend {
                 command: None,
                 status: OperationStatus::Updated,
                 message: Some(package_count_message(changed)),
+                privilege_status: None,
             });
         }
         for (label, packages) in parsed.deferred.categories() {
@@ -412,6 +416,7 @@ impl Backend for AptBackend {
                     packages.len(),
                     packages.join(", ")
                 )),
+                privilege_status: None,
             });
         }
         if records.is_empty() && parsed.saw_summary {
@@ -422,6 +427,7 @@ impl Backend for AptBackend {
                 command: None,
                 status: OperationStatus::UpToDate,
                 message: Some("no package changes available".to_owned()),
+                privilege_status: None,
             });
         }
         (!records.is_empty()).then_some(records)

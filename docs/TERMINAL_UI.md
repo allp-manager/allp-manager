@@ -19,16 +19,17 @@ Color is disabled when:
 JSON output never contains ANSI escape sequences. In the classic stream, native
 package-manager output is printed directly. The live maintenance dashboard
 described below keeps that output visible while adding only a safe terminal
-projection around it; it never changes the native command, its arguments, or
-its privilege requirement.
+projection around it; it never rewrites the planned native command, its
+arguments, or its plan-level privilege requirement.
 
 ## Live Maintenance Dashboard
 
 Real, interactive `update` and `upgrade` execution uses an inline live
 dashboard during the execution phase. It is deliberately **not** a full-screen
-or alternate-screen application: the terminal keeps its ordinary scrollback,
-package-manager prompts still use the inherited stdin, and Ctrl+C does not need
-to restore terminal mode.
+or alternate-screen application: the terminal keeps its ordinary scrollback and
+Ctrl+C does not need to restore terminal mode. Administrator authentication is
+completed before the dashboard starts; no sudo password prompt is permitted
+while it is rendering.
 
 ![Illustrative live update dashboard](assets/tui-maintenance.svg)
 
@@ -42,10 +43,11 @@ The dashboard has three parts:
   warning color; successful results use the success color. The final summary is
   also a card, so an error never disappears into a long package-manager log.
 - The single footer line at the bottom is redrawn in place. It shows the active
-  backend, exact action label, elapsed time, and live `completed / total`
-  progress. A metadata refresh can discover a follow-up upgrade, in which case
-  the queue and footer total grow visibly instead of pretending the original
-  count was final.
+  backend, exact action label, elapsed time, and `Queue: completed/total`.
+  The bar advances only as queued operations complete; it does not treat elapsed
+  time as package progress. A metadata refresh can discover a follow-up upgrade,
+  in which case the queue and footer total grow visibly instead of pretending
+  the original count was final.
 
 The dashboard starts only for a real maintenance run when all of the following
 are true:
@@ -74,6 +76,17 @@ The process runner remains the only component that prepares a native command,
 applies the plan's privilege boundary, and starts the child process. The
 dashboard is an observer: it receives output and timing events after that work
 has been decided and cannot rewrite, approve, or elevate a command.
+
+If any selected operation needs administrator access, Allp performs one
+interactive `sudo -v` preflight after the final confirmation and before the
+dashboard is created. Its standard streams stay attached to the real terminal;
+Allp never reads or stores a password. During dashboard execution, privileged
+children use `sudo -n -- …`. Before a later root operation, Allp checks the
+cached credential with `sudo -n -v`. If it has expired, the footer is cleared,
+an interactive `sudo -v` owns the normal terminal, and the footer is redrawn
+only after authentication succeeds. A failed or unavailable revalidation
+produces a structured blocked result rather than mixing a password prompt into
+the dashboard output.
 
 For safety, the on-screen log is a terminal-safe projection of untrusted native
 output: control sequences are removed before display. The runner keeps the

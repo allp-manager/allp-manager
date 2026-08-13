@@ -11,7 +11,7 @@ pub use category::BackendCategory;
 pub use error::{AllpError, AllpExitCode, AllpResult};
 pub use execution::{
     ExecutionPlan, NativeCommand, OperationKind, OriginalUser, PrivilegeRequirement,
-    RuntimePrivilegeContext,
+    PrivilegeStatus, RuntimePrivilegeContext,
 };
 pub use package::{
     DeveloperTarget, InstalledPackage, MatchKind, PackageCandidate, PackageDomain, PackageInfo,

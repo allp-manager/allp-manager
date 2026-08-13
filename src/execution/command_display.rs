@@ -26,6 +26,23 @@ pub fn render_execution_plan_with_context(
     }
 }
 
+/// Renders the command form used after a maintenance privilege session has
+/// authenticated. This is intentionally separate from the pre-confirmation
+/// preview above: before a session exists the ordinary `sudo --` form remains
+/// the honest plan-level description.
+pub fn render_execution_plan_with_privilege_session(
+    plan: &ExecutionPlan,
+    context: &RuntimePrivilegeContext,
+) -> String {
+    let native = render_native_command(&plan.command);
+    match plan.privilege {
+        PrivilegeRequirement::RootRequired if !context.is_root() => {
+            format!("sudo -n -- {native}")
+        }
+        _ => render_execution_plan_with_context(plan, context),
+    }
+}
+
 pub fn render_native_command(command: &NativeCommand) -> String {
     let mut parts = Vec::new();
     if !command.env.is_empty() {
@@ -73,7 +90,10 @@ fn quote(value: &OsStr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_execution_plan_with_context, render_native_argv, render_native_command};
+    use super::{
+        render_execution_plan_with_context, render_execution_plan_with_privilege_session,
+        render_native_argv, render_native_command,
+    };
     use crate::domain::{
         ExecutionPlan, NativeCommand, OperationKind, OriginalUser, PrivilegeRequirement,
         RuntimePrivilegeContext,
@@ -109,6 +129,19 @@ mod tests {
         assert_eq!(
             render_execution_plan_with_context(&plan, &RuntimePrivilegeContext::RootDirect),
             "/usr/bin/apt-get update"
+        );
+    }
+
+    #[test]
+    fn session_preview_uses_noninteractive_sudo_for_normal_user_root_plan() {
+        let plan = plan(PrivilegeRequirement::RootRequired);
+
+        assert_eq!(
+            render_execution_plan_with_privilege_session(
+                &plan,
+                &RuntimePrivilegeContext::NormalUser
+            ),
+            "sudo -n -- /usr/bin/apt-get update"
         );
     }
 

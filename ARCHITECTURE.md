@@ -146,6 +146,8 @@ The execution layer owns:
 - inherited stdin plus live stdout/stderr forwarding for mutating commands;
 - bounded process-result capture and presentation-only process observers;
 - child-only privilege elevation;
+- one pre-dashboard sudo validation session for maintenance runs, followed by
+  noninteractive `sudo -n` child execution;
 - original-user de-escalation for sudo-invoked user-scoped plans;
 - direct `std::process::Command` invocation.
 
@@ -158,7 +160,7 @@ Plan-level privilege is represented as:
 - `OriginalUserRequired`
 - `Conditional`
 
-Runtime context is represented as normal user, direct root, or sudo-root with original user. The runner, not the backends, decides whether to prefix `sudo --`, run directly, or use `sudo -u <SUDO_USER> --`.
+Runtime context is represented as normal user, direct root, or sudo-root with original user. The runner, not the backends, decides whether to prefix an ordinary child with `sudo --`, run a preflighted maintenance child with `sudo -n --`, run directly, or use `sudo -u <SUDO_USER> --`.
 
 An `ExecutionObserver` may project output into an interactive presentation such
 as the maintenance dashboard. It receives only process events after the native
@@ -171,7 +173,8 @@ handling, at which point the runner continues ordinary stream forwarding.
 The CLI layer owns Clap parsing, command-specific options, prompts, human
 rendering, JSON envelopes, colors, spinners, and the inline maintenance
 dashboard. The dashboard runs only for suitable interactive `update`/`upgrade`
-execution, keeps the normal terminal buffer and inherited stdin, and has a
+execution, keeps the normal terminal buffer and inherited stdin, completes
+sudo authentication before it starts rendering, and has a
 classic-stream fallback for JSON, non-TTY, non-interactive, `TERM=dumb`, or
 `--no-tui` use.
 
