@@ -874,7 +874,10 @@ fn create_staging_directory(root: &Path, version: Version) -> AllpResult<PathBuf
             ".allp-update-{version}-{}-{attempt}",
             std::process::id()
         ));
+        #[cfg(unix)]
         let mut builder = fs::DirBuilder::new();
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         #[cfg(unix)]
         builder.mode(0o700);
         match builder.create(&path) {

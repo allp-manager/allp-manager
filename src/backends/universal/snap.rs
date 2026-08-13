@@ -2840,6 +2840,8 @@ fn parse_snap_refresh_status(stdout: &str, stderr: &str) -> Option<(OperationSta
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::SNAP_DISCOVERY_STATUS_KEY;
     use super::{
         classify_snap_error, normalize_snap_package_id, parse_snap_change, parse_snap_find,
         parse_snap_info, parse_snap_list_entry, parse_snap_refresh_status, parse_snapd_info,
@@ -2847,8 +2849,7 @@ mod tests {
         validate_snap_candidate, SnapBackend, SnapCandidate, SnapChange, SnapChangeId,
         SnapCliFallbackService, SnapConfinement, SnapErrorKind, SnapInstallRequest,
         SnapPublisherVerification, SnapService, SnapWideSearch, SNAP_AVAILABILITY_KEY,
-        SNAP_DISCOVERY_NOTES_KEY, SNAP_DISCOVERY_STATUS_KEY, SNAP_FALLBACK_REASON_KEY,
-        SNAP_TRANSPORT_KEY,
+        SNAP_DISCOVERY_NOTES_KEY, SNAP_FALLBACK_REASON_KEY, SNAP_TRANSPORT_KEY,
     };
     use crate::domain::{
         AllpError, AllpResult, BackendCategory, ExecutionPlan, MatchKind, NativeCommand,

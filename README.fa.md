@@ -239,6 +239,8 @@ allp update --update-channel prerelease
 
 channel پیش‌فرض، buildهای verified و continuous شاخه `main` است؛ انتخاب stable و prerelease صریح و persist می‌شود. Release پایدار باید `allp-release-manifest.json` معتبر داشته باشد و build continuous از manifest اختصاصی و workflow identity مورد اعتماد استفاده می‌کند. ابتدا SemVer پایه و سپس build revision مقایسه می‌شود؛ asset بر اساس OS، معماری، libc، فرمت executable و target انتخاب می‌شود و target ناسازگار بدون staging گزارش می‌شود.
 
+باینری‌ای که با `make reinstall` نصب می‌شود provenance محلی/development دارد، اما همچنان build جدید و verifiedِ continuous از `main` را دنبال می‌کند؛ حتی اگر revision محلیِ `1` با revision CI یکسان باشد. بنابراین پس از merge شدن تغییر در GitHub و publish موفق continuous build، channel پیش‌فرض `allp update` آن را تشخیص می‌دهد و فقط تأیید معمول برای جایگزینی باقی می‌ماند.
+
 Download فقط HTTPS، با timeout، redirect و size limit و فقط برای repository، tag و asset دقیق انجام می شود. SHA-256، مسیرهای archive و نسخه binary staged قبل از نصب بررسی می شوند. در Linux/macOS جایگزینی با staging هم فایل سیستم، backup rollback و verification نهایی انجام می شود؛ برای مسیر non-writable فقط helper کوچک elevate می شود. Windows از helper deferred استفاده می کند. re-execution محافظت شده باعث می شود `allp update` فقط یک بار ادامه یابد و loop نسازد. حالت offline با GitHub یا remote sourceها تماس نمی گیرد.
 
 `allp doctor` اطلاعات platform، user، path و ownership/writability باینری، executableهای resolved، Backendها، socket مربوط به Snap، remoteهای Flatpak، update source، release target و مسیرهای cache/state/config را بدون token یا environment خصوصی گزارش می کند.

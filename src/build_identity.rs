@@ -138,6 +138,15 @@ pub fn compare_builds(
         {
             return Ok(BuildComparison::SameBuild);
         }
+        // `make reinstall` embeds revision 1 for a local development build. That value is
+        // deliberately not a GitHub Actions run number, so it can collide with a verified
+        // continuous build even when the sources differ. The default update channel is the
+        // trusted continuous channel; let that official candidate replace the local build
+        // after the normal user confirmation instead of treating the collision as a release
+        // integrity failure.
+        if is_local_development_build(installed) && is_verified_continuous_build(remote) {
+            return Ok(BuildComparison::UpdateAvailable);
+        }
         return Err(format!(
             "build identity conflict: {}.{} maps to commits {} and {}",
             installed.base_version,
@@ -149,17 +158,19 @@ pub fn compare_builds(
     if same_known_commit {
         return Ok(BuildComparison::SameSource);
     }
-    // A local development build represents an explicitly selected checkout.
-    // Workflow run numbers are not revisions of that checkout and must not
-    // silently replace it when the base SemVer is otherwise equal.
-    if installed.channel == BuildChannel::Development {
-        return Ok(BuildComparison::LocalAhead);
-    }
     Ok(if remote.build_revision > installed.build_revision {
         BuildComparison::UpdateAvailable
     } else {
         BuildComparison::LocalAhead
     })
+}
+
+fn is_local_development_build(identity: &AllpBuildIdentity) -> bool {
+    identity.channel == BuildChannel::Development && !identity.official
+}
+
+fn is_verified_continuous_build(identity: &AllpBuildIdentity) -> bool {
+    identity.channel == BuildChannel::Continuous && identity.official
 }
 
 pub fn short_version_output() -> String {
@@ -255,11 +266,50 @@ mod tests {
     }
 
     #[test]
-    fn continuous_revision_does_not_replace_different_local_development_source() {
+    fn newer_verified_continuous_build_replaces_different_local_development_source() {
         let mut installed = identity(Version::new(0, 3, 5), 1, &"a".repeat(40));
         installed.channel = BuildChannel::Development;
         installed.official = false;
         let remote = identity(Version::new(0, 3, 5), 4, &"b".repeat(40));
+
+        assert_eq!(
+            compare_builds(&installed, &remote),
+            Ok(BuildComparison::UpdateAvailable)
+        );
+    }
+
+    #[test]
+    fn verified_continuous_build_replaces_local_reinstall_on_revision_collision() {
+        let mut installed = identity(Version::new(0, 3, 5), 1, &"a".repeat(40));
+        installed.channel = BuildChannel::Development;
+        installed.official = false;
+        let remote = identity(Version::new(0, 3, 5), 1, &"b".repeat(40));
+
+        assert_eq!(
+            compare_builds(&installed, &remote),
+            Ok(BuildComparison::UpdateAvailable)
+        );
+    }
+
+    #[test]
+    fn unverified_revision_collision_cannot_replace_local_development_build() {
+        let mut installed = identity(Version::new(0, 3, 5), 1, &"a".repeat(40));
+        installed.channel = BuildChannel::Development;
+        installed.official = false;
+        let mut remote = identity(Version::new(0, 3, 5), 1, &"b".repeat(40));
+        remote.official = false;
+
+        assert!(compare_builds(&installed, &remote)
+            .expect_err("unverified revision collision must remain an integrity error")
+            .contains("identity conflict"));
+    }
+
+    #[test]
+    fn older_continuous_build_does_not_downgrade_local_development_source() {
+        let mut installed = identity(Version::new(0, 3, 5), 4, &"a".repeat(40));
+        installed.channel = BuildChannel::Development;
+        installed.official = false;
+        let remote = identity(Version::new(0, 3, 5), 3, &"b".repeat(40));
 
         assert_eq!(
             compare_builds(&installed, &remote),

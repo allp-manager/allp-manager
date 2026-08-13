@@ -1,7 +1,7 @@
 use crate::{
     domain::{NativeCommand, RuntimePrivilegeContext},
     execution::{
-        privilege::{user_account_by_name, user_account_by_uid, user_group_ids, UserAccount},
+        privilege::{user_account_by_name, UserAccount},
         ProcessRunner,
     },
     platform::{OperatingSystem, PlatformContext, UserIdentity},
@@ -19,6 +19,9 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+#[cfg(unix)]
+use crate::execution::privilege::{user_account_by_uid, user_group_ids};
 
 const CONFIG_FILE: &str = "homebrew.json";
 const STATE_FILE: &str = "homebrew-installation.json";
@@ -772,6 +775,7 @@ fn execution_user_for_candidate(
     #[cfg(not(unix))]
     {
         let _ = executable;
+        let _ = platform;
         if matches!(privilege, RuntimePrivilegeContext::RootDirect) {
             Err(problem(
                 HomebrewProblemKind::WrongOwner,
@@ -964,7 +968,7 @@ fn command_failure(command: &str, code: Option<i32>, stderr: &str) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::{

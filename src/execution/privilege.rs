@@ -267,13 +267,21 @@ pub fn user_account_by_name(name: &str) -> Option<UserAccount> {
     #[cfg(not(unix))]
     {
         let _ = name;
-        return None;
+        None
     }
     #[cfg(unix)]
     {
-        system_accounts()
+        let account = system_accounts()
             .into_iter()
-            .find(|account| account.name == name)
+            .find(|account| account.name == name);
+        #[cfg(target_os = "macos")]
+        {
+            account.or_else(|| macos_account_by_name(name))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            account
+        }
     }
 }
 
@@ -285,19 +293,35 @@ pub fn user_account_by_uid(uid: u32) -> Option<UserAccount> {
     }
     #[cfg(unix)]
     {
-        system_accounts()
+        let account = system_accounts()
             .into_iter()
-            .find(|account| account.uid == uid)
+            .find(|account| account.uid == uid);
+        #[cfg(target_os = "macos")]
+        {
+            account.or_else(|| macos_account_by_uid(uid))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            account
+        }
     }
 }
 
 pub fn user_group_ids(account: &UserAccount) -> BTreeSet<u32> {
-    let mut groups = BTreeSet::from([account.gid]);
     #[cfg(unix)]
-    if let Ok(contents) = fs::read_to_string("/etc/group") {
-        groups.extend(parse_supplementary_groups(&contents, &account.name));
+    {
+        let mut groups = BTreeSet::from([account.gid]);
+        if let Ok(contents) = fs::read_to_string("/etc/group") {
+            groups.extend(parse_supplementary_groups(&contents, &account.name));
+        }
+        #[cfg(target_os = "macos")]
+        groups.extend(macos_group_ids(&account.name));
+        groups
     }
-    groups
+    #[cfg(not(unix))]
+    {
+        BTreeSet::from([account.gid])
+    }
 }
 
 fn validate_user_account(requested: &UserAccount) -> AllpResult<UserAccount> {
@@ -390,6 +414,131 @@ fn parse_passwd(contents: &str) -> Vec<UserAccount> {
             })
         })
         .collect()
+}
+
+/// macOS stores normal GUI accounts in Directory Services, where they need not appear in
+/// `/etc/passwd`. Homebrew must validate the exact sudo user before it de-escalates, so use the
+/// system Directory Services command as a narrowly scoped fallback rather than trusting the
+/// ambient `SUDO_USER` fields by themselves.
+#[cfg(target_os = "macos")]
+fn macos_account_by_name(name: &str) -> Option<UserAccount> {
+    let record = macos_user_record_path(name)?;
+    let output = Command::new("/usr/bin/dscl")
+        .args([
+            ".",
+            "-read",
+            &record,
+            "RecordName",
+            "UniqueID",
+            "PrimaryGroupID",
+            "NFSHomeDirectory",
+            "UserShell",
+        ])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let output = String::from_utf8(output.stdout).ok()?;
+    parse_macos_dscl_account(name, &output)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_account_by_uid(uid: u32) -> Option<UserAccount> {
+    let search_value = uid.to_string();
+    let output = Command::new("/usr/bin/dscl")
+        .args([".", "-search", "/Users", "UniqueID", &search_value])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let output = String::from_utf8(output.stdout).ok()?;
+    let names = output
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| macos_user_record_path(name).is_some())
+        .collect::<BTreeSet<_>>();
+    if names.len() != 1 {
+        return None;
+    }
+    let name = names.into_iter().next()?;
+    let account = macos_account_by_name(name)?;
+    (account.uid == uid).then_some(account)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_group_ids(name: &str) -> BTreeSet<u32> {
+    Command::new("/usr/bin/id")
+        .args(["-G", name])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .filter_map(|group| group.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_user_record_path(name: &str) -> Option<String> {
+    (!name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.chars().any(char::is_control))
+    .then(|| format!("/Users/{name}"))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_macos_dscl_account(requested_name: &str, output: &str) -> Option<UserAccount> {
+    let mut record_matches = false;
+    let mut uid = None;
+    let mut gid = None;
+    let mut home = None;
+    let mut shell = None;
+
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Some((attribute, value)) = line.split_once(':') else {
+            continue;
+        };
+        let attribute = attribute.trim();
+        let value = value.trim();
+        match attribute {
+            "RecordName" => {
+                record_matches = value.split_whitespace().any(|name| name == requested_name);
+            }
+            "UniqueID" => uid = macos_dscl_number(value),
+            "PrimaryGroupID" => gid = macos_dscl_number(value),
+            "NFSHomeDirectory" => home = macos_dscl_path(value),
+            "UserShell" => shell = macos_dscl_path(value),
+            _ => {}
+        }
+    }
+
+    record_matches.then_some(UserAccount {
+        name: requested_name.to_owned(),
+        uid: uid?,
+        gid: gid?,
+        home: home?,
+        shell: shell.unwrap_or_else(|| PathBuf::from("/bin/sh")),
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_dscl_number(value: &str) -> Option<u32> {
+    let mut values = value.split_whitespace();
+    let value = values.next()?;
+    values.next().is_none().then(|| value.parse().ok())?
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_dscl_path(value: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(value.trim());
+    path.is_absolute().then_some(path)
 }
 
 #[cfg(unix)]
@@ -580,6 +729,30 @@ mod tests {
         assert_eq!(accounts[1].gid, 1001);
         assert_eq!(accounts[1].home, std::path::Path::new("/home/testuser"));
         assert_eq!(accounts[1].shell, std::path::Path::new("/bin/zsh"));
+    }
+
+    #[test]
+    fn macos_directory_service_parser_validates_gui_account() {
+        let account = super::parse_macos_dscl_account(
+            "wrench",
+            "RecordName: wrench\nUniqueID: 501\nPrimaryGroupID: 20\nNFSHomeDirectory: /Users/wrench\nUserShell: /bin/zsh\n",
+        )
+        .expect("a complete Directory Services account should parse");
+
+        assert_eq!(account.name, "wrench");
+        assert_eq!(account.uid, 501);
+        assert_eq!(account.gid, 20);
+        assert_eq!(account.home, std::path::Path::new("/Users/wrench"));
+        assert_eq!(account.shell, std::path::Path::new("/bin/zsh"));
+    }
+
+    #[test]
+    fn macos_directory_service_parser_rejects_mismatched_or_unsafe_account_data() {
+        let mismatched = "RecordName: somebody-else\nUniqueID: 501\nPrimaryGroupID: 20\nNFSHomeDirectory: /Users/wrench\nUserShell: /bin/zsh\n";
+        assert!(super::parse_macos_dscl_account("wrench", mismatched).is_none());
+
+        let relative_home = "RecordName: wrench\nUniqueID: 501\nPrimaryGroupID: 20\nNFSHomeDirectory: Users/wrench\nUserShell: /bin/zsh\n";
+        assert!(super::parse_macos_dscl_account("wrench", relative_home).is_none());
     }
 
     #[cfg(unix)]

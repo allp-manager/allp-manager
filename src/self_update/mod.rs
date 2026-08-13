@@ -179,7 +179,15 @@ impl<'a> SelfUpdater<'a> {
     }
 
     pub fn check(&self, channel: UpdateChannel, offline: bool) -> AllpResult<SelfUpdateCheck> {
-        let current_build = AllpBuildIdentity::current();
+        self.check_with_current_build(channel, offline, AllpBuildIdentity::current())
+    }
+
+    fn check_with_current_build(
+        &self,
+        channel: UpdateChannel,
+        offline: bool,
+        current_build: AllpBuildIdentity,
+    ) -> AllpResult<SelfUpdateCheck> {
         let current_version = current_build.base_version;
         let mut persisted =
             state::read_json::<SelfUpdateState>(&self.state_path)?.unwrap_or_default();
@@ -534,6 +542,42 @@ mod tests {
     }
 
     #[test]
+    fn local_reinstall_detects_verified_continuous_main_build() {
+        let current_version = Version::new(0, 3, 5);
+        let current = AllpBuildIdentity {
+            base_version: current_version,
+            build_revision: 1,
+            git_commit: "a".repeat(40),
+            build_id: "local".to_owned(),
+            built_at: None,
+            channel: crate::build_identity::BuildChannel::Development,
+            target: "x86_64-unknown-linux-gnu".to_owned(),
+            official: false,
+        };
+        let remote = continuous_release_descriptor(current_version, 1, "b".repeat(40));
+        let source = StaticSource {
+            calls: Mutex::new(0),
+            release: Some(remote),
+            etag: Some("continuous-main".to_owned()),
+        };
+        let platform = linux_x86_platform();
+        let state_path = temporary_state("local-reinstall-continuous");
+
+        let check = SelfUpdater::new(&source, &platform, state_path.clone())
+            .check_with_current_build(UpdateChannel::Continuous, false, current.clone())
+            .expect("a verified main build should be checked");
+
+        assert_eq!(check.availability, UpdateAvailability::Available);
+        assert_eq!(check.current_build, current);
+        assert_eq!(
+            check.asset.as_ref().map(|asset| asset.target.as_str()),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(*source.calls.lock().unwrap(), 1);
+        let _ = std::fs::remove_file(state_path);
+    }
+
+    #[test]
     fn no_newer_release_persists_response_etag() {
         let source = StaticSource {
             calls: Mutex::new(0),
@@ -619,6 +663,49 @@ mod tests {
             },
             build_identity: None,
             etag: Some("etag-new".to_owned()),
+        }
+    }
+
+    fn continuous_release_descriptor(
+        version: Version,
+        revision: u64,
+        git_commit: String,
+    ) -> ReleaseDescriptor {
+        let target = "x86_64-unknown-linux-gnu";
+        ReleaseDescriptor {
+            version,
+            tag: format!("continuous-v{version}.{revision}"),
+            channel: UpdateChannel::Continuous,
+            published_at: Some("2026-08-13T00:00:00Z".to_owned()),
+            manifest: ReleaseManifest {
+                schema_version: 1,
+                version,
+                tag: format!("v{version}"),
+                channel: "prerelease".to_owned(),
+                published_at: "2026-08-13T00:00:00Z".to_owned(),
+                minimum_updater_version: Version::new(0, 3, 5),
+                assets: vec![ReleaseAsset {
+                    target: target.to_owned(),
+                    os: "linux".to_owned(),
+                    architecture: "x86_64".to_owned(),
+                    libc: Some("glibc".to_owned()),
+                    archive: format!("allp-{version}.{revision}-{target}.tar.gz"),
+                    binary: "allp".to_owned(),
+                    sha256: "a".repeat(64),
+                    size: 42,
+                }],
+            },
+            build_identity: Some(AllpBuildIdentity {
+                base_version: version,
+                build_revision: revision,
+                git_commit,
+                build_id: format!("123.{revision}"),
+                built_at: Some("2026-08-13T00:00:00Z".to_owned()),
+                channel: crate::build_identity::BuildChannel::Continuous,
+                target: target.to_owned(),
+                official: true,
+            }),
+            etag: Some("continuous-main".to_owned()),
         }
     }
 

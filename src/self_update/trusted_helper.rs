@@ -187,7 +187,7 @@ fn effective_root() -> bool {
     false
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

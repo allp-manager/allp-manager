@@ -243,6 +243,8 @@ allp update --update-channel prerelease
 
 Continuous verified main-branch builds are the default channel; stable and prerelease selections are explicit and persisted. Stable release metadata must contain `allp-release-manifest.json`, while continuous builds use their dedicated manifest and trusted workflow identity. Allp compares base SemVer before build revision, selects an asset by OS, architecture, libc, executable format, and target, and reports unsupported targets without staging an update.
 
+A binary installed with `make reinstall` is marked as a local development build, but it still follows a newer verified continuous build from `main` (including the local revision-1 collision). That means a merged GitHub change is detected by the default `allp update` channel once its successful continuous build is published; the normal replacement confirmation remains in place.
+
 Downloads are HTTPS-only, bounded by redirects, time, and size, restricted to the exact official repository/tag/asset, and verified with SHA-256 before safe extraction. The staged binary must report the expected version. Linux and macOS replacement uses same-directory staging, a rollback backup, post-install verification, and minimal elevation for non-writable installations. Windows uses a verified deferred helper. A guarded relaunch continues `allp update` once without entering an update loop. Offline mode contacts neither GitHub nor backend remote sources.
 
 `allp doctor` reports platform, users, install path ownership/writability, executable paths, backend states, Snap socket reachability, Flatpak remotes, trusted update source, release target, and cache/state/config paths without printing tokens or unrelated environment data.

@@ -4,7 +4,7 @@ use crate::{
     execution::render_native_command,
 };
 #[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::{
     io::{IsTerminal, Read, Write},
     process::{Command, Stdio},
@@ -63,7 +63,7 @@ impl StdProcessRunner {
     fn capture_prepared(
         &self,
         command: &NativeCommand,
-        mut process: Command,
+        process: Command,
     ) -> AllpResult<CommandOutput> {
         let mut process = process;
 
@@ -349,7 +349,16 @@ fn append_bounded(output: &mut Vec<u8>, bytes: &[u8]) {
     output.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
 }
 
-#[cfg(test)]
+fn format_elapsed(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -386,14 +395,5 @@ mod tests {
         assert_eq!(output.stderr.len(), MAX_CAPTURE_BYTES_PER_STREAM);
         assert!(output.stdout.bytes().all(|byte| byte == b'o'));
         assert!(output.stderr.bytes().all(|byte| byte == b'e'));
-    }
-}
-
-fn format_elapsed(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    if seconds < 60 {
-        format!("{seconds}s")
-    } else {
-        format!("{}m {}s", seconds / 60, seconds % 60)
     }
 }
