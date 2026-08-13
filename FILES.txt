@@ -21,6 +21,7 @@
 ./TODO.md
 ./contrib/vscode/tasks.json
 ./docs/ADDING_BACKEND.md
+./docs/assets/tui-maintenance.svg
 ./docs/BACKEND_CONTRACT.md
 ./docs/CAPABILITY_MATRIX.md
 ./docs/CLI_CONTRACT.md
@@ -76,6 +77,7 @@
 ./src/cli/output.rs
 ./src/cli/prompt.rs
 ./src/cli/spinner.rs
+./src/cli/tui.rs
 ./src/discovery/detector.rs
 ./src/discovery/mod.rs
 ./src/discovery/path.rs

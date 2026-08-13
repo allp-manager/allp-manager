@@ -18,6 +18,7 @@ const FIRST_HEARTBEAT_AFTER: Duration = Duration::from_secs(12);
 const REPEAT_HEARTBEAT_AFTER: Duration = Duration::from_secs(15);
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(750);
 const MAX_CAPTURE_BYTES_PER_STREAM: usize = 1024 * 1024;
+const TUI_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
@@ -37,6 +38,47 @@ pub struct ProcessStatus {
     pub stderr: String,
 }
 
+/// Origin of native output observed while an execution plan is running.
+///
+/// The central runner remains responsible for spawning and privilege handling;
+/// observers are presentation-only and must never change the command being run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessOutputStream {
+    Stdout,
+    Stderr,
+}
+
+/// A presentation event emitted by the central process runner.
+///
+/// Output bytes remain available in the final `ProcessStatus` exactly as before.
+/// A live UI may render a safe projection of those bytes while the command runs.
+#[derive(Debug, Clone)]
+pub enum ProcessEvent {
+    Output {
+        stream: ProcessOutputStream,
+        bytes: Vec<u8>,
+    },
+    Tick {
+        elapsed: Duration,
+    },
+    Heartbeat {
+        elapsed: Duration,
+    },
+}
+
+/// Receives live process events for a presentation layer such as the maintenance TUI.
+///
+/// Implementations must treat input as untrusted terminal data. When
+/// `handles_output()` returns `false`, the runner resumes ordinary stdout/stderr
+/// streaming, so a UI rendering failure never interrupts a package-manager mutation.
+pub trait ExecutionObserver {
+    fn observe(&mut self, plan: &ExecutionPlan, event: ProcessEvent);
+
+    fn handles_output(&self) -> bool {
+        true
+    }
+}
+
 pub trait ProcessRunner: Send + Sync {
     fn capture(&self, command: &NativeCommand) -> AllpResult<CommandOutput>;
     fn capture_with_privilege(
@@ -54,6 +96,14 @@ pub trait ProcessRunner: Send + Sync {
         self.capture_with_privilege(command, PrivilegeRequirement::OriginalUserRequired)
     }
     fn execute(&self, plan: &ExecutionPlan) -> AllpResult<ProcessStatus>;
+
+    fn execute_with_observer(
+        &self,
+        plan: &ExecutionPlan,
+        _observer: &mut dyn ExecutionObserver,
+    ) -> AllpResult<ProcessStatus> {
+        self.execute(plan)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -110,7 +160,9 @@ impl StdProcessRunner {
             thread::sleep(Duration::from_millis(20));
         };
 
-        let (stdout_tail, stderr_tail) = drain_output(&receiver, OUTPUT_DRAIN_GRACE, false)?;
+        let mut observer = None;
+        let (stdout_tail, stderr_tail) =
+            drain_output(&receiver, OUTPUT_DRAIN_GRACE, false, None, &mut observer)?;
         append_bounded(&mut captured_stdout, stdout_tail.as_bytes());
         append_bounded(&mut captured_stderr, stderr_tail.as_bytes());
         let stdout = String::from_utf8_lossy(&captured_stdout).into_owned();
@@ -151,6 +203,24 @@ impl ProcessRunner for StdProcessRunner {
     }
 
     fn execute(&self, plan: &ExecutionPlan) -> AllpResult<ProcessStatus> {
+        self.execute_internal(plan, None)
+    }
+
+    fn execute_with_observer(
+        &self,
+        plan: &ExecutionPlan,
+        observer: &mut dyn ExecutionObserver,
+    ) -> AllpResult<ProcessStatus> {
+        self.execute_internal(plan, Some(observer))
+    }
+}
+
+impl StdProcessRunner {
+    fn execute_internal(
+        &self,
+        plan: &ExecutionPlan,
+        observer: Option<&mut dyn ExecutionObserver>,
+    ) -> AllpResult<ProcessStatus> {
         let mut process = prepare_command(&plan.command, plan.privilege)?;
         let mut child = process
             .stdin(Stdio::inherit())
@@ -170,6 +240,8 @@ impl ProcessRunner for StdProcessRunner {
         let mut last_output = started;
         let mut next_heartbeat = FIRST_HEARTBEAT_AFTER;
         let heartbeat_enabled = std::io::stderr().is_terminal();
+        let mut last_tick = started;
+        let mut observer = observer;
         let mut captured_stdout = Vec::new();
         let mut captured_stderr = Vec::new();
 
@@ -182,18 +254,25 @@ impl ProcessRunner for StdProcessRunner {
                         StreamKind::Stderr => &mut captured_stderr,
                     };
                     append_bounded(capture, &event.bytes);
-                    write_stream_event(event)?;
+                    render_stream_event(plan, &mut observer, event)?;
                 }
             }
             if let Some(status) = child.try_wait()? {
                 break status;
             }
-            if heartbeat_enabled && last_output.elapsed() >= next_heartbeat {
-                eprintln!(
-                    "ℹ {} is still running · {} elapsed",
-                    plan.backend_name,
-                    format_elapsed(started.elapsed())
+            if last_tick.elapsed() >= TUI_TICK_INTERVAL {
+                emit_progress_event(
+                    plan,
+                    &mut observer,
+                    ProcessEvent::Tick {
+                        elapsed: started.elapsed(),
+                    },
                 );
+                last_tick = Instant::now();
+            }
+            if heartbeat_enabled && last_output.elapsed() >= next_heartbeat {
+                let elapsed = started.elapsed();
+                emit_progress_event(plan, &mut observer, ProcessEvent::Heartbeat { elapsed });
                 next_heartbeat = REPEAT_HEARTBEAT_AFTER;
                 last_output = Instant::now();
             }
@@ -202,7 +281,13 @@ impl ProcessRunner for StdProcessRunner {
 
         // The direct child status is authoritative. A detached descendant may
         // inherit these descriptors, so EOF must never own command completion.
-        let (stdout_tail, stderr_tail) = drain_output(&receiver, OUTPUT_DRAIN_GRACE, true)?;
+        let (stdout_tail, stderr_tail) = drain_output(
+            &receiver,
+            OUTPUT_DRAIN_GRACE,
+            true,
+            Some(plan),
+            &mut observer,
+        )?;
         append_bounded(&mut captured_stdout, stdout_tail.as_bytes());
         append_bounded(&mut captured_stderr, stderr_tail.as_bytes());
         let stdout = String::from_utf8_lossy(&captured_stdout).into_owned();
@@ -231,6 +316,15 @@ fn status_signal(_status: &std::process::ExitStatus) -> Option<i32> {
 enum StreamKind {
     Stdout,
     Stderr,
+}
+
+impl From<StreamKind> for ProcessOutputStream {
+    fn from(value: StreamKind) -> Self {
+        match value {
+            StreamKind::Stdout => Self::Stdout,
+            StreamKind::Stderr => Self::Stderr,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -274,26 +368,74 @@ where
     })
 }
 
-fn write_stream_event(event: StreamData) -> AllpResult<()> {
-    match event.kind {
+fn write_stream_bytes(kind: StreamKind, bytes: &[u8]) -> AllpResult<()> {
+    match kind {
         StreamKind::Stdout => {
             let mut stdout = std::io::stdout().lock();
-            stdout.write_all(&event.bytes)?;
+            stdout.write_all(bytes)?;
             stdout.flush()?;
         }
         StreamKind::Stderr => {
             let mut stderr = std::io::stderr().lock();
-            stderr.write_all(&event.bytes)?;
+            stderr.write_all(bytes)?;
             stderr.flush()?;
         }
     }
     Ok(())
 }
 
+fn render_stream_event(
+    plan: &ExecutionPlan,
+    observer: &mut Option<&mut dyn ExecutionObserver>,
+    event: StreamData,
+) -> AllpResult<()> {
+    if let Some(observer) = observer.as_deref_mut() {
+        observer.observe(
+            plan,
+            ProcessEvent::Output {
+                stream: event.kind.into(),
+                bytes: event.bytes.clone(),
+            },
+        );
+        if observer.handles_output() {
+            return Ok(());
+        }
+        // The observer has explicitly relinquished the stream, normally because
+        // presentation I/O failed. Do not turn that loss of presentation into a
+        // failure of an already-running package-manager command. The final raw
+        // ProcessStatus still retains this output for classification.
+        let _ = write_stream_bytes(event.kind, &event.bytes);
+        return Ok(());
+    }
+    write_stream_bytes(event.kind, &event.bytes)
+}
+
+fn emit_progress_event(
+    plan: &ExecutionPlan,
+    observer: &mut Option<&mut dyn ExecutionObserver>,
+    event: ProcessEvent,
+) {
+    if let Some(observer) = observer.as_deref_mut() {
+        observer.observe(plan, event.clone());
+        if observer.handles_output() {
+            return;
+        }
+    }
+    if let ProcessEvent::Heartbeat { elapsed } = event {
+        eprintln!(
+            "ℹ {} is still running · {} elapsed",
+            plan.backend_name,
+            format_elapsed(elapsed)
+        );
+    }
+}
+
 fn drain_output(
     receiver: &mpsc::Receiver<StreamEvent>,
     grace: Duration,
     render: bool,
+    plan: Option<&ExecutionPlan>,
+    observer: &mut Option<&mut dyn ExecutionObserver>,
 ) -> AllpResult<(String, String)> {
     let deadline = Instant::now() + grace;
     let mut stdout = Vec::new();
@@ -309,10 +451,18 @@ fn drain_output(
         match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
             Ok(StreamEvent::Data(event)) => {
                 if render {
-                    write_stream_event(StreamData {
-                        kind: event.kind,
-                        bytes: event.bytes.clone(),
-                    })?;
+                    if let Some(plan) = plan {
+                        render_stream_event(
+                            plan,
+                            observer,
+                            StreamData {
+                                kind: event.kind,
+                                bytes: event.bytes.clone(),
+                            },
+                        )?;
+                    } else {
+                        write_stream_bytes(event.kind, &event.bytes)?;
+                    }
                 }
                 let capture = match event.kind {
                     StreamKind::Stdout => &mut stdout,
@@ -362,6 +512,17 @@ fn format_elapsed(duration: Duration) -> String {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct RecordingObserver {
+        events: Vec<ProcessEvent>,
+    }
+
+    impl ExecutionObserver for RecordingObserver {
+        fn observe(&mut self, _plan: &ExecutionPlan, event: ProcessEvent) {
+            self.events.push(event);
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn capture_finishes_when_detached_descendant_holds_pipes() {
@@ -395,5 +556,52 @@ mod tests {
         assert_eq!(output.stderr.len(), MAX_CAPTURE_BYTES_PER_STREAM);
         assert!(output.stdout.bytes().all(|byte| byte == b'o'));
         assert!(output.stderr.bytes().all(|byte| byte == b'e'));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_observer_receives_both_streams_without_changing_final_status() {
+        let runner = StdProcessRunner;
+        let plan = ExecutionPlan {
+            backend_id: "test".to_owned(),
+            backend_name: "Test".to_owned(),
+            operation: crate::domain::OperationKind::Update,
+            action: "Run test command".to_owned(),
+            package_id: None,
+            source: None,
+            scope: None,
+            details: Vec::new(),
+            command: NativeCommand::new("/bin/sh").args(["-c", "printf stdout; printf stderr >&2"]),
+            privilege: PrivilegeRequirement::NoElevation,
+            requires_root: false,
+            interactive: false,
+        };
+        let mut observer = RecordingObserver::default();
+
+        let status = runner
+            .execute_with_observer(&plan, &mut observer)
+            .expect("command should succeed");
+
+        assert!(status.success);
+        assert_eq!(status.stdout, "stdout");
+        assert_eq!(status.stderr, "stderr");
+        assert!(observer.events.iter().any(|event| {
+            matches!(
+                event,
+                ProcessEvent::Output {
+                    stream: ProcessOutputStream::Stdout,
+                    bytes
+                } if bytes == b"stdout"
+            )
+        }));
+        assert!(observer.events.iter().any(|event| {
+            matches!(
+                event,
+                ProcessEvent::Output {
+                    stream: ProcessOutputStream::Stderr,
+                    bytes
+                } if bytes == b"stderr"
+            )
+        }));
     }
 }

@@ -32,6 +32,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
             privilege_context: context.privilege_context,
             dry_run: context.dry_run,
             no_interactive: context.no_interactive,
+            no_tui: context.no_tui,
             yes: context.yes,
             allow_bootstrap: context.allow_bootstrap,
             allow_stale_metadata: context.allow_stale_metadata,

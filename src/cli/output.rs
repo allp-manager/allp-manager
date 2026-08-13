@@ -1,4 +1,5 @@
 use crate::{
+    cli::MaintenanceTui,
     diagnostics::DoctorReport,
     discovery::{DetectionState, DiscoveryReport},
     domain::{
@@ -40,6 +41,26 @@ impl Renderer {
     }
     pub fn spinner_enabled(&self) -> bool {
         self.color && !self.json
+    }
+
+    /// Starts the live maintenance dashboard only when it can safely remain a
+    /// human-facing presentation layer. JSON, redirected streams, noninteractive
+    /// execution, and `TERM=dumb` retain the established plain output contract.
+    pub fn maintenance_tui(
+        &self,
+        operation: &str,
+        total: usize,
+        no_interactive: bool,
+        no_tui: bool,
+    ) -> Option<MaintenanceTui> {
+        let terminal_supported = io::stdin().is_terminal()
+            && io::stdout().is_terminal()
+            && io::stderr().is_terminal()
+            && std::env::var("TERM")
+                .map(|term| term != "dumb")
+                .unwrap_or(true);
+        (!self.json && !no_interactive && !no_tui && terminal_supported)
+            .then(|| MaintenanceTui::new(operation, total, self.color))
     }
 
     pub fn phase(&self, label: &str) {

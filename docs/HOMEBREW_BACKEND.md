@@ -38,10 +38,40 @@ Both capture operations and mutations travel through the same elevated `Original
 
 ## Update and upgrade orchestration
 
-Allp treats Homebrew metadata refresh and installed-package upgrade as separate operations. `allp update` capability-probes and prefers `brew update-if-needed`, falling back to `brew update` only when the command is unsupported. Refreshes set `HOMEBREW_NO_UPDATE_REPORT_NEW=1` to avoid Homebrew's potentially enormous post-update formula and cask report; update errors and normal progress remain visible.
+Allp treats Homebrew metadata refresh and installed-package upgrade as separate operations. `allp update` capability-probes and prefers `brew update-if-needed`, falling back to `brew update` only when the command is unsupported. Refreshes set `HOMEBREW_NO_UPDATE_REPORT_NEW=1` once for the planned command to avoid Homebrew's potentially enormous post-update formula and cask report; update errors and normal progress remain visible.
 
 `allp upgrade` establishes metadata freshness, then runs `brew outdated --json=v2` with `HOMEBREW_NO_AUTO_UPDATE=1`. An empty formula/cask result is evidence that no upgrade command is needed. Non-empty results are included in the execution plan; the upgrade also receives `HOMEBREW_NO_AUTO_UPDATE=1`, and Allp queries JSON v2 again afterward to report updated and remaining counts.
 
 Homebrew plans are user-scoped. Under sudo, Allp returns to the original user with `sudo -H -u <user>` and supplies that user's HOME, USER, LOGNAME, PATH, SHELL, and XDG paths. Root-direct Homebrew execution is refused. Homebrew update-lock contention is reported as Busy; Allp never removes Homebrew lock files automatically.
 
 The initial validated discovery result is the process-local Homebrew capability cache and also updates the capability registry's `brew` entry, including path, version, and owner. There is no persisted `ready=true` flag. Immediately before every Homebrew install, remove, metadata update, or package upgrade process is spawned, Allp revalidates that exact planned executable through the same owner-specific version/prefix validation. A missing, replaced, permission-changed, wrong-owner, or unusable executable invalidates the plan; Allp does not silently redirect the approved plan to another installation.
+
+## Host validation checklist
+
+Run these checks before trusting a `sudo allp` Homebrew maintenance path on a
+new Linuxbrew or macOS host:
+
+```bash
+allp doctor homebrew --verbose --no-color
+sudo allp doctor homebrew --verbose --no-color
+sudo allp update --from homebrew --dry-run --skip-self-update --no-interactive --no-color -v
+```
+
+The normal and elevated doctor reports should identify the same validated
+Homebrew executable, resolved path, prefix, and non-root owner. The dry run
+must show a user-scoped Homebrew metadata plan rather than a direct-root `brew`
+command. Its command preview is for review, not a literal reconstruction of
+the runtime wrapper: the actual elevated path includes the validated original
+user boundary and a sanitized `env -i` environment.
+
+Only after those read-only checks pass should a real refresh be requested, for
+example:
+
+```bash
+sudo allp update --from homebrew --yes --skip-self-update
+```
+
+The live maintenance dashboard may render that run in an interactive terminal,
+but it is presentation only. It cannot change the selected Homebrew executable,
+owner, environment policy, plan privilege, or native exit result. Use
+`--no-tui` to force the classic stream while diagnosing an unfamiliar terminal.

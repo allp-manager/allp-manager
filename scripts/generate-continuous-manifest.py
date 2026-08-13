@@ -138,6 +138,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workflow-run-id")
     parser.add_argument("--workflow-run-number", type=int)
     parser.add_argument("--built-at")
+    # Compatibility floor, not the release version: raising this would stop an
+    # older installed updater from downloading the next continuous build.
     parser.add_argument("--minimum-updater-version", default="0.3.5")
     parser.add_argument("--dist", type=Path)
     parser.add_argument("--output", type=Path)

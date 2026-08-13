@@ -6,7 +6,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، Flatpak، Snap، Homebrew/Linuxbrew، Python و Node را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه Build فعلی: **0.3.5.1** (نسخه پایه Cargo: **0.3.5**)
+نسخه Build فعلی: **0.4.0.1** (نسخه پایه Cargo: **0.4.0**)
 سطح بلوغ: **Public Alpha**
 
 ## چرا Allp وجود دارد
@@ -59,7 +59,7 @@ allp --version
 allp update && allp upgrade
 ```
 
-`allp --version` نسخه نمایشی Build را نشان می دهد و `allp --version --verbose` نسخه پایه، revision، channel، commit، Build ID، target و رسمی بودن Build را نیز گزارش می کند. کانال پیش فرض `allp update`، Buildهای Continuous اعتبارسنجی شده شاخه `main` است؛ بنابراین یک اصلاح کوچک می تواند بدون تغییر SemVer از `0.3.5.1` به `0.3.5.2` به روز شود. برای Releaseهای tag شده از `--update-channel stable` استفاده کنید.
+`allp --version` نسخه نمایشی Build را نشان می دهد و `allp --version --verbose` نسخه پایه، revision، channel، commit، Build ID، target و رسمی بودن Build را نیز گزارش می کند. کانال پیش فرض `allp update`، Buildهای Continuous اعتبارسنجی شده شاخه `main` است؛ بنابراین یک اصلاح کوچک می تواند بدون تغییر SemVer از `0.4.0.1` به `0.4.0.2` به روز شود. برای Releaseهای tag شده از `--update-channel stable` استفاده کنید.
 
 `make install` باینری release را می سازد و آن را به
 `/usr/local/bin/allp` نصب می کند. برای همین کپی فایل از `sudo install` استفاده
@@ -101,6 +101,53 @@ allp search git --json
 دستور `update` فقط metadata مربوط به Backendها را تازه می کند و Packageهای Snap، Flatpak یا Homebrew را Upgrade نمی کند. دستور `upgrade` نرم افزارهای نصب شده را Upgrade می کند. اگر APT ابتدا به refresh شدن metadata نیاز داشته باشد، آن مرحله یک dependency اجباری است و شکست آن باعث Deferred شدن APT upgrade می شود. گزینه `--allow-stale-metadata` فقط یک override صریح است و رفتار پیش فرض نیست.
 
 کشف Homebrew در detect، doctor و عملیات package از یک locator اعتبارسنجی شده مشترک استفاده می کند. این locator مسیر تنظیم شده، PATH، state اعتبارسنجی مجدد شده، مسیرهای قطعی کاربر اصلی و prefixهای رسمی Linux/macOS را بررسی می کند؛ بنابراین حذف Linuxbrew از PATH ریشه توسط sudo باعث ناپدید شدن نصب موجود نمی شود. برای refresh کردن metadata در Homebrew، Allp ابتدا `brew update-if-needed` را ترجیح می دهد. کشف و اجرای Upgrade با `HOMEBREW_NO_AUTO_UPDATE=1` و خروجی ساختاریافته `brew outdated --json=v2` انجام می شود؛ Upgrade خالی اجرا نمی شود و وضعیت outdated پس از اجرا دوباره بررسی می شود. probeها و عملیات Homebrew حتی هنگام اجرای Allp با sudo در context مالک اعتبارسنجی شده اجرا می شوند.
+
+پیش از تغییر دادن Homebrew روی سیستمی که Allp با `sudo` اجرا می‌شود، locator
+مشترک و مرز کاربر اصلی را اول بررسی کنید:
+
+```bash
+allp doctor homebrew --verbose --no-color
+sudo allp doctor homebrew --verbose --no-color
+sudo allp update --from homebrew --dry-run --skip-self-update --no-interactive --no-color -v
+```
+
+خروجی dry run باید owner و executable انتخاب‌شدهٔ Homebrew را نشان دهد. preview
+برای خواندن انسان است؛ اجرای واقعی همچنان از مرز privilege اعتبارسنجی‌شده و
+environment پاک‌سازی‌شدهٔ همان owner استفاده می‌کند. بعد از بررسی، refresh
+واقعی metadata را فقط به‌صورت صریح اجرا کنید:
+
+```bash
+sudo allp update --from homebrew --yes --skip-self-update
+```
+
+جزئیات اعتبارسنجی و محدودیت‌های macOS/Linuxbrew در
+[راهنمای Homebrew](docs/HOMEBREW_BACKEND.md) است.
+
+## داشبورد زندهٔ عملیات نگهداری
+
+در اجرای واقعی و تعاملی `update` یا `upgrade`، نسخهٔ ۰.۴.۰ Allp در مرحلهٔ اجرا
+یک داشبورد زندهٔ inline نشان می‌دهد. لاگ‌های Native در scrollback معمول
+ترمینال باقی می‌مانند، cardهای وضعیت و خطا اتفاق‌های مهم را جدا می‌کنند، و
+footer نام Backend فعال، action دقیق، زمان سپری‌شده و پیشرفت صف را نشان می‌دهد.
+این یک takeover تمام‌صفحه نیست؛ بنابراین promptهای Native و Ctrl+C رفتار عادی
+ترمینال را حفظ می‌کنند.
+
+![نمونهٔ داشبورد زندهٔ Allp](docs/assets/tui-maintenance.svg)
+
+برای خروجی کلاسیک، یا زمانی که log آشنای قبلی را می‌خواهید، از این گزینه
+استفاده کنید:
+
+```bash
+allp update --no-tui
+allp upgrade --no-tui
+```
+
+در JSON، dry run، خروجی redirected/non-TTY، `TERM=dumb` و اجرای
+`--no-interactive` داشبورد عمدا فعال نمی‌شود. `--no-color` فقط رنگ را حذف
+می‌کند و layout را نگه می‌دارد. داشبورد تنها observer مربوط به runner است و
+Plan نمایش‌داده‌شده، argv Native، privilege یا exit status نهایی را تغییر
+نمی‌دهد. قواعد کامل rendering و fallback در
+[docs/TERMINAL_UI.md](docs/TERMINAL_UI.md) آمده است.
 
 برای انتخاب دقیق Backend از `--from` استفاده کنید:
 
@@ -278,11 +325,16 @@ make install-check
 نمی کنند، عملیات package-manager را اجرا نمی کنند، commit/push/tag/publish
 انجام نمی دهند، و failureها را مخفی نمی کنند.
 
+`make reinstall` اکنون اگر shell شما `allp` را از مسیر دیگری (مثلا
+`~/.local/bin/allp`) resolve کند، هشدار می‌دهد. بعد از نصب `make install-check`
+را اجرا کنید؛ اگر هدف شما نسخهٔ user-local است، آن را آگاهانه با
+`make install-user` rebuild کنید.
+
 ## workflow انتشار محلی
 
 workflow انتشار صریح است. مرحله آماده سازی محلی چیزی push نمی کند، GitHub
 Release نمی سازد و assetی upload نمی کند. GitHub Release فقط وقتی ساخته می شود
-که tag نسخه ای مثل `v0.3.5` push شود.
+که tag نسخه ای مثل `v0.4.0` push شود.
 
 یک بار در هر clone:
 
@@ -295,28 +347,28 @@ make hooks-install
 ```bash
 make release-prepare BUMP=patch
 # یا:
-make release-prepare VERSION=0.3.5
+make release-prepare VERSION=0.4.0
 ```
 
 `release-prepare` نسخه package، فایل Cargo.lock از مسیر Cargo، CHANGELOG،
 اشاره های نسخه در READMEها، title قابل track مثل
-`release/RELEASE_TITLE_v0.3.5.txt`، و draft قابل track مثل
-`release/RELEASE_NOTES_v0.3.5.md` را به روز می کند و بعد `make quality` را
+`release/RELEASE_TITLE_v0.4.0.txt`، و draft قابل track مثل
+`release/RELEASE_NOTES_v0.4.0.md` را به روز می کند و بعد `make quality` را
 اجرا می کند. فقط اگر quality gate موفق باشد marker محلی و ignored نوشته می شود.
 
 فایل های آماده شده را مثل همیشه commit کنید، مثلا از VS Code Source Control:
 
 ```text
-release: Allp v0.3.5
+release: Allp v0.4.0
 ```
 
 فقط commitی که subject آن با `release:` شروع شود و با marker آماده شده همخوان
 باشد finalize می شود. hook بعد از commit این خروجی های محلی را می سازد:
 
-- tag محلی annotated با نام `v0.3.5`
-- `dist/allp-v0.3.5-source.tar.gz`
-- `dist/allp-v0.3.5-source.tar.gz.sha256`
-- `dist/RELEASE_NOTES_v0.3.5.md`
+- tag محلی annotated با نام `v0.4.0`
+- `dist/allp-v0.4.0-source.tar.gz`
+- `dist/allp-v0.4.0-source.tar.gz.sha256`
+- `dist/RELEASE_NOTES_v0.4.0.md`
 
 آرشیو سورس از همان tag commit شده با `git archive` ساخته می شود. commitهای
 معمولی مثل `fix: improve Snap parsing` نسخه را تغییر نمی دهند، tag نمی سازند،
@@ -387,13 +439,19 @@ Parser و flagهای مخصوص هر Backend باید داخل همان Backend 
 
 ## Roadmap
 
-کارهای نزدیک شامل validation روی distroهای واقعی، fixtureهای بیشتر، انتخاب گر تعاملی channel در Snap و تست عمیق تر signal/trusted-path است. اکوسیستم هایی مثل Cargo، Composer، Go، RubyGems، Maven/Gradle و GUI/TUI در نسخه 0.3.5 پیاده سازی نشده اند.
+کارهای نزدیک شامل validation روی distroهای واقعی، fixtureهای بیشتر، انتخاب‌گر
+تعاملی channel در Snap، تست عمیق‌تر signal/trusted-path و اعتبارسنجی Homebrew
+روی host واقعی است. نسخهٔ ۰.۴.۰ TUI متمرکز عملیات نگهداری را اضافه می‌کند؛ TUI
+تمام‌صفحه و GUI گسترده‌تر، همراه با اکوسیستم‌هایی مثل Cargo، Composer، Go،
+RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 
 [ROADMAP.md](ROADMAP.md) و [TODO.md](TODO.md) را ببینید.
 
 ## Changelog
 
-نسخه `0.3.5` برای Pacman در `allp update` یک Plan صریح با دستور `pacman -Sy` و یادداشت policy درباره پرهیز از partial upgrade اضافه می کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
+نسخهٔ `0.4.0` داشبورد زندهٔ عملیات نگهداری، fallback کلاسیک `--no-tui`،
+اعتبارسنجی قوی‌تر کاربر اصلی Homebrew و hardening مربوط به self-update/reinstall
+را اضافه می‌کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 
 ## محدودیت های شناخته شده
 

@@ -31,6 +31,10 @@ pub struct CommonOptions {
     /// Disable ANSI colors and spinner animation.
     #[arg(long)]
     pub no_color: bool,
+
+    /// Use the classic streaming output instead of the live maintenance dashboard.
+    #[arg(long)]
+    pub no_tui: bool,
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -389,6 +393,10 @@ impl Commands {
             Self::InternalReplace(args) => &args.common,
             Self::InternalDeferredReplace(args) => &args.common,
         }
+    }
+
+    pub fn no_tui(&self) -> bool {
+        self.common().no_tui
     }
 
     pub fn backend_filter(&self) -> Option<&str> {

@@ -6,7 +6,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, Flatpak, Snap, Homebrew/Linuxbrew, Python installers, and Node installers, then shows the exact native command or local API request before anything mutates the system.
 
-Current build version: **0.3.5.1** (Cargo base version **0.3.5**)
+Current build version: **0.4.0.1** (Cargo base version **0.4.0**)
 Maturity: **public alpha**
 
 ## Why Allp Exists
@@ -61,7 +61,7 @@ allp --version
 allp update && allp upgrade
 ```
 
-`allp --version` prints the display/build version; `allp --version --verbose` also prints the base version, build revision, channel, commit, build ID, target, timestamp, and whether CI marked the build official. `allp update` defaults to verified continuous main-branch builds so fixes can update `0.3.5.1` to `0.3.5.2` without changing Cargo SemVer. Use `--update-channel stable` to persist the tagged-release channel.
+`allp --version` prints the display/build version; `allp --version --verbose` also prints the base version, build revision, channel, commit, build ID, target, timestamp, and whether CI marked the build official. `allp update` defaults to verified continuous main-branch builds so fixes can update `0.4.0.1` to `0.4.0.2` without changing Cargo SemVer. Use `--update-channel stable` to persist the tagged-release channel.
 
 `make install` builds the release binary and installs it as
 `/usr/local/bin/allp`. It uses `sudo install` for that one file copy. For a
@@ -103,6 +103,52 @@ allp search git --json
 `update` refreshes backend metadata; it does not upgrade Snap, Flatpak, or Homebrew packages. `upgrade` upgrades installed software. When APT needs a metadata refresh first, that refresh is a required dependency: a failure defers the APT upgrade. `--allow-stale-metadata` is an explicit override, never the default.
 
 Homebrew discovery uses one validated locator across detect, doctor, and package operations. It checks configured/custom locations, PATH, revalidated state, deterministic original-user paths, and the official Linux/macOS prefixes, so `sudo` omitting Linuxbrew from root's PATH does not make an existing installation disappear. Homebrew metadata refresh prefers `brew update-if-needed`. Upgrade discovery and execution set `HOMEBREW_NO_AUTO_UPDATE=1`, use structured `brew outdated --json=v2` evidence, skip empty upgrades, and verify outdated state afterward. Homebrew probes and operations run in its validated owner's user context even when Allp was launched through sudo.
+
+Before changing Homebrew on a host where Allp is invoked through `sudo`, verify
+the shared locator and the original-user boundary first:
+
+```bash
+allp doctor homebrew --verbose --no-color
+sudo allp doctor homebrew --verbose --no-color
+sudo allp update --from homebrew --dry-run --skip-self-update --no-interactive --no-color -v
+```
+
+The dry run must identify the selected owner and Homebrew executable; its
+preview is descriptive, while the real child retains the validated privilege
+boundary and sanitized owner environment. After review, a real metadata refresh
+can be requested explicitly:
+
+```bash
+sudo allp update --from homebrew --yes --skip-self-update
+```
+
+See [the Homebrew backend guide](docs/HOMEBREW_BACKEND.md) for validation
+details and macOS/Linuxbrew limits.
+
+## Live Maintenance Dashboard
+
+On a real interactive `update` or `upgrade`, Allp 0.4.0 presents an inline live
+dashboard during execution. Native logs remain in normal terminal scrollback;
+status and error cards make important events stand out; and the footer shows
+the active backend, exact action, elapsed time, and queue progress. It is not a
+full-screen terminal takeover, so native prompts and Ctrl+C retain their normal
+terminal behavior.
+
+![Illustrative Allp live update dashboard](docs/assets/tui-maintenance.svg)
+
+Use the classic output whenever you prefer it or are recording a familiar log:
+
+```bash
+allp update --no-tui
+allp upgrade --no-tui
+```
+
+The dashboard is intentionally absent from JSON, dry runs, redirected/non-TTY
+output, `TERM=dumb`, and `--no-interactive` runs. `--no-color` keeps the layout
+but removes color. The dashboard only observes the process runner: it never
+alters the displayed plan, native argv, privilege handling, or final exit
+status. Full behavior and fallback rules are in
+[docs/TERMINAL_UI.md](docs/TERMINAL_UI.md).
 
 Use `--from` for a precise backend:
 
@@ -281,11 +327,16 @@ make install-check
 `/usr/local/bin/allp`. They do not install native packages, run Allp package
 operations, commit, push, tag, publish, or hide failures.
 
+`make reinstall` now warns if your shell resolves `allp` from another location
+(for example `~/.local/bin/allp`). Run `make install-check` after installing;
+use `make install-user` deliberately when the user-local copy is the one you
+want to refresh.
+
 ## Local Release Workflow
 
 The release workflow is explicit. Local preparation never pushes, publishes a
 GitHub Release, or uploads assets. A GitHub Release is created only after a
-semantic-version tag such as `v0.3.5` is pushed.
+semantic-version tag such as `v0.4.0` is pushed.
 
 Run once per clone:
 
@@ -298,28 +349,28 @@ Prepare the next version explicitly:
 ```bash
 make release-prepare BUMP=patch
 # or:
-make release-prepare VERSION=0.3.5
+make release-prepare VERSION=0.4.0
 ```
 
 `release-prepare` updates the package version, Cargo.lock through Cargo,
 CHANGELOG, README version references, a tracked release title such as
-`release/RELEASE_TITLE_v0.3.5.txt`, and a tracked draft such as
-`release/RELEASE_NOTES_v0.3.5.md`, then runs `make quality`. It writes an
+`release/RELEASE_TITLE_v0.4.0.txt`, and a tracked draft such as
+`release/RELEASE_NOTES_v0.4.0.md`, then runs `make quality`. It writes an
 ignored readiness marker only after that quality gate passes.
 
 Commit the prepared files normally, for example from VS Code Source Control:
 
 ```text
-release: Allp v0.3.5
+release: Allp v0.4.0
 ```
 
 Only a commit whose subject begins with `release:` and matches the prepared
 marker is finalized. The post-commit hook creates:
 
-- annotated local tag `v0.3.5`
-- `dist/allp-v0.3.5-source.tar.gz`
-- `dist/allp-v0.3.5-source.tar.gz.sha256`
-- `dist/RELEASE_NOTES_v0.3.5.md`
+- annotated local tag `v0.4.0`
+- `dist/allp-v0.4.0-source.tar.gz`
+- `dist/allp-v0.4.0-source.tar.gz.sha256`
+- `dist/RELEASE_NOTES_v0.4.0.md`
 
 The source archive is generated from the exact committed tag with `git archive`.
 Ordinary commits such as `fix: improve Snap parsing` do not change versions,
@@ -390,13 +441,19 @@ Keep backend-specific parsing and flags inside backend modules. Add fixtures for
 
 ## Roadmap
 
-Near-term work is broader real-distro validation, richer parser fixtures, an interactive Snap channel chooser, and deeper signal/trusted-path testing. Future ecosystems such as Cargo, Composer, Go, RubyGems, Maven/Gradle, and GUI/TUI modes are not implemented in 0.3.5.
+Near-term work is broader real-distro validation, richer parser fixtures, an
+interactive Snap channel chooser, deeper signal/trusted-path testing, and
+real-host Homebrew validation. Version 0.4.0 introduces the focused live
+maintenance TUI; a broader full-screen TUI and GUI remain later work, alongside
+future ecosystems such as Cargo, Composer, Go, RubyGems, and Maven/Gradle.
 
 See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-Version `0.3.5` adds Pacman `allp update` planning with an explicit `pacman -Sy` package-database synchronization command and partial-upgrade policy note. See [CHANGELOG.md](CHANGELOG.md).
+Version `0.4.0` adds the inline live maintenance dashboard, the `--no-tui`
+classic-stream fallback, stronger Homebrew original-user validation, and
+self-update/reinstall recovery hardening. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Known Limitations
 

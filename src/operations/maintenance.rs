@@ -263,6 +263,12 @@ pub fn run(
     update_phase(context, operation_name, "Phase 5: Execution");
     let mut queue = VecDeque::from(operations);
     let mut total = queue.len();
+    let mut live_tui = context.renderer.maintenance_tui(
+        operation_name,
+        total,
+        context.no_interactive,
+        context.no_tui,
+    );
     let mut next_id = total;
     let mut index = 0;
     let mut failed = BTreeSet::new();
@@ -277,12 +283,22 @@ pub fn run(
             .filter(|dependency| failed.contains(dependency))
             .collect::<Vec<_>>();
         if !blocked_by.is_empty() && !context.allow_stale_metadata {
-            records.push(record_from_plan(
+            let record = record_from_plan(
                 plan,
                 OperationStatus::Deferred,
                 Some("required metadata refresh failed; use --allow-stale-metadata to explicitly permit existing metadata".to_owned()),
                 context.privilege_context,
-            ));
+            );
+            if let Some(tui) = live_tui.as_mut() {
+                tui.record_outcome(
+                    index,
+                    total,
+                    &record.backend_name,
+                    &record.status,
+                    record.message.as_deref(),
+                );
+            }
+            records.push(record);
             continue;
         }
         let runtime = context.backend(&plan.backend_id)?;
@@ -293,20 +309,39 @@ pub fn run(
         ) {
             failed.insert(operation_id);
             defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
-            records.push(record_from_plan(
+            let record = record_from_plan(
                 plan,
                 OperationStatus::Failed,
                 Some(format!("pre-execution validation failed: {error}")),
                 context.privilege_context,
-            ));
+            );
+            if let Some(tui) = live_tui.as_mut() {
+                tui.record_outcome(
+                    index,
+                    total,
+                    &record.backend_name,
+                    &record.status,
+                    record.message.as_deref(),
+                );
+            }
+            records.push(record);
             continue;
         }
         let command = render_execution_plan_with_context(&plan, context.privilege_context);
-        context
-            .renderer
-            .execution_started(index, total, &plan, context.privilege_context);
+        if let Some(tui) = live_tui.as_mut() {
+            tui.start_operation(index, total, &plan, context.privilege_context);
+        } else {
+            context
+                .renderer
+                .execution_started(index, total, &plan, context.privilege_context);
+        }
         let started = Instant::now();
-        match context.runner.execute(&plan) {
+        let execution = if let Some(tui) = live_tui.as_mut() {
+            context.runner.execute_with_observer(&plan, tui)
+        } else {
+            context.runner.execute(&plan)
+        };
+        match execution {
             Ok(status) if status.success => {
                 let verification = context.backend(&plan.backend_id).and_then(|runtime| {
                     runtime
@@ -345,14 +380,25 @@ pub fn run(
                     }
                 }
                 if let Some(first) = parsed.first() {
-                    context.renderer.execution_finished(
-                        index,
-                        total,
-                        &first.backend_name,
-                        &first.status,
-                        first.message.as_deref(),
-                        started.elapsed(),
-                    );
+                    if let Some(tui) = live_tui.as_mut() {
+                        tui.finish_operation(
+                            index,
+                            total,
+                            &first.backend_name,
+                            &first.status,
+                            first.message.as_deref(),
+                            started.elapsed(),
+                        );
+                    } else {
+                        context.renderer.execution_finished(
+                            index,
+                            total,
+                            &first.backend_name,
+                            &first.status,
+                            first.message.as_deref(),
+                            started.elapsed(),
+                        );
+                    }
                 }
                 persist_metadata_refresh_success(context, &plan);
                 records.append(&mut parsed);
@@ -372,12 +418,31 @@ pub fn run(
                                     runtime.backend.authorize_noninteractive(plan);
                                 }
                             }
-                            context
-                                .renderer
-                                .planned_operations(&follow_up.plans, context.privilege_context);
-                            if !follow_up.plans.is_empty()
-                                && confirm_follow_up(context, operation_name)?
-                            {
+                            if live_tui.is_none() {
+                                context.renderer.planned_operations(
+                                    &follow_up.plans,
+                                    context.privilege_context,
+                                );
+                            } else if let Some(tui) = live_tui.as_mut() {
+                                tui.show_follow_up_plans(
+                                    &follow_up.plans,
+                                    context.privilege_context,
+                                );
+                            }
+                            let follow_up_confirmed = if follow_up.plans.is_empty() {
+                                false
+                            } else {
+                                if let Some(tui) = live_tui.as_mut() {
+                                    tui.prepare_for_prompt();
+                                }
+                                let confirmation = confirm_follow_up(context, operation_name);
+                                if let Some(tui) = live_tui.as_mut() {
+                                    tui.resume_after_prompt();
+                                }
+                                confirmation?
+                            };
+                            if follow_up_confirmed {
+                                let added = follow_up.plans.len();
                                 for plan in follow_up.plans {
                                     queue.push_back(PlannedOperation {
                                         id: next_id,
@@ -386,6 +451,13 @@ pub fn run(
                                     });
                                     next_id += 1;
                                     total += 1;
+                                }
+                                if let Some(tui) = live_tui.as_mut() {
+                                    tui.queue_extended(
+                                        total,
+                                        runtime.backend.display_name(),
+                                        added,
+                                    );
                                 }
                             } else if !follow_up.plans.is_empty() {
                                 records.push(BackendOperationRecord {
@@ -435,14 +507,25 @@ pub fn run(
                         })
                     }),
                 };
-                context.renderer.execution_finished(
-                    index,
-                    total,
-                    &record.backend_name,
-                    &record.status,
-                    record.message.as_deref(),
-                    started.elapsed(),
-                );
+                if let Some(tui) = live_tui.as_mut() {
+                    tui.finish_operation(
+                        index,
+                        total,
+                        &record.backend_name,
+                        &record.status,
+                        record.message.as_deref(),
+                        started.elapsed(),
+                    );
+                } else {
+                    context.renderer.execution_finished(
+                        index,
+                        total,
+                        &record.backend_name,
+                        &record.status,
+                        record.message.as_deref(),
+                        started.elapsed(),
+                    );
+                }
                 records.push(record);
                 defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
             }
@@ -457,14 +540,25 @@ pub fn run(
                     status: OperationStatus::Failed,
                     message: Some(error.to_string()),
                 };
-                context.renderer.execution_finished(
-                    index,
-                    total,
-                    &record.backend_name,
-                    &record.status,
-                    record.message.as_deref(),
-                    started.elapsed(),
-                );
+                if let Some(tui) = live_tui.as_mut() {
+                    tui.finish_operation(
+                        index,
+                        total,
+                        &record.backend_name,
+                        &record.status,
+                        record.message.as_deref(),
+                        started.elapsed(),
+                    );
+                } else {
+                    context.renderer.execution_finished(
+                        index,
+                        total,
+                        &record.backend_name,
+                        &record.status,
+                        record.message.as_deref(),
+                        started.elapsed(),
+                    );
+                }
                 records.push(record);
             }
         }
@@ -474,10 +568,14 @@ pub fn run(
         operation: operation_name.to_owned(),
         records,
     };
-    update_phase(context, operation_name, "Phase 6: Summary");
-    context
-        .renderer
-        .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+    if let Some(tui) = live_tui.as_mut() {
+        tui.finish(&report, context.verbose > 0, context.dry_run);
+    } else {
+        update_phase(context, operation_name, "Phase 6: Summary");
+        context
+            .renderer
+            .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+    }
     Ok(report)
 }
 

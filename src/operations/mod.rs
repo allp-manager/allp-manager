@@ -24,6 +24,7 @@ pub struct OperationContext<'a> {
     pub privilege_context: &'a RuntimePrivilegeContext,
     pub dry_run: bool,
     pub no_interactive: bool,
+    pub no_tui: bool,
     pub yes: bool,
     pub allow_bootstrap: bool,
     pub allow_stale_metadata: bool,

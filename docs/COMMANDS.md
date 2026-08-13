@@ -121,6 +121,7 @@ allp update --from npm --target global --dry-run
 allp update --from pip --target environment --dry-run
 allp update --from pipx --target tools --dry-run
 allp update --from uv --target tools --dry-run
+allp update --no-tui
 allp update --skip-self-update
 allp update --self-only
 allp update --check-only
@@ -152,6 +153,13 @@ Mutating backend operations run sequentially and continue after failures. Any fa
 
 For real execution, Allp first renders the complete plan, explains child-only privilege elevation for root-required plans, and prompts once for the batch. `--no-interactive` cannot provide that confirmation; use `--dry-run`, run interactively, or provide fully resolved choices with `--yes`.
 
+In a real interactive terminal, execution is shown in the live maintenance
+dashboard: native logs remain in normal scrollback, outcome cards identify
+successes and failures, and a footer shows live action/progress. Use
+`allp update --no-tui` to force the classic stream. The dashboard is disabled
+for JSON, dry runs, redirected/non-TTY output, `TERM=dumb`, and
+`--no-interactive`; it never changes the native plan or privilege behavior.
+
 ## `upgrade`
 
 ```bash
@@ -162,11 +170,16 @@ allp upgrade --dry-run --json
 allp upgrade --scope dev --target all --dry-run
 allp upgrade --from pnpm --target project --dry-run
 allp upgrade --from yarn --target project --dry-run
+allp upgrade --no-tui
 ```
 
 Runs each detected backend's declared bulk-upgrade action. Unsupported backends are reported as skipped; Allp does not invent upgrade-all behavior.
 
 Upgrade prompts default to No for riskier batches because they may cross constraints, alter manifests, update lockfiles, or change application behavior.
+
+The same live maintenance dashboard and `--no-tui` fallback used by `update`
+apply to real interactive upgrades. See [Terminal UI](TERMINAL_UI.md) for the
+terminal/JSON fallback and safe-output rules.
 
 ## `list`
 

@@ -15,7 +15,7 @@ CURRENT_GIT_SHA := $(shell git rev-parse --verify HEAD 2>/dev/null || printf unk
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt fmt-check check clippy test architecture build release quality clean run doctor version git-status docs-check install uninstall reinstall install-user install-check release-prepare release-status release-notes release-archive release-checksum release-finalize release-push release-clean hooks-install hooks-status release-workflow-test release-assets-test
+.PHONY: help fmt fmt-check check clippy test architecture build release quality clean run doctor version git-status docs-check install uninstall reinstall install-user install-check install-resolution-warning release-prepare release-status release-notes release-archive release-checksum release-finalize release-push release-clean hooks-install hooks-status release-workflow-test release-assets-test
 
 help:
 	@printf '%s\n' 'Allp development targets:'
@@ -37,7 +37,7 @@ help:
 	@printf '%s\n' ''
 	@printf '%s\n' 'Install targets:'
 	@printf '%s\n' '  make install          Build and install /usr/local/bin/allp'
-	@printf '%s\n' '  make reinstall        Rebuild and replace the installed allp binary'
+	@printf '%s\n' '  make reinstall        Rebuild and replace /usr/local/bin/allp (warns if PATH shadows it)'
 	@printf '%s\n' '  make uninstall        Remove the installed allp binary'
 	@printf '%s\n' '  make install-user     Install allp to $$HOME/.local/bin without sudo'
 	@printf '%s\n' '  make install-check    Show the allp binary resolved by the shell'
@@ -105,6 +105,9 @@ docs-check:
 	test -f docs/PREREQUISITES.md
 	test -f docs/ALTERNATIVE_INSTALLERS.md
 	test -f docs/REGRESSION_GUARDRAILS.md
+	test -f docs/TERMINAL_UI.md
+	test -f docs/HOMEBREW_BACKEND.md
+	test -f docs/assets/tui-maintenance.svg
 	test -f docs/SELF_UPDATE.md
 	test -f docs/RELEASE_MANIFEST.md
 	test -n '$(CURRENT_VERSION)'
@@ -118,11 +121,18 @@ docs-check:
 	grep -q 'allp self-update' README.fa.md
 	grep -q 'allp install pycharm' README.md
 	grep -q 'allp install pycharm' README.fa.md
+	grep -q -- '--no-tui' README.md
+	grep -q -- '--no-tui' README.fa.md
+	grep -q -- '--no-tui' docs/CLI_CONTRACT.md
+	grep -q 'Live Maintenance Dashboard' docs/TERMINAL_UI.md
+	grep -q 'tui-maintenance.svg' README.md
+	grep -q 'tui-maintenance.svg' README.fa.md
 
 install: release
 	sudo install -Dm755 "$(RELEASE_BINARY)" "$(BINDIR)/$(BINARY)"
 	@printf 'Installed build identity (expected commit %s):\n' "$(CURRENT_GIT_SHA)"
 	"$(BINDIR)/$(BINARY)" --version --verbose
+	@$(MAKE) --no-print-directory install-resolution-warning
 	@printf 'Installed %s\n' "$(BINDIR)/$(BINARY)"
 
 uninstall:
@@ -133,6 +143,7 @@ reinstall: release
 	sudo install -Dm755 "$(RELEASE_BINARY)" "$(BINDIR)/$(BINARY)"
 	@printf 'Installed build identity (expected commit %s):\n' "$(CURRENT_GIT_SHA)"
 	"$(BINDIR)/$(BINARY)" --version --verbose
+	@$(MAKE) --no-print-directory install-resolution-warning
 	@printf 'Reinstalled %s\n' "$(BINDIR)/$(BINARY)"
 
 install-user: release
@@ -142,6 +153,14 @@ install-user: release
 	"$$HOME/.local/bin/$(BINARY)" --version --verbose
 	@case ":$$PATH:" in *":$$HOME/.local/bin:"*) : ;; *) printf '%s\n' 'Warning: $$HOME/.local/bin is not on PATH.' ;; esac
 	@printf 'Installed %s\n' "$$HOME/.local/bin/$(BINARY)"
+
+install-resolution-warning:
+	@resolved=$$(command -v "$(BINARY)" || true); \
+	if [ -n "$$resolved" ] && [ "$$resolved" != "$(BINDIR)/$(BINARY)" ]; then \
+		printf '\nWarning: your shell resolves %s to %s, not %s\n' "$(BINARY)" "$$resolved" "$(BINDIR)/$(BINARY)"; \
+		printf '%s\n' 'Run make install-check to inspect the resolved build identity.'; \
+		printf '%s\n' 'If you intend to use the user-local copy, rebuild it explicitly with: make install-user'; \
+	fi
 
 install-check:
 	@resolved=$$(command -v "$(BINARY)" || true); \

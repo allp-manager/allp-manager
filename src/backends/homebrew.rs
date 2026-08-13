@@ -318,7 +318,7 @@ impl Backend for HomebrewBackend {
             "Refresh Homebrew formula and cask metadata",
             None,
             Some("Homebrew".to_owned()),
-            suppress_update_report(homebrew_command(brew).arg(operation)),
+            homebrew_command(brew).arg(operation),
         )]))
     }
 
@@ -459,10 +459,6 @@ fn homebrew_command(brew: &std::path::Path) -> NativeCommand {
         .env("HOMEBREW_NO_ANALYTICS", "1")
         .env("HOMEBREW_NO_UPDATE_REPORT_NEW", "1")
         .env("HOMEBREW_NO_ENV_HINTS", "1")
-}
-
-fn suppress_update_report(command: NativeCommand) -> NativeCommand {
-    command.env("HOMEBREW_NO_UPDATE_REPORT_NEW", "1")
 }
 
 fn supports_update_if_needed(brew: &std::path::Path, runner: &dyn ProcessRunner) -> bool {
@@ -724,6 +720,15 @@ mod tests {
         assert_eq!(
             environment.get(&std::ffi::OsString::from("HOMEBREW_NO_UPDATE_REPORT_NEW")),
             Some(&&std::ffi::OsString::from("1"))
+        );
+        assert_eq!(
+            command
+                .env
+                .iter()
+                .filter(|(key, _)| key == &std::ffi::OsString::from("HOMEBREW_NO_UPDATE_REPORT_NEW"))
+                .count(),
+            1,
+            "each Homebrew environment key must be rendered once"
         );
         assert_eq!(
             environment.get(&std::ffi::OsString::from("HOMEBREW_NO_ENV_HINTS")),

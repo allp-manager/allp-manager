@@ -9,7 +9,8 @@ Allp is a transparent orchestration layer over package managers already installe
 3. Backend-specific command syntax and parsers stay inside backend modules.
 4. Mutating backend methods return immutable `ExecutionPlan` values.
 5. The central runner executes native processes directly, never through `sh -c`.
-6. Native mutating stdin, stdout, and stderr are inherited.
+6. Native mutating stdin is inherited. The central runner forwards stdout and
+   stderr live while retaining the result needed for status classification.
 7. Multiple meaningful sources require user choice.
 8. Partial read-only failures are reported and prevent false uniqueness.
 
@@ -142,7 +143,8 @@ The execution layer owns:
 - command rendering;
 - captured read-only query execution;
 - per-query timeout;
-- inherited stdio for mutating commands;
+- inherited stdin plus live stdout/stderr forwarding for mutating commands;
+- bounded process-result capture and presentation-only process observers;
 - child-only privilege elevation;
 - original-user de-escalation for sudo-invoked user-scoped plans;
 - direct `std::process::Command` invocation.
@@ -158,9 +160,20 @@ Plan-level privilege is represented as:
 
 Runtime context is represented as normal user, direct root, or sudo-root with original user. The runner, not the backends, decides whether to prefix `sudo --`, run directly, or use `sudo -u <SUDO_USER> --`.
 
+An `ExecutionObserver` may project output into an interactive presentation such
+as the maintenance dashboard. It receives only process events after the native
+command and privilege boundary have been fixed; it cannot alter the command.
+Observers must render untrusted output safely and may relinquish output
+handling, at which point the runner continues ordinary stream forwarding.
+
 ### `cli`
 
-The CLI layer owns Clap parsing, command-specific options, prompts, human rendering, JSON envelopes, colors, and spinners.
+The CLI layer owns Clap parsing, command-specific options, prompts, human
+rendering, JSON envelopes, colors, spinners, and the inline maintenance
+dashboard. The dashboard runs only for suitable interactive `update`/`upgrade`
+execution, keeps the normal terminal buffer and inherited stdin, and has a
+classic-stream fallback for JSON, non-TTY, non-interactive, `TERM=dumb`, or
+`--no-tui` use.
 
 ## Search Ranking
 

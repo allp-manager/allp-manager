@@ -4,43 +4,67 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-13
+
+### Release Title
+
+Allp v0.4.0 — Live Maintenance Dashboard
+
 ### Added
 
-- A dedicated compiled build identity keeps Cargo at `0.3.5` while exposing build `0.3.5.1`, with verbose commit, workflow/build ID, channel, target, timestamp, and provenance diagnostics.
-- A separate main-branch `Continuous Build` workflow produces versioned native artifacts, SHA-256 files, and an authoritative continuous manifest without publishing a stable release.
-- Continuous self-update compares base SemVer before build revision, verifies the successful trusted workflow and exact target, and validates staged display version, commit, build ID, target, channel, and official provenance before every replacement path.
+- An inline live dashboard for real interactive `update` and `upgrade` runs.
+  Native output remains in normal scrollback while colored outcome cards and a
+  live footer show the active backend, exact action, elapsed time, and queue
+  progress.
+- `--no-tui` for the established classic maintenance stream. JSON, dry runs,
+  redirected/non-TTY output, `TERM=dumb`, and non-interactive runs retain their
+  safe existing contracts automatically.
+- A presentation-only process observer, safe terminal-output projection, PTY
+  coverage, and a deterministic illustrated dashboard asset for the README.
+- A compiled build identity and verified continuous main-branch update channel
+  with build revision, commit, workflow/build ID, target, timestamp, and
+  provenance diagnostics.
+
+### Changed
+
+- The process runner now centralizes live stdout/stderr forwarding while
+  retaining the captured result for native status classification. Dashboard
+  failure yields back to classic forwarding without interrupting a mutation.
+- Homebrew discovery, doctor, and execution use one revalidated owner-specific
+  locator. Elevated user-scoped commands reconstruct a deterministic
+  original-user environment through a validated `sudo -H -u` boundary.
+- Homebrew metadata refresh prefers `brew update-if-needed`; refresh previews
+  contain each Homebrew environment override only once.
+- Self-update checks run before backend discovery, fall back deterministically
+  across ineligible continuous workflows, and preserve strict manifest,
+  checksum, target, and provenance checks.
 
 ### Fixed
 
-- Unix release builds again import the Unix `CommandExt` trait required for the
-  process-group cancellation path.
-- A local development binary installed with `make reinstall` now detects and
-  can replace itself with a newer verified continuous build from `main`, even
-  when its local revision-`1` marker collides with the CI revision. Unverified
-  identity conflicts and downgrades remain blocked.
-- Homebrew on macOS can re-resolve validated GUI users through Directory
-  Services when they are absent from `/etc/passwd`, preserving original-user
-  execution under `sudo`.
-- Install, reinstall, and install-check now print the full build identity and
-  expected source commit, so a local revision-`1` version cannot hide which
-  checkout was installed.
-- Continuous discovery now falls back deterministically past failed or running workflow candidates, treats an unpublished feed and unsupported targets as structured no-update states, and binds the exact mirror manifest hash to GitHub's authoritative artifact identity.
-- Stable discovery uses GitHub's latest-release endpoint, while explicit semantic prerelease discovery is isolated from per-push continuous tags; continuous mirrors can no longer starve tagged channel discovery.
-- Self-update temporary header files and staging directories are owner-only, API rate-limit failures expose useful reset/retry metadata, full published Git IDs accept only exact SHA-1/SHA-256 lengths, and legacy ETags are not sent without cached verified response data.
-- Self-update now carries the extracted binary's SHA-256 and exact size through native, elevated, and Windows-deferred replacement, rejecting same-version staged-file swaps before execution. Elevated `curl`/`tar` lookup also rejects untrusted PATH executables.
-- Update phase 1 now completes before capability probing and backend discovery, so `--self-only` and standalone self-update do not invoke package-manager detectors; guarded re-execution still continues backend work exactly once.
-- Homebrew detection now uses one validated multi-provider locator shared by detect, scoped doctor diagnostics, the capability registry, and package operations, including the official Linuxbrew prefix when sudo's PATH omits it; broken or wrong-owner installations are no longer reported as absent. Owner-specific probes and immediate pre-mutation revalidation prevent stale or replaced brew paths from executing, while relative provider paths are rejected.
-- Elevated Homebrew captures and mutations now share the account-tuple-validated `OriginalUserRequired` executor, reconstruct a deterministic environment with `env -i`, and resolve sudo only from canonical root-owned, non-writable helper paths instead of trusting PATH order.
-- Root-required backend executables are now canonicalized and must be root-owned, executable, and reached only through root-owned non-writable ancestors before either `sudo --` or direct-root execution, preventing a user-controlled `PATH` entry from crossing the privilege boundary.
-- Homebrew metadata refresh now capability-probes and prefers `update-if-needed`; outdated queries and upgrades suppress Homebrew's implicit auto-update lifecycle.
-- Homebrew upgrades use JSON v2 evidence, skip empty work, preserve formula/cask and pinned details, and verify remaining outdated packages after execution.
-- Homebrew update contention is classified as Busy without deleting locks, while exit 130 is classified as Cancelled.
-- Original-user execution now uses `sudo -H -u` and establishes the target user's PATH alongside HOME, USER, LOGNAME, SHELL, and XDG directories.
-- `-v` and `--verbose` are now global options accepted before or after subcommands and remain distinct from `--version`.
-- Original-user execution now supplies HOME, USER, LOGNAME, SHELL, and XDG directory context instead of inheriting root's user environment.
-- APT upgrades now depend on a successful required metadata refresh and are deferred after refresh failure unless `--allow-stale-metadata` is explicitly supplied.
-- APT phased, kept-back, and held package sections are parsed statefully, including multiple package names on one line, without conflating their categories.
-- Authorized APT maintenance plans include the native `-y` flag in both the displayed and executed command.
+- Unix release builds import `CommandExt`, restoring the
+  `Command::process_group` cancellation path.
+- A local development binary installed with `make reinstall` can now replace
+  itself with a newer verified continuous build from `main` even when its local
+  revision-`1` marker collides with the CI revision. Downgrades and unverified
+  identity conflicts remain blocked.
+- macOS Homebrew can re-resolve a validated GUI user through Directory Services
+  when that account is absent from `/etc/passwd`.
+- Install, reinstall, and install-check print the full build identity and
+  source commit, preventing a local revision-`1` display from hiding a changed
+  checkout.
+- System install/reinstall warns when a PATH-shadowing user-local `allp` is
+  still selected, so the user-local binary can be rebuilt deliberately.
+- APT metadata dependency, phased/held result parsing, Homebrew lock handling,
+  and trusted executable/elevation boundaries received regression coverage.
+
+### Known Limitations
+
+- The dashboard has PTY and unit coverage, but package-manager prompts, Ctrl+C,
+  resize behavior, and long-running native commands still need validation on
+  diverse physical terminals.
+- Homebrew's macOS code paths compile for Intel and Apple Silicon and have
+  parser coverage; final original-user execution smoke tests still require a
+  physical macOS host.
 
 ## [0.3.5] - 2026-07-20
 

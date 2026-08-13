@@ -45,6 +45,7 @@ allp update --dry-run
 allp update --scope dev --target all --dry-run
 allp update --from npm --target project --dry-run
 allp update --from pipx --target tools --dry-run
+allp update --no-tui
 allp update --skip-self-update
 allp update --self-only
 allp update --check-only
@@ -57,6 +58,7 @@ allp upgrade
 allp upgrade --from apt
 allp upgrade --dry-run
 allp upgrade --scope dev --target all --dry-run
+allp upgrade --no-tui
 
 allp list
 allp list --from apt
@@ -126,6 +128,29 @@ Development maintenance supports `--target`:
 - `environment`
 - `tools`
 - `all`
+
+## Live Maintenance Presentation
+
+For a real interactive `update` or `upgrade`, Allp automatically uses the
+inline live maintenance dashboard when stdin, stdout, and stderr are terminals and
+`TERM` is not `dumb`. It leaves native logs in scrollback, emits state/error
+cards, and maintains a one-line footer with the active backend, action,
+elapsed time, and queue progress.
+
+`--no-tui` forces the established classic streaming presentation for either
+maintenance command:
+
+```bash
+allp update --no-tui
+allp upgrade --no-tui
+```
+
+The option is presentation-only: it never changes a backend plan, native argv,
+privilege boundary, confirmation, exit code, or status classification.
+`--no-color` keeps the dashboard but removes ANSI color. JSON, dry-run,
+redirected/non-TTY output, `TERM=dumb`, and `--no-interactive` do not start the
+dashboard and retain the normal machine-safe or classic output contract. See
+[Terminal UI](TERMINAL_UI.md) for the rendering and fallback details.
 
 ## Self-Update And Doctor
 

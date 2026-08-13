@@ -40,6 +40,7 @@ impl App {
         let dry_run = command.dry_run();
         let json = command.json();
         let no_interactive = command.no_interactive();
+        let no_tui = command.no_tui();
         let yes = command.yes();
         let allow_bootstrap = command.allow_bootstrap();
         let no_color = command.no_color();
@@ -215,6 +216,7 @@ impl App {
             privilege_context: &privilege_context,
             dry_run,
             no_interactive,
+            no_tui,
             yes,
             allow_bootstrap,
             allow_stale_metadata: matches!(

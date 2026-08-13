@@ -98,6 +98,41 @@ fn run_allp_pty(path: &Path, args: &[&str], input: &str) -> Output {
         .expect("script child should complete")
 }
 
+fn run_allp_pty_with_tui(path: &Path, args: &[&str], input: &str) -> Output {
+    let command_line = std::iter::once(env!("CARGO_BIN_EXE_allp"))
+        .chain(args.iter().copied())
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut command = Command::new("/usr/bin/script");
+    command
+        .args(["-qfec", &command_line, "/dev/null"])
+        .env("PATH", path)
+        .env("ALLP_DISABLE_STANDARD_PATHS", "1")
+        .env("ALLP_SELF_UPDATE_TEST_OFFLINE", "1")
+        .env("ALLP_SNAPD_SOCKET", path.join("missing-snapd.socket"))
+        .env("XDG_CACHE_HOME", path.join("xdg-cache"))
+        .env("XDG_STATE_HOME", path.join("xdg-state"))
+        .env("XDG_CONFIG_HOME", path.join("xdg-config"))
+        .env("TERM", "xterm-256color")
+        .env_remove("NO_COLOR")
+        .env_remove("ALLP_TEST_SUDO_EXECUTABLE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_test_sudo(&mut command, path);
+    let mut child = command.spawn().expect("script should start");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin should be piped")
+        .write_all(input.as_bytes())
+        .expect("test input should be written");
+    child
+        .wait_with_output()
+        .expect("script child should complete")
+}
+
 fn run_allp_with_live_self_update(path: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_allp"));
     command
@@ -191,8 +226,9 @@ fn global_verbose_is_distinct_from_version_and_works_before_subcommand() {
         !unrelated_probe.exists(),
         "scoped Homebrew doctor must not invoke Flatpak probes"
     );
-    assert!(stdout(&version).starts_with("allp 0.3.5"));
-    assert!(!stdout(&long).starts_with("allp 0.3.5"));
+    let short_version = format!("allp {}", env!("CARGO_PKG_VERSION"));
+    assert!(stdout(&version).starts_with(&short_version));
+    assert!(!stdout(&long).starts_with(&short_version));
 }
 
 fn stderr(output: &Output) -> String {
@@ -2720,6 +2756,145 @@ fn apt_stale_metadata_override_runs_upgrade_with_native_yes_flag() {
     let executed = fs::read_to_string(marker).expect("refresh and upgrade should execute");
     assert!(executed.contains("apt-update"));
     assert!(executed.contains("apt-upgrade upgrade -y"));
+}
+
+#[test]
+fn maintenance_tui_streams_native_logs_cards_and_live_progress_in_a_pty() {
+    let dir = temp_dir("maintenance-tui");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt_phased_upgrade(&dir, &marker);
+
+    let output = run_allp_pty_with_tui(
+        &dir,
+        &["update", "--from", "apt", "--yes", "--skip-self-update"],
+        "",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(rendered.contains("ALLP · UPDATE · LIVE"));
+    assert!(rendered.contains("RUNNING · 1/1 · APT"));
+    assert!(rendered.contains("apt update native output"));
+    assert!(rendered.contains("UPDATE SUMMARY"));
+    assert!(rendered.contains("["), "footer progress bar should render");
+}
+
+#[test]
+fn maintenance_tui_projects_untrusted_native_terminal_sequences_safely() {
+    let dir = temp_dir("maintenance-tui-safe-output");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    write_executable(
+        &dir,
+        "apt-get",
+        r#"#!/bin/sh
+if [ "$1" = "-o" ]; then shift 2; fi
+if [ "$1" = "update" ]; then
+  printf '\033[31mtrusted native output\033[0m\n'
+  printf '\033]0;untrusted terminal title\007'
+  exit 0
+fi
+exit 0
+"#,
+    );
+
+    let output = run_allp_pty_with_tui(
+        &dir,
+        &["update", "--from", "apt", "--yes", "--no-color"],
+        "",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(rendered.contains("trusted native output"));
+    assert!(!rendered.contains("\x1b[31m"));
+    assert!(!rendered.contains("\x1b]0;"));
+    assert!(!rendered.contains("untrusted terminal title"));
+}
+
+#[test]
+fn maintenance_tui_reviews_and_tracks_a_follow_up_upgrade_queue() {
+    let dir = temp_dir("maintenance-tui-follow-up");
+    let marker = dir.join("executed");
+    install_fake_homebrew(
+        &dir,
+        &marker,
+        true,
+        0,
+        r#"{"formulae":[{"name":"git","pinned":false}],"casks":[]}"#,
+        r#"{"formulae":[],"casks":[]}"#,
+    );
+
+    let output = run_allp_pty_with_tui(
+        &dir,
+        &["upgrade", "--from", "brew", "--yes", "--no-color"],
+        "",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(rendered.contains("FOLLOW-UP PLAN · 1/1 · Homebrew"));
+    assert!(rendered.contains("QUEUE EXTENDED"));
+    assert!(rendered.contains("2/2 · Homebrew"));
+    let executed = fs::read_to_string(marker).expect("refresh and upgrade should run");
+    assert!(executed.contains("update-if-needed"));
+    assert!(executed.contains("upgrade no_auto=1"));
+}
+
+#[test]
+fn no_tui_keeps_the_classic_maintenance_stream_in_a_pty() {
+    let dir = temp_dir("maintenance-no-tui");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt_phased_upgrade(&dir, &marker);
+
+    let output = run_allp_pty_with_tui(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "apt",
+            "--yes",
+            "--skip-self-update",
+            "--no-tui",
+        ],
+        "",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(!rendered.contains("ALLP · UPDATE · LIVE"));
+    assert!(rendered.contains("APT update started"));
+    assert!(rendered.contains("apt update native output"));
+}
+
+#[test]
+fn no_interactive_keeps_the_classic_maintenance_stream_in_a_pty() {
+    let dir = temp_dir("maintenance-no-interactive");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt_phased_upgrade(&dir, &marker);
+
+    let output = run_allp_pty_with_tui(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "apt",
+            "--yes",
+            "--skip-self-update",
+            "--no-interactive",
+        ],
+        "",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rendered = stdout(&output);
+    assert!(!rendered.contains("ALLP · UPDATE · LIVE"));
+    assert!(rendered.contains("APT update started"));
+    assert!(rendered.contains("apt update native output"));
 }
 
 #[test]

@@ -2,9 +2,10 @@
 
 This roadmap describes direction, not a promise. Allp keeps native package managers as the source of truth.
 
-## Current Release: v0.3.4
+## Current Release: v0.4.0
 
-v0.3.4 is a public-alpha foundation and recovery release with:
+v0.4.0 is a public-alpha foundation, recovery, and live-maintenance release
+with:
 
 - command-first CLI for `detect`, `search`, `install`, `remove`, `update`, `upgrade`, `list`, and `info`;
 - interactive search-scope selection;
@@ -17,6 +18,9 @@ v0.3.4 is a public-alpha foundation and recovery release with:
 - JSON envelopes for supported commands;
 - centralized normal-user, root, and original-sudo-user privilege handling;
 - live execution progress and native output streaming;
+- an inline live dashboard for real interactive `update` and `upgrade`, with
+  native logs in normal scrollback, outcome/error cards, a queue-aware footer,
+  and `--no-tui` classic-stream fallback;
 - stable alpha system/universal backends: APT, Pacman, DNF/DNF5, Flatpak, Snap;
 - experimental system-family backends: Zypper, APK, XBPS, Portage/emerge, eopkg, swupd;
 - experimental Homebrew/Linuxbrew support and official bootstrap planning;
@@ -40,6 +44,8 @@ v0.3.4 is a public-alpha foundation and recovery release with:
 - Broaden parser fixtures with real native outputs for stable and experimental backends.
 - Validate experimental Linux-family backends on real distributions.
 - Validate Homebrew on macOS and Linuxbrew hosts.
+- Validate the live dashboard in real terminals, including package-manager
+  prompts, Ctrl+C, narrow terminals, redirects, and long-running backends.
 - Expand Python PEP 668 and virtual-environment safety coverage.
 - Harden Node project/workspace mutation policy.
 - Add a richer interactive Snap channel chooser for multi-track and non-stable choices.
@@ -76,7 +82,7 @@ Allp must not silently modify project lockfiles through generic install, update,
 - history/replay
 - configuration
 - external backend protocol
-- TUI
+- richer full-screen TUI modes beyond maintenance execution
 - GUI
 - API/SDK
 

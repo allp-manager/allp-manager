@@ -2,6 +2,7 @@ pub mod args;
 pub mod output;
 pub mod prompt;
 pub mod spinner;
+pub mod tui;
 
 pub use args::{Cli, Commands};
 pub use output::Renderer;
@@ -12,3 +13,4 @@ pub use prompt::{
     ConfirmationRequest,
 };
 pub use spinner::Spinner;
+pub use tui::MaintenanceTui;
