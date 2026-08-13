@@ -4,7 +4,7 @@ use crate::{
     execution::render_native_command,
 };
 #[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::{
     io::{IsTerminal, Read, Write},
     process::{Command, Stdio},
