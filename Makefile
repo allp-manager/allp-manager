@@ -104,6 +104,7 @@ docs-check:
 	test -f docs/FLATPAK_BACKEND.md
 	test -f docs/PREREQUISITES.md
 	test -f docs/ALTERNATIVE_INSTALLERS.md
+	test -f docs/REGRESSION_GUARDRAILS.md
 	test -f docs/SELF_UPDATE.md
 	test -f docs/RELEASE_MANIFEST.md
 	test -n '$(CURRENT_VERSION)'
@@ -120,7 +121,8 @@ docs-check:
 
 install: release
 	sudo install -Dm755 "$(RELEASE_BINARY)" "$(BINDIR)/$(BINARY)"
-	"$(BINDIR)/$(BINARY)" --version
+	@printf 'Installed build identity (expected commit %s):\n' "$(CURRENT_GIT_SHA)"
+	"$(BINDIR)/$(BINARY)" --version --verbose
 	@printf 'Installed %s\n' "$(BINDIR)/$(BINARY)"
 
 uninstall:
@@ -129,13 +131,15 @@ uninstall:
 
 reinstall: release
 	sudo install -Dm755 "$(RELEASE_BINARY)" "$(BINDIR)/$(BINARY)"
-	"$(BINDIR)/$(BINARY)" --version
+	@printf 'Installed build identity (expected commit %s):\n' "$(CURRENT_GIT_SHA)"
+	"$(BINDIR)/$(BINARY)" --version --verbose
 	@printf 'Reinstalled %s\n' "$(BINDIR)/$(BINARY)"
 
 install-user: release
 	mkdir -p "$$HOME/.local/bin"
 	install -m755 "$(RELEASE_BINARY)" "$$HOME/.local/bin/$(BINARY)"
-	"$$HOME/.local/bin/$(BINARY)" --version
+	@printf 'Installed build identity (expected commit %s):\n' "$(CURRENT_GIT_SHA)"
+	"$$HOME/.local/bin/$(BINARY)" --version --verbose
 	@case ":$$PATH:" in *":$$HOME/.local/bin:"*) : ;; *) printf '%s\n' 'Warning: $$HOME/.local/bin is not on PATH.' ;; esac
 	@printf 'Installed %s\n' "$$HOME/.local/bin/$(BINARY)"
 
@@ -147,7 +151,7 @@ install-check:
 		exit 1; \
 	fi; \
 	printf 'Resolved allp: %s\n' "$$resolved"; \
-	"$$resolved" --version; \
+	"$$resolved" --version --verbose; \
 	if [ "$$resolved" != "$(BINDIR)/$(BINARY)" ]; then \
 		printf 'Warning: PATH resolves allp outside %s\n' "$(BINDIR)/$(BINARY)"; \
 	fi; \

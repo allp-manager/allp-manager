@@ -12,6 +12,18 @@ All notable changes to Allp will be documented in this file.
 
 ### Fixed
 
+- Unix release builds again import the Unix `CommandExt` trait required for the
+  process-group cancellation path.
+- A local development binary installed with `make reinstall` now detects and
+  can replace itself with a newer verified continuous build from `main`, even
+  when its local revision-`1` marker collides with the CI revision. Unverified
+  identity conflicts and downgrades remain blocked.
+- Homebrew on macOS can re-resolve validated GUI users through Directory
+  Services when they are absent from `/etc/passwd`, preserving original-user
+  execution under `sudo`.
+- Install, reinstall, and install-check now print the full build identity and
+  expected source commit, so a local revision-`1` version cannot hide which
+  checkout was installed.
 - Continuous discovery now falls back deterministically past failed or running workflow candidates, treats an unpublished feed and unsupported targets as structured no-update states, and binds the exact mirror manifest hash to GitHub's authoritative artifact identity.
 - Stable discovery uses GitHub's latest-release endpoint, while explicit semantic prerelease discovery is isolated from per-push continuous tags; continuous mirrors can no longer starve tagged channel discovery.
 - Self-update temporary header files and staging directories are owner-only, API rate-limit failures expose useful reset/retry metadata, full published Git IDs accept only exact SHA-1/SHA-256 lengths, and legacy ETags are not sent without cached verified response data.

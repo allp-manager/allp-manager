@@ -12,6 +12,14 @@ make quality
 
 Do not claim a check passed unless you ran it.
 
+## Behavior Change Record
+
+For every behavior-changing pull request, add an `Unreleased` entry to
+`CHANGELOG.md`, add a regression test, and update the applicable invariant in
+[Regression Guardrails](docs/REGRESSION_GUARDRAILS.md). The guardrail document
+also names focused checks for self-update, privilege, Homebrew, and process
+execution changes.
+
 ## Local Release Workflow
 
 Release automation is intentionally local-only:

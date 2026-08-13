@@ -1,0 +1,48 @@
+# Regression Guardrails
+
+This is the maintainer record for cross-cutting behavior that has previously
+regressed or has a high cost of regression. Keep component design detail in its
+own document; use this file to record the invariant, its owner, and the proof
+that must remain in place.
+
+## Recording a behavior change
+
+For every behavior-changing pull request:
+
+1. Add a concise user-visible entry under `Unreleased` in `CHANGELOG.md`.
+2. Add or update the relevant guardrail below, including its owning module and
+   automated regression test.
+3. Run `make quality`; run any guardrail-specific command shown below when the
+   change touches that area.
+4. Do not weaken a trust, privilege, or downgrade check merely to make an
+   update appear available. Document the new, narrowly scoped exception and
+   test both the allowed and rejected cases.
+
+## Active guardrails
+
+| Area | Invariant | Owner and automated proof | Required focused check |
+| --- | --- | --- | --- |
+| Unix process execution | A captured Unix child has its own process group so timeout/cancellation can clean up descendants. The trait providing `process_group` must remain imported on Unix. | `src/execution/runner.rs`; `execution::runner::tests::capture_finishes_when_detached_descendant_holds_pipes`. | `make release` and the runner test through `make quality`. |
+| Local reinstall and self-update | `make reinstall` creates a non-official development identity with local revision `1`. It must not be classified as newer than a verified official continuous build merely because that local marker collides with a CI revision. The install target must print the full identity so a short version cannot hide a changed commit. | `src/build_identity.rs`; `verified_continuous_build_replaces_local_reinstall_on_revision_collision`, `unverified_revision_collision_cannot_replace_local_development_build`, and `self_update::tests::local_reinstall_detects_verified_continuous_main_build`. | Build/install a local binary, compare the printed commit with `git rev-parse HEAD`, then run `allp self-update --check-only` after a successful continuous publication. |
+| Update trust and downgrade safety | The local-development exception applies only to an official continuous candidate. Published identity conflicts remain errors, and an older remote build must never replace the installed build. | `src/build_identity.rs`; the collision, integrity-error, and no-downgrade tests named above. | `make quality`; inspect the continuous manifest/workflow identity when changing the source. |
+| Homebrew under sudo on macOS | Homebrew runs as the validated original non-root user. GUI accounts absent from `/etc/passwd` are resolved through Directory Services; no ambient `SUDO_*` value alone is trusted. | `src/execution/privilege.rs`, `src/discovery/homebrew.rs`; Directory Services parser tests and Homebrew discovery tests. | `cargo check --all-targets --target x86_64-apple-darwin` and `cargo check --all-targets --target aarch64-apple-darwin`. |
+
+## Change record
+
+### 2026-08-13 — local reinstall update detection, Unix runner, and macOS Homebrew
+
+- Imported Unix `CommandExt` for `Command::process_group`, restoring release
+  builds that use the captured-process cancellation path.
+- Allowed a non-official local development build from `make reinstall` to take
+  a newer verified continuous build, including the local revision-`1`
+  collision. The exception does not permit unverified candidates, published
+  identity conflicts, or downgrades.
+- Added a macOS Directory Services fallback for Homebrew's validated original
+  user lookup, including supplementary group lookup, so normal GUI accounts do
+  not disappear when Allp is invoked with `sudo`.
+- Made install, reinstall, and install-check print the complete build identity
+  and expected source commit instead of a short local version that cannot
+  distinguish two revision-`1` development builds.
+- Proof recorded for this change: `make quality`, `make release-workflow-test`,
+  the macOS target checks above, a temporary-path `make reinstall`, and a live
+  `self-update --check-only` against the verified continuous artifact.
