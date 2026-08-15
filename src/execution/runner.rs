@@ -9,7 +9,7 @@ use crate::{
     execution::render_native_command,
 };
 #[cfg(unix)]
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::{Child, CommandExt, ExitStatusExt};
 use std::{
     io::{IsTerminal, Read, Write},
     process::{Command, Stdio},
@@ -24,6 +24,7 @@ const REPEAT_HEARTBEAT_AFTER: Duration = Duration::from_secs(15);
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(750);
 const MAX_CAPTURE_BYTES_PER_STREAM: usize = 1024 * 1024;
 const TUI_TICK_INTERVAL: Duration = Duration::from_secs(1);
+const PROCESS_TERMINATION_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
@@ -414,6 +415,10 @@ impl StdProcessRunner {
         heartbeat_allowed: bool,
     ) -> AllpResult<ProcessStatus> {
         let mut process = process;
+        
+        #[cfg(unix)]
+        process.process_group(0);
+
         let mut child = process
             .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
@@ -429,6 +434,10 @@ impl StdProcessRunner {
         let _stdout_reader = read_stream(stdout, StreamKind::Stdout, sender.clone());
         let _stderr_reader = read_stream(stderr, StreamKind::Stderr, sender);
         let started = Instant::now();
+        let timeout = plan
+            .command
+            .timeout
+            .unwrap_or(DEFAULT_CAPTURE_TIMEOUT);
         let mut last_output = started;
         let mut next_heartbeat = FIRST_HEARTBEAT_AFTER;
         let heartbeat_enabled = heartbeat_allowed && std::io::stderr().is_terminal();
@@ -451,7 +460,20 @@ impl StdProcessRunner {
             }
             if let Some(status) = child.try_wait()? {
                 break status;
+                
             }
+
+            
+            if started.elapsed() >= timeout {
+                terminate_process_tree(&mut child)?;
+
+                return Err(AllpError::Timeout(format!(
+                    "Native command timed out after {} second(s): {}",
+                    timeout.as_secs(),
+                    render_native_command(&plan.command)
+                )));
+            }
+            
             if last_tick.elapsed() >= TUI_TICK_INTERVAL {
                 emit_progress_event(
                     plan,
@@ -491,6 +513,64 @@ impl StdProcessRunner {
             stdout,
             stderr,
         })
+    }
+}
+
+fn terminate_process_tree(child: &mut Child) -> AllpResult<()> {
+    #[cfg(unix)]
+    {
+        use std::io;
+
+        let pid = child.id();
+
+        // The child is placed in its own process group.
+        // A negative PID targets the entire process group.
+        let result = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
+
+        if result != 0 {
+            let error = io::Error::last_os_error();
+
+            // ESRCH means the process/group already exited.
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(AllpError::Io(error));
+            }
+        }
+
+        let deadline = Instant::now() + PROCESS_TERMINATION_GRACE;
+
+        loop {
+            if child.try_wait()?.is_some() {
+                return Ok(());
+            }
+
+            if Instant::now() >= deadline {
+                break;
+            }
+
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        // Grace period expired. Kill the entire process group.
+        let result = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+
+        if result != 0 {
+            let error = io::Error::last_os_error();
+
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(AllpError::Io(error));
+            }
+        }
+
+        let _ = child.wait();
+
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        child.kill()?;
+        child.wait()?;
+        Ok(())
     }
 }
 
@@ -721,7 +801,7 @@ fn format_elapsed(duration: Duration) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
+    
     #[derive(Default)]
     struct RecordingObserver {
         events: Vec<ProcessEvent>,
@@ -733,6 +813,78 @@ mod tests {
         executes: AtomicUsize,
     }
 
+    #[test]
+    fn execute_times_out_and_terminates_process_group() {
+        let runner = StdProcessRunner;
+    
+        let mut command = NativeCommand::new("/bin/sh");
+    
+        command = command.args([
+            "-c",
+            "sleep 30",
+        ]);
+    
+        command.timeout = Some(Duration::from_millis(250));
+    
+        let plan = ExecutionPlan {
+            backend_id: "test".to_owned(),
+            backend_name: "Test".to_owned(),
+            operation: crate::domain::OperationKind::Update,
+            action: "Timeout test".to_owned(),
+            package_id: None,
+            source: None,
+            scope: None,
+            details: Vec::new(),
+            command,
+            privilege: PrivilegeRequirement::NoElevation,
+            requires_root: false,
+            interactive: false,
+        };
+    
+        let started = Instant::now();
+    
+        let result = runner.execute(&plan);
+    
+        assert!(matches!(result, Err(AllpError::Timeout(_))));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn execute_timeout_terminates_descendants() {
+        let runner = StdProcessRunner;
+    
+        let mut command = NativeCommand::new("/bin/sh");
+    
+        command = command.args([
+            "-c",
+            "sleep 30 & wait",
+        ]);
+    
+        command.timeout = Some(Duration::from_millis(250));
+    
+        let plan = ExecutionPlan {
+            backend_id: "test".to_owned(),
+            backend_name: "Test".to_owned(),
+            operation: crate::domain::OperationKind::Update,
+            action: "Process group timeout test".to_owned(),
+            package_id: None,
+            source: None,
+            scope: None,
+            details: Vec::new(),
+            command,
+            privilege: PrivilegeRequirement::NoElevation,
+            requires_root: false,
+            interactive: false,
+        };
+    
+        let started = Instant::now();
+    
+        let result = runner.execute(&plan);
+    
+        assert!(matches!(result, Err(AllpError::Timeout(_))));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+    
     impl ProcessRunner for HookRecordingRunner {
         fn capture(&self, _command: &NativeCommand) -> AllpResult<CommandOutput> {
             Ok(CommandOutput {
