@@ -63,7 +63,7 @@ Backends may execute native read-only commands and parse output into:
 
 Prefer stable machine-readable native output where available.
 
-Candidates include a package domain and may include installer choices. Source/registry and installer are separate concepts: PyPI is a source; pip, pipx, and uv are installers. The npm registry is a source; npm, pnpm, and Yarn are installers.
+Candidates include a package domain and may include installer choices. Source/registry and installer are separate concepts: PyPI is a source; pip, pipx, and uv are installers. The npm registry is a source; npm, pnpm, and Yarn are installers. crates.io is a source and Cargo is its installer.
 
 `raw_info` is optional and returns native backend info output for `allp info --raw`. It must be read-only.
 

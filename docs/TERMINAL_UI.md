@@ -22,7 +22,7 @@ described below keeps that output visible while adding only a safe terminal
 projection around it; it never rewrites the planned native command, its
 arguments, or its plan-level privilege requirement.
 
-## Live Maintenance Progress
+## Live Maintenance Dashboard
 
 Real, interactive `update` and `upgrade` execution uses an inline live
 progress line during the execution phase. It is deliberately **not** a

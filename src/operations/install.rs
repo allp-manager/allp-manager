@@ -157,7 +157,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         let mut candidate = selectable[selected_index].clone();
         if matches!(
             candidate.domain,
-            PackageDomain::Python | PackageDomain::Node
+            PackageDomain::Python | PackageDomain::Node | PackageDomain::Rust
         ) && candidate.match_kind == MatchKind::Fuzzy
         {
             confirm_fuzzy_candidate(context.no_interactive)?;

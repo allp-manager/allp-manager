@@ -18,11 +18,13 @@ Experimental coverage:
 - Portage/emerge for Gentoo-family systems. Remove/list are not advertised.
 - eopkg for Solus.
 - swupd for Clear Linux bundles.
+- rpm-ostree for Bazzite and Fedora Atomic-style systems. Bazzite disables DNF
+  host mutations, stages package layering transactionally, and uses
+  `rpm-ostree upgrade` for the host image.
 
 Unsupported in this phase:
 
 - Nix/NixOS.
-- rpm-ostree immutable systems.
 - transactional-update systems.
 - Guix.
 - Slackware tools.

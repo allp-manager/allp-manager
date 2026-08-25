@@ -5,6 +5,7 @@ use crate::{
         PackageCandidate, PackageDomain, PackageInfo, RuntimePrivilegeContext,
     },
     execution::ProcessRunner,
+    platform::PlatformContext,
 };
 use std::{
     collections::BTreeMap,
@@ -54,6 +55,7 @@ const DEVELOPMENT_DOMAINS: &[PackageDomain] = &[
     PackageDomain::Homebrew,
     PackageDomain::Python,
     PackageDomain::Node,
+    PackageDomain::Rust,
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +91,13 @@ pub trait Backend: Send + Sync {
             BackendCategory::Universal => UNIVERSAL_DOMAINS,
             BackendCategory::Development => DEVELOPMENT_DOMAINS,
         }
+    }
+
+    /// Return a user-facing reason when this backend must not be used on the
+    /// detected host platform. Discovery reports the backend as unavailable
+    /// instead of exposing unsafe native commands for that platform.
+    fn platform_incompatibility(&self, _platform: &PlatformContext) -> Option<String> {
+        None
     }
 
     fn has_capability(&self, capability: Capability) -> bool {

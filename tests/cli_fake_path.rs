@@ -67,11 +67,15 @@ fn run_allp_in_with_env(
 }
 
 fn run_allp_pty(path: &Path, args: &[&str], input: &str) -> Output {
-    let command_line = std::iter::once(env!("CARGO_BIN_EXE_allp"))
+    let allp_command = std::iter::once(env!("CARGO_BIN_EXE_allp"))
         .chain(args.iter().copied())
         .map(shell_quote)
         .collect::<Vec<_>>()
         .join(" ");
+    let command_line = format!(
+        "PATH={} {allp_command}",
+        shell_quote(&path.to_string_lossy())
+    );
     let mut command = Command::new("/usr/bin/script");
     command
         .args(["-qfec", &command_line, "/dev/null"])
@@ -101,11 +105,15 @@ fn run_allp_pty(path: &Path, args: &[&str], input: &str) -> Output {
 }
 
 fn run_allp_pty_with_tui(path: &Path, args: &[&str], input: &str) -> Output {
-    let command_line = std::iter::once(env!("CARGO_BIN_EXE_allp"))
+    let allp_command = std::iter::once(env!("CARGO_BIN_EXE_allp"))
         .chain(args.iter().copied())
         .map(shell_quote)
         .collect::<Vec<_>>()
         .join(" ");
+    let command_line = format!(
+        "PATH={} {allp_command}",
+        shell_quote(&path.to_string_lossy())
+    );
     let mut command = Command::new("/usr/bin/script");
     command
         .args(["-qfec", &command_line, "/dev/null"])
@@ -147,11 +155,15 @@ fn run_allp_pty_with_tui_after_prompt(
     prompt: &str,
     input: &str,
 ) -> Output {
-    let command_line = std::iter::once(env!("CARGO_BIN_EXE_allp"))
+    let allp_command = std::iter::once(env!("CARGO_BIN_EXE_allp"))
         .chain(args.iter().copied())
         .map(shell_quote)
         .collect::<Vec<_>>()
         .join(" ");
+    let command_line = format!(
+        "PATH={} {allp_command}",
+        shell_quote(&path.to_string_lossy())
+    );
     let mut command = Command::new("/usr/bin/script");
     command
         .args(["-qfec", &command_line, "/dev/null"])
@@ -1446,6 +1458,59 @@ exit 0
     );
 }
 
+fn install_fake_rust(dir: &Path, marker: &Path) {
+    let marker = marker.display();
+    write_executable(
+        dir,
+        "cargo",
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "search" ]; then
+  printf '%s = "1.0.0" # Fake Rust binary crate\n' "$2"
+  exit 0
+fi
+if [ "$1" = "install" ] && [ "$2" = "--list" ]; then
+  printf '%s\n' 'ripgrep v14.1.1:' '    rg'
+  exit 0
+fi
+if [ "$1" = "info" ]; then
+  printf '%s\n' 'ripgrep # Line-oriented search tool' 'version: 14.1.1' 'repository: https://github.com/BurntSushi/ripgrep'
+  exit 0
+fi
+if [ "$1" = "install" ] || [ "$1" = "uninstall" ] || [ "$1" = "install-update" ]; then
+  printf '%s\n' "cargo $*" >> '{marker}'
+  exit 0
+fi
+exit 0
+"#
+        ),
+    );
+    write_executable(dir, "rustc", "#!/bin/sh\nprintf '%s\\n' 'rustc 1.97.0'\n");
+    write_executable(dir, "cargo-install-update", "#!/bin/sh\nexit 0\n");
+}
+
+fn install_fake_rpm_ostree(dir: &Path, marker: &Path) {
+    let marker = marker.display();
+    write_executable(
+        dir,
+        "rpm-ostree",
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+  printf '%s\n' '{{"deployments":[{{"booted":true,"requested-packages":["fish"],"requested-local-packages":[]}}]}}'
+  exit 0
+fi
+if [ "$1" = "search" ]; then
+  printf '%s\n' 'htop.x86_64 : Interactive process viewer'
+  exit 0
+fi
+printf '%s\n' "rpm-ostree $*" >> '{marker}'
+exit 0
+"#
+        ),
+    );
+}
+
 #[test]
 fn discovery_is_fresh_and_backend_can_appear_after_path_change() {
     let empty = temp_dir("empty-path");
@@ -1562,13 +1627,26 @@ fn expanded_backend_families_are_discovered_from_fake_path() {
     install_fake_brew(&dir);
     install_fake_python(&dir, &marker);
     install_fake_node(&dir, &marker);
+    install_fake_rust(&dir, &marker);
+    install_fake_rust(&dir, &marker);
+    install_fake_rpm_ostree(&dir, &marker);
 
     let output = run_allp(&dir, &["detect", "--json"]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json: Value = serde_json::from_slice(&output.stdout).expect("detect JSON should parse");
     for backend_id in [
-        "zypper", "apk", "xbps", "portage", "eopkg", "swupd", "brew", "python", "node",
+        "zypper",
+        "apk",
+        "xbps",
+        "portage",
+        "eopkg",
+        "swupd",
+        "rpm-ostree",
+        "brew",
+        "python",
+        "node",
+        "rust",
     ] {
         assert!(
             json["results"]
@@ -1629,6 +1707,58 @@ fn node_from_pnpm_uses_npm_registry_with_pnpm_installer() {
     assert!(out.contains("npm registry"));
     assert!(out.contains("pnpm add --global typescript"));
     assert!(!marker.exists(), "dry run must not execute pnpm");
+}
+
+#[test]
+fn rust_from_cargo_uses_crates_io_and_never_mutates_a_project_manifest() {
+    let dir = temp_dir("rust-cargo");
+    let marker = dir.join("executed");
+    install_fake_rust(&dir, &marker);
+
+    let output = run_allp(
+        &dir,
+        &[
+            "install",
+            "ripgrep",
+            "--from",
+            "cargo",
+            "--dry-run",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("crates.io"));
+    assert!(out.contains("cargo install -- ripgrep"));
+    assert!(!out.contains("cargo add"));
+    assert!(!marker.exists(), "dry run must not execute Cargo");
+}
+
+#[test]
+fn rpm_ostree_bazzite_alias_plans_transactional_host_layering() {
+    let dir = temp_dir("bazzite-rpm-ostree");
+    let marker = dir.join("executed");
+    install_fake_rpm_ostree(&dir, &marker);
+
+    let output = run_allp(
+        &dir,
+        &[
+            "install",
+            "htop",
+            "--from",
+            "bazzite",
+            "--dry-run",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("rpm-ostree install -- htop.x86_64"));
+    assert!(out.contains("last resort"));
+    assert!(out.contains("after reboot"));
+    assert!(!marker.exists(), "dry run must not layer the package");
 }
 
 #[test]
@@ -1754,10 +1884,11 @@ fn scope_apps_searches_apps_and_tools_without_developer_ecosystems() {
     assert!(!out.contains("Developer Ecosystems"));
     assert!(!out.contains("PyPI"));
     assert!(!out.contains("npm registry"));
+    assert!(!out.contains("crates.io"));
 }
 
 #[test]
-fn scope_dev_searches_only_python_and_node_sources() {
+fn scope_dev_includes_rust_and_excludes_app_sources() {
     let dir = temp_dir("scope-dev");
     let marker = dir.join("marker");
     install_fake_apt(&dir, &marker, 0, 0);
@@ -1765,6 +1896,7 @@ fn scope_dev_searches_only_python_and_node_sources() {
     install_fake_brew(&dir);
     install_fake_python(&dir, &marker);
     install_fake_node(&dir, &marker);
+    install_fake_rust(&dir, &marker);
 
     let output = run_allp(&dir, &["search", "openai", "--scope", "dev", "--no-color"]);
 
@@ -1773,6 +1905,8 @@ fn scope_dev_searches_only_python_and_node_sources() {
     assert!(out.contains("Developer Ecosystems"));
     assert!(out.contains("Python"));
     assert!(out.contains("PyPI"));
+    assert!(out.contains("Rust / Cargo"));
+    assert!(out.contains("crates.io"));
     assert!(!out.contains("System Packages"));
     assert!(!out.contains("Universal Applications"));
     assert!(!out.contains("APT"));
@@ -2257,6 +2391,7 @@ fn snap_try_another_installer_searches_other_backends_without_silent_selection()
     let flatpak_marker = dir.join("flatpak-commands");
     install_fake_snap_catalog(&dir, &snap_marker);
     install_fake_flatpak_with_marker(&dir, &flatpak_marker);
+    install_fake_rust(&dir, &dir.join("cargo-commands"));
 
     let output = run_allp_pty(
         &dir,
@@ -2271,8 +2406,13 @@ fn snap_try_another_installer_searches_other_backends_without_silent_selection()
         "1\n2\n0\n",
     );
 
-    assert_eq!(output.status.code(), Some(2));
     let out = normalized_stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stdout: {out}\nstderr: {}",
+        stderr(&output)
+    );
     assert!(out.contains("[2] Try another installer"));
     assert!(out.contains("org.telegram.desktop"));
     assert!(out.contains("Select a package"));

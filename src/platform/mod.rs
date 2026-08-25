@@ -515,6 +515,16 @@ mod tests {
     }
 
     #[test]
+    fn bazzite_is_recognized_as_a_fedora_family_distribution() {
+        let (distribution, family) = parse_os_release(
+            "ID=bazzite\nPRETTY_NAME=\"Bazzite\"\nVERSION_ID=\"43\"\nID_LIKE=\"fedora\"\n",
+        );
+
+        assert_eq!(distribution.expect("Bazzite should parse").id, "bazzite");
+        assert_eq!(family, Some(DistributionFamily::RedHat));
+    }
+
+    #[test]
     fn architecture_is_normalized() {
         assert_ne!(Architecture::current().as_str(), "");
         assert_eq!(Architecture::from_name("aarch64"), Architecture::Aarch64);

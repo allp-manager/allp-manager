@@ -110,14 +110,15 @@ Backends may expose raw native info output through `raw_info`; default CLI info 
 
 Backends may also perform read-only install-planning preflight. Snap uses this hook for separate exact resolution through snapd REST, with a reasoned CLI fallback only when REST transport/compatibility permits it. It replaces the discovery row with canonical metadata before generic install planning can render a plan.
 
-Backends can declare optional command requirements. Python uses this to detect pip, pipx, and uv as installer choices while keeping PyPI as the registry/source. Node uses it to detect pnpm and Yarn while keeping the npm registry as the source.
+Backends can declare optional command requirements. Python uses this to detect pip, pipx, and uv as installer choices while keeping PyPI as the registry/source. Node uses it to detect pnpm and Yarn while keeping the npm registry as the source. Rust/Cargo uses it to detect the optional `cargo-update` binary-upgrade subcommand while keeping crates.io separate from the installer.
 
 The catalog currently includes:
 
 - stable alpha system/universal backends: APT, Pacman, DNF/DNF5, Flatpak, Snap;
 - experimental system-family backends: Zypper, APK, XBPS, Portage/emerge, eopkg, swupd;
+- experimental transactional rpm-ostree support for Bazzite/Fedora Atomic hosts;
 - experimental Homebrew/Linuxbrew;
-- experimental Python and Node ecosystem backends.
+- experimental Python, Node, and Rust/Cargo ecosystem backends.
 
 ### `operations`
 
@@ -134,7 +135,7 @@ Use-case modules coordinate capabilities only:
 
 The architecture check fails when generic operation source contains registered backend IDs.
 
-Generic operations may branch on domain-level safety concepts, such as refusing automatic fuzzy Python/Node installs, but they do not contain native command syntax or backend-specific IDs.
+Generic operations may branch on domain-level safety concepts, such as refusing automatic fuzzy Python/Node/Rust registry installs, but they do not contain native command syntax or backend-specific IDs.
 
 ### `execution`
 
@@ -216,6 +217,7 @@ v0.3.3 policy:
 | APT | refresh package metadata | upgrade installed APT packages |
 | Pacman | unsupported | `pacman -Syu` full sync and upgrade |
 | DNF/DNF5 | refresh metadata cache | upgrade installed DNF packages |
+| rpm-ostree | refresh rpm-md metadata | stage the next system image/deployment |
 | Flatpak | update installed apps/runtimes | same native action |
 | Snap | refresh installed snaps | same native action |
 | Zypper | repository refresh | package update |
@@ -225,6 +227,7 @@ v0.3.3 policy:
 | eopkg | repository update | package upgrade |
 | swupd | update check | system bundle update |
 | Homebrew | metadata update | package upgrade |
+| Cargo | not applicable | upgrade global binary crates through optional cargo-update |
 
 Mutating multi-backend operations run sequentially, continue after failures, and return exit code `8` when any backend fails.
 

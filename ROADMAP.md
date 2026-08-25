@@ -2,9 +2,9 @@
 
 This roadmap describes direction, not a promise. Allp keeps native package managers as the source of truth.
 
-## Current Release: v0.4.0
+## Current Release: v0.5.0
 
-v0.4.0 is a public-alpha foundation, recovery, and live-maintenance release
+v0.5.0 is a public-alpha developer-ecosystem and image-based Linux release
 with:
 
 - command-first CLI for `detect`, `search`, `install`, `remove`, `update`, `upgrade`, `list`, and `info`;
@@ -26,6 +26,11 @@ with:
 - experimental Homebrew/Linuxbrew support and official bootstrap planning;
 - experimental Python support for PyPI with pip, pipx, and uv;
 - experimental Node support for the npm registry with npm, pnpm, and Yarn;
+- experimental Rust/Cargo support for crates.io binary tools, with optional
+  `cargo-update` upgrades and no project-lockfile mutation;
+- experimental Bazzite/Fedora Atomic support through rpm-ostree, including
+  transactional package layering, deployment inventory, metadata refresh, and
+  system-image upgrades;
 - software identity warnings for known name collisions;
 - Snap metadata revalidation before install planning, including canonical names, verified publishers, confinement, stable channels, architecture checks, and installed-state preflight;
 - snapd REST as the primary Snap transport, authoritative exact not-found handling, REST installation, and terminal change monitoring;
@@ -44,6 +49,7 @@ with:
 - Broaden parser fixtures with real native outputs for stable and experimental backends.
 - Validate experimental Linux-family backends on real distributions.
 - Validate Homebrew on macOS and Linuxbrew hosts.
+- Validate Cargo and rpm-ostree behavior on real Rust and Bazzite hosts.
 - Validate the live dashboard in real terminals, including package-manager
   prompts, Ctrl+C, narrow terminals, redirects, and long-running backends.
 - Expand Python PEP 668 and virtual-environment safety coverage.
@@ -60,7 +66,6 @@ with:
 
 ## Future Development Ecosystems
 
-- Cargo
 - Composer
 - Go
 - RubyGems

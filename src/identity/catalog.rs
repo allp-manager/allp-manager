@@ -127,6 +127,20 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         aliases: &["yarn", "yarnpkg"],
         official_sources: &["https://yarnpkg.com/"],
     },
+    CanonicalIdentity {
+        id: "rust",
+        display_name: "Rust",
+        software_type: SoftwareType::LanguageRuntime,
+        aliases: &["rust", "rustlang", "rust language"],
+        official_sources: &["https://www.rust-lang.org/"],
+    },
+    CanonicalIdentity {
+        id: "cargo",
+        display_name: "Cargo",
+        software_type: SoftwareType::RegistryClient,
+        aliases: &["cargo", "rust package manager", "crates.io"],
+        official_sources: &["https://doc.rust-lang.org/cargo/"],
+    },
 ];
 
 pub fn all() -> &'static [CanonicalIdentity] {

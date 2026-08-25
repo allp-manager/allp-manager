@@ -1,11 +1,12 @@
 use crate::backends::{
-    development::{node::NodeBackend, python::PythonBackend},
+    development::{node::NodeBackend, python::PythonBackend, rust::RustBackend},
     homebrew::HomebrewBackend,
     system::{
         apt::AptBackend,
         dnf::DnfBackend,
         family::{SystemFamilyBackend, APK, EOPKG, PORTAGE, SWUPD, XBPS, ZYPPER},
         pacman::PacmanBackend,
+        rpm_ostree::RpmOstreeBackend,
     },
     universal::{flatpak::FlatpakBackend, snap::SnapBackend},
     Backend,
@@ -17,6 +18,7 @@ pub fn builtin_backends() -> Vec<Arc<dyn Backend>> {
         Arc::new(AptBackend),
         Arc::new(PacmanBackend),
         Arc::new(DnfBackend),
+        Arc::new(RpmOstreeBackend),
         Arc::new(SystemFamilyBackend::new(&ZYPPER)),
         Arc::new(SystemFamilyBackend::new(&APK)),
         Arc::new(SystemFamilyBackend::new(&XBPS)),
@@ -28,5 +30,6 @@ pub fn builtin_backends() -> Vec<Arc<dyn Backend>> {
         Arc::new(HomebrewBackend),
         Arc::new(PythonBackend),
         Arc::new(NodeBackend),
+        Arc::new(RustBackend),
     ]
 }

@@ -4,14 +4,14 @@
 
 > One CLI for the package managers already on your machine.
 
-Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, Flatpak, Snap, Homebrew/Linuxbrew, Python installers, and Node installers, then shows the exact native command or local API request before anything mutates the system.
+Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, rpm-ostree on Bazzite/Atomic hosts, Flatpak, Snap, Homebrew/Linuxbrew, Python and Node installers, and Rust/Cargo, then shows the exact native command or local API request before anything mutates the system.
 
-Current build version: **0.4.0.1** (Cargo base version **0.4.0**)
+Current build version: **0.5.0.1** (Cargo base version **0.5.0**)
 Maturity: **public alpha**
 
 ## Why Allp Exists
 
-Linux software often lives across system repositories, universal app stores, Homebrew, Python, and Node. Allp gives those sources one consistent command surface without hiding the native package managers or pretending they are interchangeable.
+Linux software often lives across system repositories, universal app stores, Homebrew, Python, Node, and Rust/Cargo. Allp gives those sources one consistent command surface without hiding the native package managers or pretending they are interchangeable.
 
 Core principles:
 
@@ -24,7 +24,7 @@ Core principles:
 
 ## Supported Systems
 
-The platform layer detects Linux distributions and package-manager families, macOS, Windows, WSL, containers, architecture, libc, users, executable ownership, and platform data directories. Package orchestration is maturest on Linux. Homebrew/macOS remains experimental; Windows currently supports compilation, diagnostics, release-target selection, and deferred self-replacement, but does not advertise Linux-only Snap or Flatpak backends.
+The platform layer detects Linux distributions and package-manager families, including Bazzite as a Fedora-family image-based host, plus macOS, Windows, WSL, containers, architecture, libc, users, executable ownership, and platform data directories. Package orchestration is maturest on Linux. Homebrew/macOS remains experimental; Windows currently supports compilation, diagnostics, release-target selection, and deferred self-replacement, but does not advertise Linux-only Snap or Flatpak backends.
 
 ## Backends
 
@@ -33,12 +33,16 @@ The platform layer detects Linux distributions and package-manager families, mac
 | APT | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | Pacman | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | DNF / DNF5 | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
+| rpm-ostree / Bazzite / Fedora Atomic | Experimental | yes | yes | yes | yes | yes | yes | yes |
 | Flatpak | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | Snap | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | Zypper, APK, XBPS, Portage, eopkg, swupd | Experimental | yes | mixed | mixed | mixed | mixed | mixed | mixed |
 | Homebrew / Linuxbrew | Experimental | yes | yes | yes | yes | yes | yes | yes |
 | Python: PyPI with pip, pipx, uv | Experimental | yes | yes | yes | yes | yes | yes | yes |
 | Node: npm registry with npm, pnpm, Yarn | Experimental | yes | yes | yes | yes | yes | yes | yes |
+| Rust: crates.io with Cargo | Experimental | yes | yes | yes | no | optional¹ | yes | yes |
+
+¹ Cargo binary upgrades use the optional community `cargo-update` subcommand; Allp never rewrites project dependencies or `Cargo.lock` during host maintenance.
 
 JSON is available for read-only commands and dry-run maintenance/install planning where supported. See [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md) for the detailed matrix.
 
@@ -61,7 +65,7 @@ allp --version
 allp update && allp upgrade
 ```
 
-`allp --version` prints the display/build version; `allp --version --verbose` also prints the base version, build revision, channel, commit, build ID, target, timestamp, and whether CI marked the build official. `allp update` defaults to verified continuous main-branch builds so fixes can update `0.4.0.1` to `0.4.0.2` without changing Cargo SemVer. Use `--update-channel stable` to persist the tagged-release channel.
+`allp --version` prints the display/build version; `allp --version --verbose` also prints the base version, build revision, channel, commit, build ID, target, timestamp, and whether CI marked the build official. `allp update` defaults to verified continuous main-branch builds so fixes can update `0.5.0.1` to `0.5.0.2` without changing Cargo SemVer. Use `--update-channel stable` to persist the tagged-release channel.
 
 `make install` builds the release binary and installs it as
 `/usr/local/bin/allp`. It uses `sudo install` for that one file copy. For a
@@ -93,6 +97,8 @@ allp search git
 allp install git
 allp install git --dry-run
 allp install pycharm
+allp install ripgrep --from cargo --dry-run
+allp install htop --from bazzite --dry-run
 allp update
 allp upgrade
 allp upgrade --allow-stale-metadata # explicit recovery only
@@ -125,9 +131,28 @@ sudo allp update --from homebrew --yes --skip-self-update
 See [the Homebrew backend guide](docs/HOMEBREW_BACKEND.md) for validation
 details and macOS/Linuxbrew limits.
 
+Rust/Cargo is a user-scoped development backend for crates.io binary tools.
+Search, install, remove, list, and info use Cargo's native commands. Host
+maintenance never runs `cargo add` or `cargo update`, so it does not modify a
+project manifest or lockfile. `allp upgrade --from cargo --target global`
+upgrades installed binaries only when the optional `cargo-update` subcommand is
+present. Cargo operations run as the original user under `sudo` and show the
+local-compilation/build-script warning before execution. See
+[the Rust/Cargo backend guide](docs/RUST_BACKEND.md).
+
+On Bazzite, Allp disables DNF host mutations and selects rpm-ostree for package
+layering and transactional image upgrades. `update` runs `rpm-ostree
+refresh-md`; `upgrade` stages `rpm-ostree upgrade`; install/remove stage layered
+package changes that normally require a reboot. Because Bazzite recommends
+layering only as a last resort, every layering plan points users toward
+Homebrew, Flatpak, or containers first. See
+[the Bazzite backend guide](docs/BAZZITE_BACKEND.md).
+
 ## Live Maintenance Progress
 
-On a real interactive `update` or `upgrade`, Allp 0.4.0 presents an inline live
+![Allp live maintenance dashboard](docs/assets/tui-maintenance.svg)
+
+On a real interactive `update` or `upgrade`, Allp 0.5.0 presents an inline live
 APT-style progress line during execution. Native logs remain unchanged in the
 normal terminal scrollback; only the current bottom line is redrawn with the
 percentage, active backend, action, elapsed time, and queue completion. The
@@ -158,6 +183,8 @@ allp install git --from apt --dry-run
 allp install pycharm --from snap --dry-run
 allp install black --from pipx --dry-run
 allp install typescript --from pnpm --dry-run
+allp install ripgrep --from cargo --dry-run
+allp install htop --from bazzite --dry-run
 ```
 
 ## Search And Selection
@@ -165,7 +192,7 @@ allp install typescript --from pnpm --dry-run
 Without `--from` or `--scope`, interactive `search` and `install` ask for one of three scopes:
 
 - `apps`: system packages, universal applications, and Homebrew
-- `dev`: Python and Node ecosystems
+- `dev`: Python, Node, and Rust/Cargo ecosystems
 - `all`: every eligible source
 
 Results are ranked as `Exact`, `Related`, or `Fuzzy`. All exact matches are shown, related matches are capped per backend, and weak fuzzy matches require `--all`.
@@ -195,7 +222,7 @@ If you intentionally run:
 sudo allp update
 ```
 
-Allp does not add nested sudo. Root-required system plans run directly, and user-scoped plans such as Homebrew, Python, Node, and Flatpak-user run as the original sudo user when that identity is available.
+Allp does not add nested sudo. Root-required system plans run directly, and user-scoped plans such as Homebrew, Python, Node, Rust/Cargo, and Flatpak-user run as the original sudo user when that identity is available.
 
 `--yes` bypasses only Allp's final confirmation after choices are resolved. It
 does not indiscriminately add native confirmation flags: APT upgrades receive
@@ -249,7 +276,7 @@ Missing Flatpak or Snap executables can be planned through structured APT, DNF, 
 
 ## Python And Node
 
-Python support treats PyPI as the source and pip, pipx, and uv as installer choices. Node support treats the npm registry as the source and npm, pnpm, and Yarn as installer choices. Registry matches are not treated as official merely because a name looks familiar, and fuzzy Python/Node matches are never installed automatically.
+Python support treats PyPI as the source and pip, pipx, and uv as installer choices. Node support treats the npm registry as the source and npm, pnpm, and Yarn as installer choices. Rust support treats crates.io as the source and Cargo as the installer. Registry matches are not treated as official merely because a name looks familiar, and fuzzy Python/Node/Rust matches are never installed automatically.
 
 Examples:
 
@@ -351,7 +378,7 @@ want to refresh.
 
 The release workflow is explicit. Local preparation never pushes, publishes a
 GitHub Release, or uploads assets. A GitHub Release is created only after a
-semantic-version tag such as `v0.4.0` is pushed.
+semantic-version tag such as `v0.5.0` is pushed.
 
 Run once per clone:
 
@@ -364,28 +391,28 @@ Prepare the next version explicitly:
 ```bash
 make release-prepare BUMP=patch
 # or:
-make release-prepare VERSION=0.4.0
+make release-prepare VERSION=0.5.0
 ```
 
 `release-prepare` updates the package version, Cargo.lock through Cargo,
 CHANGELOG, README version references, a tracked release title such as
-`release/RELEASE_TITLE_v0.4.0.txt`, and a tracked draft such as
-`release/RELEASE_NOTES_v0.4.0.md`, then runs `make quality`. It writes an
+`release/RELEASE_TITLE_v0.5.0.txt`, and a tracked draft such as
+`release/RELEASE_NOTES_v0.5.0.md`, then runs `make quality`. It writes an
 ignored readiness marker only after that quality gate passes.
 
 Commit the prepared files normally, for example from VS Code Source Control:
 
 ```text
-release: Allp v0.4.0
+release: Allp v0.5.0
 ```
 
 Only a commit whose subject begins with `release:` and matches the prepared
 marker is finalized. The post-commit hook creates:
 
-- annotated local tag `v0.4.0`
-- `dist/allp-v0.4.0-source.tar.gz`
-- `dist/allp-v0.4.0-source.tar.gz.sha256`
-- `dist/RELEASE_NOTES_v0.4.0.md`
+- annotated local tag `v0.5.0`
+- `dist/allp-v0.5.0-source.tar.gz`
+- `dist/allp-v0.5.0-source.tar.gz.sha256`
+- `dist/RELEASE_NOTES_v0.5.0.md`
 
 The source archive is generated from the exact committed tag with `git archive`.
 Ordinary commits such as `fix: improve Snap parsing` do not change versions,
@@ -409,8 +436,10 @@ conflicting release.
 |---|---|
 | APT lock error | Wait for the owning package process. Do not delete dpkg lock files. |
 | DNF/RPM database error | Check rpmdb permissions or repair the RPM database before retrying. |
+| Bazzite host package change | Prefer Homebrew, Flatpak, or a container; if layering is necessary, review the rpm-ostree plan and reboot after it completes. |
 | Missing pip, pipx, or uv | Run `allp detect --verbose` and install/configure the missing Python tool intentionally. |
 | npm global permission issue | Fix npm prefix ownership or use a user-owned Node manager; Allp will not sudo npm globals. |
+| Cargo upgrade unavailable | Install the optional `cargo-update` crate intentionally, or keep managing installed Cargo binaries manually. |
 | Flatpak has no remotes | Run `allp doctor`; review and explicitly approve the offered Flathub user-remote plan if desired. |
 | Snap exact result unavailable | Run `allp doctor` and Snap diagnostics. A valid REST `snap-not-found` is authoritative. |
 | Snap CLI fallback | Diagnostics show why REST was unavailable and the exact CLI argv/output. |
@@ -458,17 +487,18 @@ Keep backend-specific parsing and flags inside backend modules. Add fixtures for
 
 Near-term work is broader real-distro validation, richer parser fixtures, an
 interactive Snap channel chooser, deeper signal/trusted-path testing, and
-real-host Homebrew validation. Version 0.4.0 introduces the focused live
-maintenance TUI; a broader full-screen TUI and GUI remain later work, alongside
-future ecosystems such as Cargo, Composer, Go, RubyGems, and Maven/Gradle.
+real-host Homebrew, Cargo, and Bazzite validation. Version 0.5.0 adds Rust/Cargo
+binary-tool management and transactional rpm-ostree support for Bazzite; a
+broader full-screen TUI and GUI remain later work, alongside future ecosystems
+such as Composer, Go, RubyGems, and Maven/Gradle.
 
 See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-Version `0.4.0` adds the inline live maintenance dashboard, the `--no-tui`
-classic-stream fallback, stronger Homebrew original-user validation, and
-self-update/reinstall recovery hardening. See [CHANGELOG.md](CHANGELOG.md).
+Version `0.5.0` adds Rust/Cargo binary-tool management and Bazzite/rpm-ostree
+support while retaining the Homebrew, Node, and Python user-scope boundaries.
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## Known Limitations
 
@@ -476,7 +506,8 @@ self-update/reinstall recovery hardening. See [CHANGELOG.md](CHANGELOG.md).
 - Snap multiple-track selection is conservative and may require native `snap` commands for explicit channel choice.
 - Existing GitHub releases without a valid manifest and matching binary asset cannot self-update automatically.
 - Experimental backends need broader validation on real distributions and host setups.
-- Python and Node project-scope policies remain intentionally cautious.
+- Python and Node project-scope policies remain intentionally cautious; Cargo host maintenance intentionally excludes project dependencies.
+- rpm-ostree and Cargo support still require wider real-host validation.
 - Signal forwarding and deeper trusted-path validation remain future hardening work.
 
 ## License

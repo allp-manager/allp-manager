@@ -87,7 +87,7 @@ fn select_candidate_inner(
     let registry_non_exact = candidates.len() == 1
         && matches!(
             candidates[0].domain,
-            PackageDomain::Python | PackageDomain::Node
+            PackageDomain::Python | PackageDomain::Node | PackageDomain::Rust
         )
         && candidates[0].match_kind != MatchKind::Exact;
     if candidates.len() == 1 && !registry_non_exact && (!prompt_single || no_interactive) {

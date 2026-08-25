@@ -148,6 +148,26 @@ impl BackendDiscovery {
             {
                 continue;
             }
+            if let Some(message) = backend.platform_incompatibility(platform) {
+                report_entries.push(BackendDetection {
+                    backend_id: backend.id().to_owned(),
+                    backend_name: backend.display_name().to_owned(),
+                    category: backend.category(),
+                    package_domains: backend.package_domains().to_vec(),
+                    state: DetectionState::FoundButUnavailable,
+                    capabilities: backend.capabilities().to_vec(),
+                    aliases: backend
+                        .aliases()
+                        .iter()
+                        .map(|alias| (*alias).to_owned())
+                        .collect(),
+                    commands: BTreeMap::new(),
+                    missing: Vec::new(),
+                    message: Some(message),
+                    homebrew: None,
+                });
+                continue;
+            }
             if backend.id() == "brew" {
                 let homebrew = self.homebrew_locator.locate(platform, privilege, runner);
                 let mut commands = CommandMap::new();

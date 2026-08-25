@@ -81,7 +81,7 @@ Related matches are kept visible when multiple backends have meaningful candidat
 
 When exactly one strong candidate remains and every eligible backend completed successfully, Allp may select that package for planning. Selection is not execution permission: real installs still render the execution plan and ask `Install this package? [Y/n]` unless `--yes` is supplied.
 
-Python and Node registry packages show source/registry separately from installer choices. Fuzzy Python or Node matches are never installed automatically.
+Python, Node, and Rust registry packages show source/registry separately from installer choices. Fuzzy Python, Node, or Rust matches are never installed automatically.
 
 Snap install planning is metadata-gated:
 

@@ -45,6 +45,7 @@ pub enum SoftwareType {
     LanguageLibrary,
     NodePackage,
     PythonPackage,
+    RustCrate,
     OfficialInstaller,
     Unknown,
 }

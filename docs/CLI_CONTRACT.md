@@ -91,12 +91,12 @@ allp self-update --update-channel stable
 allp self-update --update-channel prerelease
 ```
 
-`--from` accepts backend IDs and documented aliases. Examples: `python`, `pypi`, `pip`, `pipx`, `uv`, `node`, `npm`, `pnpm`, `yarn`, `brew`, `homebrew`, and `linuxbrew`.
+`--from` accepts backend IDs and documented aliases. Examples: `python`, `pypi`, `pip`, `pipx`, `uv`, `node`, `npm`, `pnpm`, `yarn`, `rust`, `cargo`, `crates.io`, `brew`, `homebrew`, `linuxbrew`, `rpm-ostree`, and `bazzite`.
 
 `--scope` is a broad category selector:
 
 - `apps`: Apps and tools. Searches system package managers, universal application managers, and Homebrew formula/cask sources.
-- `dev`: Developer ecosystems. Searches Python/PyPI and Node.js/npm-registry sources.
+- `dev`: Developer ecosystems. Searches Python/PyPI, Node.js/npm-registry, and Rust/crates.io sources.
 - `all`: All sources. Displays results in this order: System Packages, Universal Applications, Developer Ecosystems.
 
 `--from` is more precise than `--scope` and selects a backend, source, ecosystem, or installer. Incompatible combinations, such as `--scope dev --from apt`, are rejected with a CLI error. Without `--from` or `--scope`, interactive search and install ask the user to choose exactly one of: Apps and tools, Developer ecosystems, All sources.

@@ -107,6 +107,8 @@ docs-check:
 	test -f docs/REGRESSION_GUARDRAILS.md
 	test -f docs/TERMINAL_UI.md
 	test -f docs/HOMEBREW_BACKEND.md
+	test -f docs/RUST_BACKEND.md
+	test -f docs/BAZZITE_BACKEND.md
 	test -f docs/assets/tui-maintenance.svg
 	test -f docs/SELF_UPDATE.md
 	test -f docs/RELEASE_MANIFEST.md

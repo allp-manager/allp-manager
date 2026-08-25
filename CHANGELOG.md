@@ -4,8 +4,33 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-25
+
+### Release Title
+
+Allp v0.5.0 — Homebrew, Rust/Cargo, and Bazzite
+
+### Added
+
+- A Rust/Cargo development backend for crates.io binary tools, including
+  search, install, remove, list, info, original-user execution, and optional
+  global upgrades through the community `cargo-update` subcommand.
+- A transactional rpm-ostree backend for Bazzite and Fedora Atomic-style
+  systems, including repository search, package layering/removal, booted
+  deployment inventory, rpm-md refresh, and system-image upgrade plans.
+- Canonical Rust and Cargo identities, a dedicated Rust package domain, CLI
+  aliases, capability documentation, fake-PATH integration coverage, and
+  English/Persian release documentation.
+
 ### Changed
 
+- Bazzite is recognized as a Fedora-family image-based distribution. DNF host
+  mutations are disabled there so package changes route through rpm-ostree.
+- rpm-ostree layering plans explain that the change is staged until reboot and
+  that Bazzite recommends Homebrew, Flatpak, or containers before host
+  layering.
+- Cargo host maintenance is restricted to global binary tools and never runs
+  project dependency or lockfile mutation commands.
 - Confirmed maintenance runs validate administrator access with `sudo -v`
   before the live dashboard starts, then use noninteractive `sudo -n --` for
   root-required children.
@@ -19,6 +44,15 @@ All notable changes to Allp will be documented in this file.
   date.
 - APT metadata refreshes no longer receive `-y`; the flag remains limited to
   confirmed APT upgrades.
+- PTY fake-PATH tests now preserve their isolated PATH inside the spawned shell,
+  preventing host-installed developer tools from affecting alternative-search
+  coverage.
+
+### Known Limitations
+
+- Cargo upgrade needs the optional community `cargo-update` subcommand.
+- Cargo and rpm-ostree parser behavior still needs broader validation on real
+  Rust and Bazzite hosts.
 
 ## [0.4.0] - 2026-08-13
 

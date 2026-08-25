@@ -568,7 +568,7 @@ fn terminate_process_tree(child: &mut Child) -> AllpResult<()> {
 
         let _ = child.wait();
 
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(unix))]

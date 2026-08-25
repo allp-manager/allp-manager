@@ -41,6 +41,18 @@ Implementation tasks live here. Product direction and larger milestones live in 
   and `upgrade`, with native logs, colored outcome cards, a live footer, and
   `--no-tui` classic-stream fallback.
 
+## Completed In 0.5.0
+
+- [x] Add Rust/Cargo package management for crates.io binary tools without
+  mutating project manifests or lockfiles.
+- [x] Add optional Cargo binary upgrades through the community `cargo-update`
+  subcommand.
+- [x] Add transactional rpm-ostree package and system-image support for
+  Bazzite/Fedora Atomic hosts.
+- [x] Disable DNF host mutations on Bazzite and document the Homebrew,
+  Flatpak, and container preference before package layering.
+- [x] Bump Cargo/release metadata and English/Persian documentation to 0.5.0.
+
 ## Remaining Implementation Work
 
 - [ ] Broaden backend parser fixture coverage
@@ -66,6 +78,14 @@ Implementation tasks live here. Product direction and larger milestones live in 
   - Reason: Homebrew support is implemented but still marked experimental.
   - Module: `src/backends/homebrew.rs`, `src/bootstrap/homebrew.rs`
   - Target: 0.4.x alpha hardening
+
+- [ ] Validate Cargo and rpm-ostree on real hosts
+  - Priority: P1
+  - Reason: Parser and plan coverage uses deterministic fixtures; Cargo output
+    and Bazzite deployment behavior still need physical-host validation.
+  - Module: `src/backends/development/rust.rs`,
+    `src/backends/system/rpm_ostree.rs`
+  - Target: 0.5.x alpha hardening
 
 - [ ] Validate the live maintenance dashboard in real terminals
   - Priority: P1
@@ -112,7 +132,7 @@ Implementation tasks live here. Product direction and larger milestones live in 
   - Module: documentation, release metadata
   - Target: 0.5
 
-## Explicit Non-Goals For 0.4.0
+## Explicit Non-Goals For 0.5.0
 
 - A general-purpose full-screen TUI beyond the maintenance dashboard
 - Plugin marketplace

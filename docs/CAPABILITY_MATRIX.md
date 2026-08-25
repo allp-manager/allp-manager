@@ -14,6 +14,7 @@ Stable rows have the strongest test and parser coverage. Experimental rows are i
 | APT | Stable | Stable | Stable | Stable | Stable | Stable | Stable | Stable |
 | Pacman | Stable | Stable | Stable | Stable | Stable | Stable | Stable | Stable |
 | DNF / DNF5 | Stable | Stable | Stable | Stable | Stable | Stable | Stable | Stable |
+| rpm-ostree / Bazzite / Fedora Atomic | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |
 | Zypper | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |
 | APK | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |
 | XBPS | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |
@@ -25,17 +26,25 @@ Stable rows have the strongest test and parser coverage. Experimental rows are i
 | Homebrew / Linuxbrew | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |
 | PyPI + pip/pipx/uv | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |
 | npm registry + npm/pnpm/Yarn | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental | Experimental |
+| crates.io + Cargo | Experimental | Experimental | Experimental | Experimental | Unsupported | Experimental¹ | Experimental | Experimental |
 | Nix / NixOS | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
-| rpm-ostree | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 | transactional-update | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 | Guix | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 | Slackware tools | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
-| Cargo | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 | Composer | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 | Go | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 
 Unsupported rows are roadmap markers or explicitly deferred ecosystems, not hidden features.
 
+¹ Cargo upgrade requires the optional community `cargo-update` subcommand and
+only manages globally installed binary crates. Project dependencies and
+lockfiles are outside host maintenance.
+
 Snap `Install` uses snapd REST wide discovery plus separate exact name resolution when the local socket is reachable. A valid `404 snap-not-found` is authoritative stale metadata and cannot trigger CLI fallback. CLI fallback is restricted to concrete socket/connect/endpoint/response failures. Classic confinement, canonical names, publisher verification, stable channels, architecture, and installed state are resolved before any install plan; REST changes are monitored to a terminal state.
 
 Flatpak `Search` requires both an available executable and at least one configured remote. Installed-without-remotes is a distinct supported diagnostic state, not a no-match result. Flathub setup is an explicit separately confirmed bootstrap action.
+
+On Bazzite, the DNF backend is disabled for host mutations even if a DNF helper
+is present. rpm-ostree search/layering, deployment inventory, metadata refresh,
+and image upgrade are used instead. Layering remains explicitly labeled as a
+last-resort operation that normally needs a reboot.

@@ -10,6 +10,7 @@ use crate::{
         PackageInfo, PrivilegeRequirement,
     },
     execution::ProcessRunner,
+    platform::PlatformContext,
 };
 
 pub struct DnfBackend;
@@ -43,6 +44,14 @@ impl Backend for DnfBackend {
     }
     fn command_requirements(&self) -> &'static [CommandRequirement] {
         REQUIREMENTS
+    }
+
+    fn platform_incompatibility(&self, platform: &PlatformContext) -> Option<String> {
+        bazzite_uses_rpm_ostree(platform.distribution.as_ref().map(|value| value.id.as_str()))
+            .then(|| {
+                "Bazzite is image-based; host package layering and system upgrades use rpm-ostree instead of DNF"
+                    .to_owned()
+            })
     }
 
     fn search(
@@ -286,6 +295,10 @@ impl Backend for DnfBackend {
     }
 }
 
+fn bazzite_uses_rpm_ostree(distribution_id: Option<&str>) -> bool {
+    distribution_id.is_some_and(|id| id.eq_ignore_ascii_case("bazzite"))
+}
+
 struct PlanSpec {
     operation: OperationKind,
     action: &'static str,
@@ -309,5 +322,18 @@ fn make_plan(backend: &DnfBackend, program: &std::path::Path, spec: PlanSpec) ->
         privilege: PrivilegeRequirement::RootRequired,
         requires_root: true,
         interactive: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bazzite_uses_rpm_ostree;
+
+    #[test]
+    fn dnf_host_mutations_are_disabled_for_bazzite_only() {
+        assert!(bazzite_uses_rpm_ostree(Some("bazzite")));
+        assert!(bazzite_uses_rpm_ostree(Some("BAZZITE")));
+        assert!(!bazzite_uses_rpm_ostree(Some("fedora")));
+        assert!(!bazzite_uses_rpm_ostree(None));
     }
 }

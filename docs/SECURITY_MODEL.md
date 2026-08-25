@@ -29,7 +29,7 @@ When Allp is already root, it does not add nested sudo. When Allp was launched t
 
 Direct-root user-scoped operations are refused when no original user can be established.
 
-Python and Node registry packages may be malicious or abandoned. Allp does not infer official status, does not automatically install fuzzy registry matches, and does not run installer hooks during dry run.
+Python, Node, and Rust registry packages may be malicious or abandoned. Allp does not infer official status, does not automatically install fuzzy registry matches, and does not run installer or Cargo build hooks during dry run.
 
 ## Native Output
 

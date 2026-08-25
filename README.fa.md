@@ -4,14 +4,14 @@
 
 > یک CLI شفاف برای Package Managerهایی که همین حالا روی سیستم شما نصب هستند.
 
-Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، Flatpak، Snap، Homebrew/Linuxbrew، Python و Node را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
+Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه Build فعلی: **0.4.0.1** (نسخه پایه Cargo: **0.4.0**)
+نسخه Build فعلی: **0.5.0.1** (نسخه پایه Cargo: **0.5.0**)
 سطح بلوغ: **Public Alpha**
 
 ## چرا Allp وجود دارد
 
-نرم افزار در لینوکس فقط در یک جا نیست: بخشی در مخزن های سیستم، بخشی در Flatpak یا Snap، بخشی در Homebrew، و بخشی در اکوسیستم های Python و Node قرار دارد. Allp برای این منابع یک سطح فرمان واحد می سازد، اما Native Package Managerها را مخفی یا جایگزین نمی کند.
+نرم افزار در لینوکس فقط در یک جا نیست: بخشی در مخزن های سیستم، بخشی در Flatpak یا Snap، بخشی در Homebrew، و بخشی در اکوسیستم های Python، Node و Rust/Cargo قرار دارد. Allp برای این منابع یک سطح فرمان واحد می سازد، اما Native Package Managerها را مخفی یا جایگزین نمی کند.
 
 اصل های پروژه:
 
@@ -24,19 +24,23 @@ Allp Package Manager تازه ای نیست. هسته runtime آن cross-platfor
 
 ## سیستم ها و Backendها
 
-لایه platform توزیع و خانواده Linux، macOS، Windows، WSL، container، معماری، libc، کاربرها، مالکیت executable و مسیرهای داده را تشخیص می دهد. عملیات package در Linux بالغ تر است. Homebrew روی macOS هنوز Experimental است؛ Windows فعلا compilation، diagnostics، انتخاب release target و self-replacement به روش deferred را پوشش می دهد و Snap/Flatpak لینوکسی را advertise نمی کند.
+لایه platform توزیع و خانواده Linux، از جمله Bazzite به‌عنوان host image-based از خانواده Fedora، و همچنین macOS، Windows، WSL، container، معماری، libc، کاربرها، مالکیت executable و مسیرهای داده را تشخیص می دهد. عملیات package در Linux بالغ تر است. Homebrew روی macOS هنوز Experimental است؛ Windows فعلا compilation، diagnostics، انتخاب release target و self-replacement به روش deferred را پوشش می دهد و Snap/Flatpak لینوکسی را advertise نمی کند.
 
 | Source | وضعیت | Search | Install | Remove | Update | Upgrade | List | Info |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | APT | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | Pacman | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | DNF / DNF5 | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
+| rpm-ostree / Bazzite / Fedora Atomic | Experimental | بله | بله | بله | بله | بله | بله | بله |
 | Flatpak | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | Snap | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | Zypper، APK، XBPS، Portage، eopkg، swupd | Experimental | بله | ترکیبی | ترکیبی | ترکیبی | ترکیبی | ترکیبی | ترکیبی |
 | Homebrew / Linuxbrew | Experimental | بله | بله | بله | بله | بله | بله | بله |
 | Python: PyPI با pip، pipx و uv | Experimental | بله | بله | بله | بله | بله | بله | بله |
 | Node: npm registry با npm، pnpm و Yarn | Experimental | بله | بله | بله | بله | بله | بله | بله |
+| Rust: crates.io با Cargo | Experimental | بله | بله | بله | خیر | اختیاری¹ | بله | بله |
+
+¹ ارتقای binaryهای Cargo به subcommand اختیاری و community-maintained به نام `cargo-update` نیاز دارد؛ Allp در نگهداری host هیچ‌وقت dependencyهای پروژه یا `Cargo.lock` را بازنویسی نمی‌کند.
 
 جزئیات بیشتر در [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md) آمده است.
 
@@ -59,7 +63,7 @@ allp --version
 allp update && allp upgrade
 ```
 
-`allp --version` نسخه نمایشی Build را نشان می دهد و `allp --version --verbose` نسخه پایه، revision، channel، commit، Build ID، target و رسمی بودن Build را نیز گزارش می کند. کانال پیش فرض `allp update`، Buildهای Continuous اعتبارسنجی شده شاخه `main` است؛ بنابراین یک اصلاح کوچک می تواند بدون تغییر SemVer از `0.4.0.1` به `0.4.0.2` به روز شود. برای Releaseهای tag شده از `--update-channel stable` استفاده کنید.
+`allp --version` نسخه نمایشی Build را نشان می دهد و `allp --version --verbose` نسخه پایه، revision، channel، commit، Build ID، target و رسمی بودن Build را نیز گزارش می کند. کانال پیش فرض `allp update`، Buildهای Continuous اعتبارسنجی شده شاخه `main` است؛ بنابراین یک اصلاح کوچک می تواند بدون تغییر SemVer از `0.5.0.1` به `0.5.0.2` به روز شود. برای Releaseهای tag شده از `--update-channel stable` استفاده کنید.
 
 `make install` باینری release را می سازد و آن را به
 `/usr/local/bin/allp` نصب می کند. برای همین کپی فایل از `sudo install` استفاده
@@ -91,6 +95,8 @@ allp search git
 allp install git
 allp install git --dry-run
 allp install pycharm
+allp install ripgrep --from cargo --dry-run
+allp install htop --from bazzite --dry-run
 allp update
 allp upgrade
 allp upgrade --allow-stale-metadata # فقط برای بازیابی صریح
@@ -123,9 +129,27 @@ sudo allp update --from homebrew --yes --skip-self-update
 جزئیات اعتبارسنجی و محدودیت‌های macOS/Linuxbrew در
 [راهنمای Homebrew](docs/HOMEBREW_BACKEND.md) است.
 
+Backend مربوط به Rust/Cargo فقط ابزارهای binary کاربر در crates.io را مدیریت
+می‌کند. Search، install، remove، list و info از فرمان‌های native خود Cargo
+استفاده می‌کنند. نگهداری host هیچ‌وقت `cargo add` یا `cargo update` اجرا
+نمی‌کند؛ بنابراین manifest یا lockfile پروژه تغییر نمی‌کند. دستور `allp
+upgrade --from cargo --target global` فقط در صورت وجود subcommand اختیاری
+`cargo-update`، binaryهای نصب‌شده را ارتقا می‌دهد. عملیات Cargo هنگام اجرای
+Allp با sudo در context کاربر اصلی اجرا می‌شود و هشدار compilation/build script
+را پیش از اجرا نشان می‌دهد. جزئیات در
+[راهنمای Rust/Cargo](docs/RUST_BACKEND.md) آمده است.
+
+در Bazzite، Allp عملیات host با DNF را غیرفعال می‌کند و برای package layering
+و ارتقای transactional image از rpm-ostree استفاده می‌کند. `update` فرمان
+`rpm-ostree refresh-md` و `upgrade` فرمان `rpm-ostree upgrade` را stage می‌کند؛
+install/remove هم deployment جدیدی می‌سازند که معمولاً پس از reboot فعال
+می‌شود. چون Bazzite layering را آخرین راه می‌داند، هر Plan ابتدا Homebrew،
+Flatpak یا container را پیشنهاد می‌کند. جزئیات در
+[راهنمای Bazzite](docs/BAZZITE_BACKEND.md) آمده است.
+
 ## داشبورد زندهٔ عملیات نگهداری
 
-در اجرای واقعی و تعاملی `update` یا `upgrade`، نسخهٔ ۰.۴.۰ Allp در مرحلهٔ اجرا
+در اجرای واقعی و تعاملی `update` یا `upgrade`، نسخهٔ ۰.۵.۰ Allp در مرحلهٔ اجرا
 یک داشبورد زندهٔ inline نشان می‌دهد. لاگ‌های Native در scrollback معمول
 ترمینال باقی می‌مانند، cardهای وضعیت و خطا اتفاق‌های مهم را جدا می‌کنند، و
 footer نام Backend فعال، action دقیق، زمان سپری‌شده و تکمیل صریح صف را نشان
@@ -159,6 +183,8 @@ allp install git --from apt --dry-run
 allp install pycharm --from snap --dry-run
 allp install black --from pipx --dry-run
 allp install typescript --from pnpm --dry-run
+allp install ripgrep --from cargo --dry-run
+allp install htop --from bazzite --dry-run
 ```
 
 ## Search و انتخاب تعاملی
@@ -166,7 +192,7 @@ allp install typescript --from pnpm --dry-run
 اگر برای `search` یا `install` گزینه های `--from` و `--scope` داده نشود، Allp در Terminal تعاملی یکی از سه Scope را می پرسد:
 
 - `apps`: Packageهای سیستم، Universal applicationها و Homebrew
-- `dev`: اکوسیستم های Python و Node
+- `dev`: اکوسیستم های Python، Node و Rust/Cargo
 - `all`: همه Sourceهای قابل استفاده
 
 نتیجه ها با سه برچسب نمایش داده می شوند: `Exact`، `Related` و `Fuzzy`. Matchهای Exact همیشه نمایش داده می شوند، Related برای هر Backend محدود است، و Fuzzy فقط با `--all` دیده می شود.
@@ -196,7 +222,7 @@ Allp معمولا باید با کاربر عادی اجرا شود. در اجر
 sudo allp update
 ```
 
-Allp دوباره sudo اضافه نمی کند. عملیات Root مستقیم اجرا می شوند و عملیات user-scoped مثل Homebrew، Python، Node و Flatpak-user در صورت وجود `SUDO_USER` با کاربر اصلی اجرا می شوند.
+Allp دوباره sudo اضافه نمی کند. عملیات Root مستقیم اجرا می شوند و عملیات user-scoped مثل Homebrew، Python، Node، Rust/Cargo و Flatpak-user در صورت وجود `SUDO_USER` با کاربر اصلی اجرا می شوند.
 
 گزینه `--yes` فقط تایید نهایی خود Allp را رد می‌کند و به‌طور عمومی فلگ تایید
 به ابزار Native اضافه نمی‌کند: APT upgrade فلگ مستند `-y` را می‌گیرد، اما APT
@@ -249,7 +275,7 @@ Providerهای ساختاریافته APT، DNF، Pacman، Zypper و APK می ت
 
 ## Python و Node
 
-در Python، Source برابر PyPI است و pip، pipx و uv نقش Installer دارند. در Node، Source برابر npm registry است و npm، pnpm و Yarn نقش Installer دارند. صرفا مشابه بودن نام، یک package رجیستری را official نمی کند و Fuzzy matchهای Python/Node به صورت خودکار نصب نمی شوند.
+در Python، Source برابر PyPI است و pip، pipx و uv نقش Installer دارند. در Node، Source برابر npm registry است و npm، pnpm و Yarn نقش Installer دارند. در Rust، Source برابر crates.io و Installer برابر Cargo است. صرفا مشابه بودن نام، یک package رجیستری را official نمی کند و Fuzzy matchهای Python/Node/Rust به صورت خودکار نصب نمی شوند.
 
 ```bash
 allp search openai --from python
@@ -350,7 +376,7 @@ make install-check
 
 workflow انتشار صریح است. مرحله آماده سازی محلی چیزی push نمی کند، GitHub
 Release نمی سازد و assetی upload نمی کند. GitHub Release فقط وقتی ساخته می شود
-که tag نسخه ای مثل `v0.4.0` push شود.
+که tag نسخه ای مثل `v0.5.0` push شود.
 
 یک بار در هر clone:
 
@@ -363,28 +389,28 @@ make hooks-install
 ```bash
 make release-prepare BUMP=patch
 # یا:
-make release-prepare VERSION=0.4.0
+make release-prepare VERSION=0.5.0
 ```
 
 `release-prepare` نسخه package، فایل Cargo.lock از مسیر Cargo، CHANGELOG،
 اشاره های نسخه در READMEها، title قابل track مثل
-`release/RELEASE_TITLE_v0.4.0.txt`، و draft قابل track مثل
-`release/RELEASE_NOTES_v0.4.0.md` را به روز می کند و بعد `make quality` را
+`release/RELEASE_TITLE_v0.5.0.txt`، و draft قابل track مثل
+`release/RELEASE_NOTES_v0.5.0.md` را به روز می کند و بعد `make quality` را
 اجرا می کند. فقط اگر quality gate موفق باشد marker محلی و ignored نوشته می شود.
 
 فایل های آماده شده را مثل همیشه commit کنید، مثلا از VS Code Source Control:
 
 ```text
-release: Allp v0.4.0
+release: Allp v0.5.0
 ```
 
 فقط commitی که subject آن با `release:` شروع شود و با marker آماده شده همخوان
 باشد finalize می شود. hook بعد از commit این خروجی های محلی را می سازد:
 
-- tag محلی annotated با نام `v0.4.0`
-- `dist/allp-v0.4.0-source.tar.gz`
-- `dist/allp-v0.4.0-source.tar.gz.sha256`
-- `dist/RELEASE_NOTES_v0.4.0.md`
+- tag محلی annotated با نام `v0.5.0`
+- `dist/allp-v0.5.0-source.tar.gz`
+- `dist/allp-v0.5.0-source.tar.gz.sha256`
+- `dist/RELEASE_NOTES_v0.5.0.md`
 
 آرشیو سورس از همان tag commit شده با `git archive` ساخته می شود. commitهای
 معمولی مثل `fix: improve Snap parsing` نسخه را تغییر نمی دهند، tag نمی سازند،
@@ -408,8 +434,10 @@ x86_64 build و test می شوند؛ archive و checksum آنها، source archi
 |---|---|
 | قفل APT | صبر کنید Package Manager فعلی تمام شود. Lock fileهای dpkg را حذف نکنید. |
 | مشکل DNF/RPM database | Permission یا سلامت rpmdb را بررسی و اصلاح کنید. |
+| تغییر package روی host Bazzite | ابتدا Homebrew، Flatpak یا container را ترجیح دهید؛ اگر layering ضروری است، Plan مربوط به rpm-ostree را بررسی و پس از پایان reboot کنید. |
 | نبودن pip، pipx یا uv | `allp detect --verbose` را اجرا کنید و ابزار مورد نیاز را آگاهانه نصب یا تنظیم کنید. |
 | Permission برای npm global | prefix مربوط به npm را user-owned کنید یا از Node manager کاربری استفاده کنید؛ Allp برای npm global sudo اضافه نمی کند. |
+| Cargo upgrade در دسترس نیست | crate اختیاری `cargo-update` را آگاهانه نصب کنید، یا binaryهای Cargo را دستی نگهداری کنید. |
 | Flatpak بدون remote | `allp doctor` را اجرا کنید و فقط در صورت نیاز Plan جداگانه Flathub را تایید کنید. |
 | Snap exact unavailable | diagnostics و `allp doctor` را ببینید؛ REST `snap-not-found` معتبر authoritative است. |
 | Snap CLI fallback | diagnostics دلیل fallback و argv/stdout/stderr دقیق را نشان می دهد. |
@@ -457,17 +485,18 @@ Parser و flagهای مخصوص هر Backend باید داخل همان Backend 
 
 کارهای نزدیک شامل validation روی distroهای واقعی، fixtureهای بیشتر، انتخاب‌گر
 تعاملی channel در Snap، تست عمیق‌تر signal/trusted-path و اعتبارسنجی Homebrew
-روی host واقعی است. نسخهٔ ۰.۴.۰ TUI متمرکز عملیات نگهداری را اضافه می‌کند؛ TUI
-تمام‌صفحه و GUI گسترده‌تر، همراه با اکوسیستم‌هایی مثل Cargo، Composer، Go،
+روی host واقعی Homebrew، Cargo و Bazzite است. نسخهٔ ۰.۵.۰ مدیریت ابزارهای binary
+Rust/Cargo و پشتیبانی transactional از rpm-ostree در Bazzite را اضافه می‌کند؛
+TUI تمام‌صفحه و GUI گسترده‌تر، همراه با اکوسیستم‌هایی مثل Composer، Go،
 RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 
 [ROADMAP.md](ROADMAP.md) و [TODO.md](TODO.md) را ببینید.
 
 ## Changelog
 
-نسخهٔ `0.4.0` داشبورد زندهٔ عملیات نگهداری، fallback کلاسیک `--no-tui`،
-اعتبارسنجی قوی‌تر کاربر اصلی Homebrew و hardening مربوط به self-update/reinstall
-را اضافه می‌کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
+نسخهٔ `0.5.0` مدیریت ابزارهای binary در Rust/Cargo و پشتیبانی
+Bazzite/rpm-ostree را با حفظ مرزهای user-scope مربوط به Homebrew، Node و Python
+اضافه می‌کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 
 ## محدودیت های شناخته شده
 
@@ -475,7 +504,8 @@ RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 - انتخاب چند track/channel در Snap محافظه کارانه است و ممکن است به دستور Native `snap` نیاز داشته باشد.
 - Release قدیمی GitHub بدون manifest و binary سازگار نمی تواند خودکار self-update شود.
 - Backendهای Experimental باید روی سیستم های واقعی بیشتری اعتبارسنجی شوند.
-- سیاست های پروژه ای Python و Node عمدا محتاطانه هستند.
+- سیاست های پروژه ای Python و Node عمدا محتاطانه هستند؛ نگهداری Cargo هم dependencyهای پروژه را عمداً پوشش نمی‌دهد.
+- پشتیبانی rpm-ostree و Cargo هنوز به validation روی hostهای واقعی بیشتری نیاز دارد.
 - signal forwarding و trusted-path validation عمیق تر هنوز کار آینده است.
 
 ## مجوز

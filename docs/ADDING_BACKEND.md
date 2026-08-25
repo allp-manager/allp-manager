@@ -95,4 +95,4 @@ tests/fixtures/<backend>/
 
 ## Development Ecosystems
 
-Development backends require explicit registry/source and installer modeling. Python uses PyPI as source with pip/pipx/uv installers. Node uses the npm registry as source with npm/pnpm/Yarn installers. A development backend must not silently modify project dependencies or lockfiles through generic host-level operations.
+Development backends require explicit registry/source and installer modeling. Python uses PyPI as source with pip/pipx/uv installers. Node uses the npm registry as source with npm/pnpm/Yarn installers. Rust uses crates.io as source with Cargo as installer. A development backend must not silently modify project dependencies or lockfiles through generic host-level operations.

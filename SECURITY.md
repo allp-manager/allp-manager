@@ -24,7 +24,9 @@ Use the repository's private security advisory channel.
 - If Allp is invoked through sudo, user-scoped plans run as the original sudo user when possible.
 - Homebrew, Python user tooling, Node user tooling, and Flatpak user operations must not create root-owned files in a user's home, project, cache, environment, or prefix.
 - Package-manager output is not treated as trusted code.
-- Python and Node registry results are not treated as official merely because names look familiar.
+- Python, Node, and Rust registry results are not treated as official merely because names look familiar.
+- Cargo plans remain user-scoped and warn that local compilation can execute crate build scripts.
+- Bazzite host mutations use rpm-ostree deployment plans; DNF host installation is disabled on Bazzite.
 - Allp does not collect telemetry.
 - Allp does not store sudo passwords.
 - Allp does not add automatic confirmation flags.

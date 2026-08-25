@@ -30,6 +30,7 @@ pub enum PackageDomain {
     Homebrew,
     Python,
     Node,
+    Rust,
 }
 
 impl PackageDomain {
@@ -40,6 +41,7 @@ impl PackageDomain {
             Self::Homebrew => "Homebrew",
             Self::Python => "Python Packages",
             Self::Node => "Node Packages",
+            Self::Rust => "Rust Crates",
         }
     }
 
@@ -51,6 +53,9 @@ impl PackageDomain {
             Self::Node => {
                 Some("Node registry packages may run lifecycle scripts during installation.")
             }
+            Self::Rust => Some(
+                "Rust crates are compiled locally and may execute build scripts during installation.",
+            ),
             _ => None,
         }
     }
@@ -164,7 +169,10 @@ impl SearchScope {
                 PackageDomain::System | PackageDomain::Universal | PackageDomain::Homebrew
             ),
             Self::DeveloperEcosystems => {
-                matches!(domain, PackageDomain::Python | PackageDomain::Node)
+                matches!(
+                    domain,
+                    PackageDomain::Python | PackageDomain::Node | PackageDomain::Rust
+                )
             }
             Self::AllSources => true,
         }
@@ -230,6 +238,7 @@ impl fmt::Display for PackageDomain {
             Self::Homebrew => "homebrew",
             Self::Python => "python",
             Self::Node => "node",
+            Self::Rust => "rust",
         })
     }
 }
@@ -290,7 +299,9 @@ impl PackageCandidate {
                     ResultSection::SystemPackages
                 }
             }
-            PackageDomain::Python | PackageDomain::Node => ResultSection::DeveloperEcosystems,
+            PackageDomain::Python | PackageDomain::Node | PackageDomain::Rust => {
+                ResultSection::DeveloperEcosystems
+            }
         }
     }
 }
@@ -308,6 +319,7 @@ fn software_type_for(domain: PackageDomain, artifact_kind: &str) -> SoftwareType
         }
         PackageDomain::Python => SoftwareType::PythonPackage,
         PackageDomain::Node => SoftwareType::NodePackage,
+        PackageDomain::Rust => SoftwareType::RustCrate,
     }
 }
 
