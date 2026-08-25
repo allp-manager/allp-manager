@@ -332,8 +332,8 @@ pub fn run(
                     tui.resume_after_prompt();
                 }
             } else {
-                // The footer was deliberately cleared before sudo took the
-                // terminal. Do not redraw a live dashboard after a failed,
+                // The progress line was deliberately cleared before sudo took
+                // the terminal. Do not redraw it after a failed,
                 // cancelled, or timed-out reauthentication: continue the
                 // remaining report in the classic stream instead.
                 live_tui = None;
@@ -503,23 +503,16 @@ pub fn run(
                                     runtime.backend.authorize_noninteractive(plan);
                                 }
                             }
-                            if live_tui.is_none() {
-                                context.renderer.planned_operations(
-                                    &follow_up.plans,
-                                    context.privilege_context,
-                                );
-                            } else if let Some(tui) = live_tui.as_mut() {
-                                tui.show_follow_up_plans(
-                                    &follow_up.plans,
-                                    context.privilege_context,
-                                );
-                            }
                             let follow_up_confirmed = if follow_up.plans.is_empty() {
                                 false
                             } else {
                                 if let Some(tui) = live_tui.as_mut() {
                                     tui.prepare_for_prompt();
                                 }
+                                context.renderer.planned_operations(
+                                    &follow_up.plans,
+                                    context.privilege_context,
+                                );
                                 let confirmation = confirm_follow_up(context, operation_name);
                                 if let Some(tui) = live_tui.as_mut() {
                                     tui.resume_after_prompt();
@@ -690,13 +683,12 @@ pub fn run(
         records,
     };
     if let Some(tui) = live_tui.as_mut() {
-        tui.finish(&report, context.verbose > 0, context.dry_run);
-    } else {
-        update_phase(context, operation_name, "Phase 6: Summary");
-        context
-            .renderer
-            .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+        tui.finish();
     }
+    update_phase(context, operation_name, "Phase 6: Summary");
+    context
+        .renderer
+        .maintenance_summary(&report, context.verbose > 0, context.dry_run);
     Ok(report)
 }
 

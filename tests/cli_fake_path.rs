@@ -139,7 +139,7 @@ fn run_allp_pty_with_tui(path: &Path, args: &[&str], input: &str) -> Output {
 /// only after a fake sudo password prompt is visibly rendered on the PTY.
 ///
 /// This models the ownership boundary that matters here: the preflight sudo
-/// prompt owns the terminal before the live dashboard starts; a dashboard must
+/// prompt owns the terminal before live progress starts; a progress renderer must
 /// never be able to consume or obscure that password input.
 fn run_allp_pty_with_tui_after_prompt(
     path: &Path,
@@ -3027,7 +3027,7 @@ fn apt_stale_metadata_override_runs_upgrade_with_native_yes_flag() {
 }
 
 #[test]
-fn maintenance_tui_streams_native_logs_cards_and_live_progress_in_a_pty() {
+fn maintenance_tui_streams_native_output_with_only_apt_style_progress_in_a_pty() {
     let dir = temp_dir("maintenance-tui");
     let marker = dir.join("executed");
     install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
@@ -3041,11 +3041,12 @@ fn maintenance_tui_streams_native_logs_cards_and_live_progress_in_a_pty() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let rendered = stdout(&output);
-    assert!(rendered.contains("ALLP · UPDATE · LIVE"));
-    assert!(rendered.contains("RUNNING · 1/1 · APT"));
+    assert!(rendered.contains("Progress: ["));
+    assert!(!rendered.contains("ALLP · UPDATE · LIVE"));
+    assert!(!rendered.contains("RUNNING ·"));
     assert!(rendered.contains("apt update native output"));
-    assert!(rendered.contains("UPDATE SUMMARY"));
-    assert!(rendered.contains("["), "footer progress bar should render");
+    assert!(!rendered.contains("› apt update native output"));
+    assert!(rendered.contains("Update Summary"));
 }
 
 #[test]
@@ -3076,16 +3077,16 @@ fn maintenance_tui_sudo_preflight_owns_a_normal_tty_before_live_rendering() {
     let prompt = rendered
         .find("ALLP_TEST_SUDO_PASSWORD_PROMPT")
         .expect("the fake sudo password prompt should be rendered");
-    let dashboard = rendered
-        .find("ALLP · UPDATE · LIVE")
-        .expect("live dashboard should render after sudo preflight");
+    let progress = rendered
+        .find("Progress: [")
+        .expect("the progress line should render after sudo preflight");
     assert!(
-        prompt < dashboard,
-        "the password prompt must occur before the dashboard takes terminal ownership: {rendered}"
+        prompt < progress,
+        "the password prompt must occur before progress rendering starts: {rendered}"
     );
     assert!(
-        !rendered[dashboard..].contains("ALLP_TEST_SUDO_PASSWORD_PROMPT"),
-        "no interactive sudo prompt may appear after the live dashboard starts: {rendered}"
+        !rendered[progress..].contains("ALLP_TEST_SUDO_PASSWORD_PROMPT"),
+        "no interactive sudo prompt may appear inside live progress: {rendered}"
     );
     assert!(
         !rendered.contains("ALLP_TEST_UNEXPECTED_INTERACTIVE_CHILD_PROMPT"),
@@ -3305,7 +3306,7 @@ fn failed_maintenance_privilege_preflight_blocks_backends_before_tui_or_native_e
         rendered.contains("0 failed"),
         "the privilege failure must not be classified as a native backend failure: {rendered}"
     );
-    assert!(!rendered.contains("ALLP · UPGRADE · LIVE"));
+    assert!(!rendered.contains("Progress: ["));
     assert!(!rendered.contains("still running"));
     assert!(
         !apt_marker.exists(),
@@ -3339,35 +3340,35 @@ fn maintenance_tui_reauthenticates_after_credential_expiry_and_resumes_cleanly()
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let rendered = stdout(&output);
-    let dashboard = rendered
-        .find("ALLP · UPGRADE · LIVE")
-        .expect("the live dashboard should start after initial preflight");
+    let progress = rendered
+        .find("Progress: [")
+        .expect("live progress should start after initial preflight");
     let reauth_prompt = rendered
         .find("ALLP_TEST_SUDO_REAUTH_PROMPT")
         .expect("expired credentials should invoke a second sudo -v outside the footer");
     assert!(
-        dashboard < reauth_prompt,
-        "the credential-expiry prompt should happen after the dashboard has begun"
+        progress < reauth_prompt,
+        "the credential-expiry prompt should happen after progress has begun"
     );
     let before_prompt = &rendered[..reauth_prompt];
     let footer_clear = before_prompt
         .rfind("\x1b[2K")
-        .expect("the dashboard footer should be cleared before reauthentication");
+        .expect("the progress line should be cleared before reauthentication");
     assert!(
         before_prompt[footer_clear + "\x1b[2K".len()..].ends_with('\n'),
         "the password prompt must start on a fresh line after the footer is cleared: {rendered}"
     );
     let after_reauth = &rendered[reauth_prompt..];
     let resumed_running = after_reauth
-        .find("RUNNING ·")
-        .expect("the dashboard should resume with a pending privileged operation");
+        .find("Progress: [")
+        .expect("progress should resume with a pending privileged operation");
     assert!(
         resumed_running > 0,
         "no pending operation may begin until the reauthentication prompt is resolved"
     );
     assert!(
-        rendered.contains("UPGRADE SUMMARY"),
-        "the dashboard should finish normally after reauthentication"
+        rendered.contains("Upgrade Summary"),
+        "the operation should finish normally after reauthentication"
     );
     assert!(
         !rendered.contains("ALLP_TEST_UNEXPECTED_INTERACTIVE_CHILD_PROMPT"),
@@ -3428,7 +3429,7 @@ fn maintenance_tui_reauthenticates_after_credential_expiry_and_resumes_cleanly()
 }
 
 #[test]
-fn failed_tui_reauthentication_keeps_the_dashboard_suspended() {
+fn failed_tui_reauthentication_keeps_live_progress_suspended() {
     let dir = temp_dir("maintenance-tui-sudo-reauthentication-failure");
     let apt_marker = dir.join("apt-executed");
     let snap_marker = dir.join("snap-executed");
@@ -3452,16 +3453,12 @@ fn failed_tui_reauthentication_keeps_the_dashboard_suspended() {
         .expect("the failed reauthentication should own the normal terminal");
     let after_prompt = &rendered[prompt..];
     assert!(
-        !after_prompt.contains("Queue:"),
-        "the live footer must not resume after failed reauthentication: {rendered}"
+        !after_prompt.contains("Progress: ["),
+        "live progress must not resume after failed reauthentication: {rendered}"
     );
     assert!(
         !after_prompt.contains("RUNNING ·"),
         "no subsequent operation may start after failed reauthentication: {rendered}"
-    );
-    assert!(
-        !after_prompt.contains("ALLP · UPGRADE · LIVE"),
-        "the dashboard header must not be re-entered after failed reauthentication: {rendered}"
     );
     assert!(
         after_prompt.contains("Blocked"),
@@ -3538,9 +3535,11 @@ fn maintenance_tui_reviews_and_tracks_a_follow_up_upgrade_queue() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let rendered = stdout(&output);
-    assert!(rendered.contains("FOLLOW-UP PLAN · 1/1 · Homebrew"));
-    assert!(rendered.contains("QUEUE EXTENDED"));
-    assert!(rendered.contains("2/2 · Homebrew"));
+    assert!(rendered.contains("Planned Operation"));
+    assert!(rendered.contains("Homebrew"));
+    assert!(!rendered.contains("FOLLOW-UP PLAN"));
+    assert!(!rendered.contains("QUEUE EXTENDED"));
+    assert!(rendered.contains("2/2"));
     let executed = fs::read_to_string(marker).expect("refresh and upgrade should run");
     assert!(executed.contains("update-if-needed"));
     assert!(executed.contains("upgrade no_auto=1"));
@@ -3568,7 +3567,7 @@ fn no_tui_keeps_the_classic_maintenance_stream_in_a_pty() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let rendered = stdout(&output);
-    assert!(!rendered.contains("ALLP · UPDATE · LIVE"));
+    assert!(!rendered.contains("Progress: ["));
     assert!(rendered.contains("APT update started"));
     assert!(rendered.contains("apt update native output"));
 }
@@ -3595,7 +3594,7 @@ fn no_interactive_keeps_the_classic_maintenance_stream_in_a_pty() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let rendered = stdout(&output);
-    assert!(!rendered.contains("ALLP · UPDATE · LIVE"));
+    assert!(!rendered.contains("Progress: ["));
     assert!(rendered.contains("APT update started"));
     assert!(rendered.contains("apt update native output"));
 }

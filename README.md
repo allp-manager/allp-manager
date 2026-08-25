@@ -125,18 +125,16 @@ sudo allp update --from homebrew --yes --skip-self-update
 See [the Homebrew backend guide](docs/HOMEBREW_BACKEND.md) for validation
 details and macOS/Linuxbrew limits.
 
-## Live Maintenance Dashboard
+## Live Maintenance Progress
 
 On a real interactive `update` or `upgrade`, Allp 0.4.0 presents an inline live
-dashboard during execution. Native logs remain in normal terminal scrollback;
-status and error cards make important events stand out; and the footer shows
-the active backend, exact action, elapsed time, and explicit queue completion.
-It is not a full-screen terminal takeover, so Ctrl+C does not require raw-mode
-restoration. When selected maintenance plans need administrator access, Allp
-validates it with `sudo -v` before the dashboard starts, then runs those
-children with `sudo -n --` so a password prompt never appears in the footer.
-
-![Illustrative Allp live update dashboard](docs/assets/tui-maintenance.svg)
+APT-style progress line during execution. Native logs remain unchanged in the
+normal terminal scrollback; only the current bottom line is redrawn with the
+percentage, active backend, action, elapsed time, and queue completion. The
+line is fitted to the actual terminal width so it cannot wrap into prompts.
+When selected maintenance plans need administrator access, Allp validates it
+with `sudo -v` before progress starts, then runs those children with `sudo -n --`
+so a password prompt never appears in the live line.
 
 Use the classic output whenever you prefer it or are recording a familiar log:
 
@@ -145,9 +143,9 @@ allp update --no-tui
 allp upgrade --no-tui
 ```
 
-The dashboard is intentionally absent from JSON, dry runs, redirected/non-TTY
-output, `TERM=dumb`, and `--no-interactive` runs. `--no-color` keeps the layout
-but removes color. The dashboard only observes the process runner: it never
+Live progress is intentionally absent from JSON, dry runs, redirected/non-TTY
+output, `TERM=dumb`, and `--no-interactive` runs. `--no-color` keeps the line
+but removes color. The renderer only observes the process runner: it never
 rewrites the planned native argv or plan-level privilege requirement; the
 privilege boundary is fixed before rendering begins. Full behavior and fallback
 rules are in
@@ -183,11 +181,11 @@ allp update
 ```
 
 Allp itself should normally run as your user. For a confirmed maintenance run,
-Allp validates administrator access once with `sudo -v` before the live
-dashboard starts, then runs root-required children with `sudo -n --`. This
-keeps password prompts out of the dashboard. If a later cached credential
+Allp validates administrator access once with `sudo -v` before live progress
+starts, then runs root-required children with `sudo -n --`. This keeps password
+prompts out of the progress line. If a later cached credential
 expires, Allp clears the footer, revalidates with `sudo -v` outside the
-dashboard, and resumes only after success; an unsuccessful revalidation is a
+renderer, and resumes only after success; an unsuccessful revalidation is a
 blocked operation rather than a package-manager failure. Dry runs never invoke
 sudo.
 

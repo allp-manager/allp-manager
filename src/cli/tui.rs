@@ -1,12 +1,6 @@
 use crate::{
-    domain::{
-        BackendOperationRecord, ExecutionPlan, MultiOperationReport, OperationStatus,
-        RuntimePrivilegeContext,
-    },
-    execution::{
-        render_execution_plan_with_context, render_execution_plan_with_privilege_session,
-        ExecutionObserver, ProcessEvent, ProcessOutputStream,
-    },
+    domain::{ExecutionPlan, OperationStatus, RuntimePrivilegeContext},
+    execution::{ExecutionObserver, ProcessEvent, ProcessOutputStream},
 };
 use std::{
     env,
@@ -14,21 +8,19 @@ use std::{
     time::Duration,
 };
 
-const DEFAULT_WIDTH: usize = 88;
-const MIN_WIDTH: usize = 48;
-const MAX_WIDTH: usize = 112;
-const FOOTER_BAR_WIDTH: usize = 18;
-const MAX_LOG_LINE_WIDTH: usize = 220;
+const DEFAULT_WIDTH: usize = 80;
+const MIN_WIDTH: usize = 20;
+const MAX_WIDTH: usize = 240;
+const MIN_BAR_WIDTH: usize = 8;
+const MAX_BAR_WIDTH: usize = 28;
+const MAX_PENDING_OUTPUT: usize = 64 * 1024;
 
-/// Inline live dashboard for maintenance operations.
+/// A single-line, apt-style progress display for maintenance operations.
 ///
-/// It deliberately stays in the normal terminal buffer instead of taking over
-/// the alternate screen. Native commands retain their inherited stdin, so an
-/// unexpected package-manager prompt remains usable and a Ctrl-C cannot leave
-/// the user's terminal in an alternate-screen state. The dashboard owns only
-/// the current footer line; normal command output scrolls above it.
+/// The normal terminal buffer remains in use. Native output scrolls normally
+/// and this observer owns only the current, unterminated line. Before writing
+/// output or yielding the terminal to a prompt, that line is removed.
 pub struct MaintenanceTui {
-    operation: String,
     total: usize,
     completed: usize,
     active: Option<ActiveOperation>,
@@ -45,22 +37,13 @@ struct ActiveOperation {
     backend_name: String,
     action: String,
     elapsed: Duration,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tone {
-    Success,
-    Warning,
-    Error,
-    Info,
-    Muted,
+    percent: Option<u8>,
 }
 
 impl MaintenanceTui {
-    pub fn new(operation: &str, total: usize, color: bool) -> Self {
+    pub fn new(_operation: &str, total: usize, color: bool) -> Self {
         let mut tui = Self {
-            operation: operation.to_owned(),
-            total,
+            total: total.max(1),
             completed: 0,
             active: None,
             color,
@@ -70,42 +53,24 @@ impl MaintenanceTui {
             footer_visible: false,
             io_failed: false,
         };
-        tui.draw_header();
         tui.draw_footer();
         tui
     }
 
     pub fn start_operation(
         &mut self,
-        index: usize,
+        _index: usize,
         total: usize,
         plan: &ExecutionPlan,
-        privilege_context: &RuntimePrivilegeContext,
+        _privilege_context: &RuntimePrivilegeContext,
     ) {
         self.total = total.max(1);
         self.flush_pending();
-        self.begin_content();
-        self.draw_card(
-            &format!("RUNNING · {index}/{} · {}", self.total, plan.backend_name),
-            Tone::Info,
-            &[
-                format!("Action: {}", plan.action),
-                format!(
-                    "Execution context: {}",
-                    plan.privilege.label(privilege_context)
-                ),
-                format!(
-                    "Command preview: {}",
-                    render_execution_plan_with_privilege_session(plan, privilege_context)
-                ),
-                "The runtime preserves the validated privilege boundary and sanitized environment."
-                    .to_owned(),
-            ],
-        );
         self.active = Some(ActiveOperation {
             backend_name: plan.backend_name.clone(),
             action: plan.action.clone(),
             elapsed: Duration::ZERO,
+            percent: None,
         });
         self.draw_footer();
     }
@@ -114,29 +79,14 @@ impl MaintenanceTui {
         &mut self,
         index: usize,
         total: usize,
-        backend_name: &str,
-        status: &OperationStatus,
-        message: Option<&str>,
-        elapsed: Duration,
+        _backend_name: &str,
+        _status: &OperationStatus,
+        _message: Option<&str>,
+        _elapsed: Duration,
     ) {
         self.total = total.max(1);
         self.flush_pending();
-        self.begin_content();
-        let mut lines = vec![format!("Result: {}", status.label())];
-        if let Some(message) = message.filter(|message| !message.trim().is_empty()) {
-            lines.push(message.to_owned());
-        }
-        lines.push(format!("Elapsed: {}", format_duration(elapsed)));
-        self.draw_card(
-            &format!(
-                "{} · {index}/{} · {backend_name}",
-                status.label().to_uppercase(),
-                self.total
-            ),
-            tone_for_status(status),
-            &lines,
-        );
-        self.completed = self.completed.max(index);
+        self.completed = self.completed.max(index).min(self.total);
         self.active = None;
         self.draw_footer();
     }
@@ -145,27 +95,13 @@ impl MaintenanceTui {
         &mut self,
         index: usize,
         total: usize,
-        backend_name: &str,
-        status: &OperationStatus,
-        message: Option<&str>,
+        _backend_name: &str,
+        _status: &OperationStatus,
+        _message: Option<&str>,
     ) {
         self.total = total.max(1);
         self.flush_pending();
-        self.begin_content();
-        let mut lines = vec![format!("Result: {}", status.label())];
-        if let Some(message) = message.filter(|message| !message.trim().is_empty()) {
-            lines.push(message.to_owned());
-        }
-        self.draw_card(
-            &format!(
-                "{} · {index}/{} · {backend_name}",
-                status.label().to_uppercase(),
-                self.total
-            ),
-            tone_for_status(status),
-            &lines,
-        );
-        self.completed = self.completed.max(index);
+        self.completed = self.completed.max(index).min(self.total);
         self.active = None;
         self.draw_footer();
     }
@@ -175,214 +111,109 @@ impl MaintenanceTui {
         self.draw_footer();
     }
 
-    /// Clears the live footer before a native confirmation prompt is printed.
-    ///
-    /// The dashboard intentionally does not take over stdin; package-manager
-    /// and follow-up confirmations therefore remain ordinary terminal prompts.
+    /// Removes the progress line and moves prompts onto an ordinary fresh line.
     pub fn prepare_for_prompt(&mut self) {
         self.flush_pending();
-        self.begin_content();
+        self.clear_footer();
+        self.write_raw("\n");
     }
 
-    /// Restores the progress footer after a native confirmation prompt.
+    /// Redraws progress only after the terminal prompt has fully completed.
     pub fn resume_after_prompt(&mut self) {
         self.draw_footer();
     }
 
-    pub fn queue_extended(&mut self, total: usize, backend_name: &str, added: usize) {
-        self.total = total.max(1);
+    pub fn queue_extended(&mut self, total: usize, _backend_name: &str, _added: usize) {
+        self.set_total(total);
+    }
+
+    /// Permanently removes the live line. The caller can then print the normal
+    /// summary without the progress renderer changing its contents.
+    pub fn finish(&mut self) {
         self.flush_pending();
-        self.begin_content();
-        self.draw_card(
-            "QUEUE EXTENDED",
-            Tone::Info,
-            &[
-                format!(
-                    "{backend_name} added {added} follow-up operation(s) after metadata refresh."
-                ),
-                format!("Live progress now tracks {} operation(s).", self.total),
-            ],
-        );
+        self.completed = self.total;
+        self.active = None;
         self.draw_footer();
-    }
-
-    /// Renders plans discovered after an earlier maintenance operation.
-    ///
-    /// A metadata refresh may reveal an upgrade plan only after it finishes.
-    /// Show that exact plan before asking the user for the separate follow-up
-    /// confirmation, preserving the same review boundary as the initial queue.
-    pub fn show_follow_up_plans(
-        &mut self,
-        plans: &[ExecutionPlan],
-        privilege_context: &RuntimePrivilegeContext,
-    ) {
-        self.flush_pending();
-        self.begin_content();
-        for (position, plan) in plans.iter().enumerate() {
-            self.draw_card(
-                &format!(
-                    "FOLLOW-UP PLAN · {}/{} · {}",
-                    position + 1,
-                    plans.len(),
-                    plan.backend_name
-                ),
-                Tone::Info,
-                &[
-                    format!("Action: {}", plan.action),
-                    format!(
-                        "Execution context: {}",
-                        plan.privilege.label(privilege_context)
-                    ),
-                    format!(
-                        "Command preview: {}",
-                        render_execution_plan_with_context(plan, privilege_context)
-                    ),
-                ],
-            );
-        }
-        self.draw_footer();
-    }
-
-    pub fn finish(&mut self, report: &MultiOperationReport, verbose: bool, dry_run: bool) {
-        self.flush_pending();
-        self.begin_content();
-        self.draw_card(
-            &format!("{} SUMMARY", self.operation.to_uppercase()),
-            if report.has_failures() {
-                Tone::Warning
-            } else {
-                Tone::Success
-            },
-            &summary_lines(report, dry_run),
-        );
-
-        for record in visible_records(report, verbose) {
-            self.draw_record_card(record);
-        }
-        self.write_raw("\n");
-    }
-
-    fn draw_header(&mut self) {
-        self.begin_content();
-        self.draw_card(
-            &format!("ALLP · {} · LIVE", self.operation.to_uppercase()),
-            Tone::Info,
-            &[
-                "Native output is streamed below without changing the command being run."
-                    .to_owned(),
-                "The footer tracks the active backend, exact action, elapsed time, and queue progress."
-                    .to_owned(),
-                "Use --no-tui for the classic streaming view.".to_owned(),
-            ],
-        );
-    }
-
-    fn draw_record_card(&mut self, record: &BackendOperationRecord) {
-        let mut lines = Vec::new();
-        if let Some(action) = &record.action {
-            lines.push(format!("Action: {action}"));
-        }
-        if let Some(message) = &record.message {
-            lines.push(message.clone());
-        }
-        if lines.is_empty() {
-            lines.push("No additional detail reported.".to_owned());
-        }
-        self.draw_card(
-            &format!(
-                "{} · {}",
-                record.status.label().to_uppercase(),
-                record.backend_name
-            ),
-            tone_for_status(&record.status),
-            &lines,
-        );
-    }
-
-    fn draw_card(&mut self, title: &str, tone: Tone, lines: &[String]) {
-        let inner_width = self.width.saturating_sub(4).max(1);
-        let title = truncate(
-            &sanitize_terminal_text(title.as_bytes()),
-            inner_width.saturating_sub(2),
-        );
-        let fill = inner_width
-            .saturating_sub(display_width(&title))
-            .saturating_sub(1);
-        self.write_line(&self.styled(&format!("╭─ {title} {}", "─".repeat(fill)), tone));
-        for line in lines {
-            let safe = sanitize_terminal_text(line.as_bytes());
-            let wrapped = wrap_line(&safe, inner_width);
-            for line in wrapped {
-                let padded = pad_to_width(&line, inner_width);
-                self.write_line(&self.styled(&format!("│ {padded} │"), tone));
-            }
-        }
-        self.write_line(&self.styled(&format!("╰{}╯", "─".repeat(inner_width + 2)), tone));
+        self.clear_footer();
     }
 
     fn draw_footer(&mut self) {
         if self.io_failed {
             return;
         }
-        let total = self.total.max(1);
-        let (backend, action, elapsed) = self
-            .active
-            .as_ref()
-            .map(|active| {
-                (
-                    active.backend_name.as_str(),
-                    active.action.as_str(),
-                    active.elapsed,
+
+        self.width = terminal_width();
+        let percentage = self.overall_percentage();
+        let bar_width = self
+            .width
+            .saturating_sub(42)
+            .clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH);
+        let filled = usize::from(percentage) * bar_width / 100;
+        let bar = format!("[{}{}]", "#".repeat(filled), ".".repeat(bar_width - filled));
+        let detail = self.active.as_ref().map_or_else(
+            || format!("{}/{} complete", self.completed.min(self.total), self.total),
+            |active| {
+                format!(
+                    "{} · {} · {}/{} · {}",
+                    active.backend_name,
+                    active.action,
+                    self.completed.min(self.total),
+                    self.total,
+                    format_duration(active.elapsed)
                 )
-            })
-            .unwrap_or(("waiting", "finalizing results", Duration::ZERO));
-        let completed = self.completed.min(total);
-        let bar = progress_bar(completed, total);
-        let text = format!(
-            " {bar} Queue: {completed}/{total} complete · {backend} · {} · {} ",
-            truncate(action, 34),
-            format_duration(elapsed)
+            },
         );
+        let prefix = format!("Progress: [{percentage:>3}%] {bar} ");
+        let max_visible_width = self.width.saturating_sub(1).max(1);
+        let detail_width = max_visible_width.saturating_sub(display_width(&prefix));
+        let text = truncate(
+            &format!("{prefix}{}", truncate(&detail, detail_width)),
+            max_visible_width,
+        );
+
         self.write_raw("\r\x1b[2K");
-        self.write_raw(&self.styled(&text, Tone::Info));
+        if self.color {
+            self.write_raw(&format!("\x1b[36m{text}\x1b[0m"));
+        } else {
+            self.write_raw(&text);
+        }
         self.footer_visible = !self.io_failed;
     }
 
-    fn begin_content(&mut self) {
+    fn overall_percentage(&self) -> u8 {
+        let total = self.total.max(1);
+        let completed = self.completed.min(total);
+        let active = self
+            .active
+            .as_ref()
+            .and_then(|active| active.percent)
+            .map(usize::from)
+            .unwrap_or(0);
+        (((completed * 100 + active) / total).min(100)) as u8
+    }
+
+    fn clear_footer(&mut self) {
         if self.footer_visible {
-            self.write_raw("\r\x1b[2K\n");
+            self.write_raw("\r\x1b[2K");
             self.footer_visible = false;
         }
     }
 
-    fn write_line(&mut self, value: &str) {
-        self.write_raw(value);
+    fn write_log_line(&mut self, line: &str) {
+        self.clear_footer();
+        self.write_raw(line);
         self.write_raw("\n");
-    }
-
-    fn write_log_line(&mut self, stream: ProcessOutputStream, line: &str) {
-        let line = truncate(line.trim_end(), MAX_LOG_LINE_WIDTH);
-        if line.trim().is_empty() {
-            return;
-        }
-        self.begin_content();
-        let (marker, tone) = match stream {
-            ProcessOutputStream::Stdout => ("›", Tone::Muted),
-            ProcessOutputStream::Stderr => ("!", Tone::Warning),
-        };
-        let prefix = self.styled(&format!("{marker} "), tone);
-        self.write_line(&format!("{prefix}{line}"));
         self.draw_footer();
     }
 
     fn flush_pending(&mut self) {
         let stdout = std::mem::take(&mut self.stdout_pending);
         let stderr = std::mem::take(&mut self.stderr_pending);
-        if !stdout.trim().is_empty() {
-            self.write_log_line(ProcessOutputStream::Stdout, &stdout);
+        if !stdout.is_empty() {
+            self.write_log_line(&stdout);
         }
-        if !stderr.trim().is_empty() {
-            self.write_log_line(ProcessOutputStream::Stderr, &stderr);
+        if !stderr.is_empty() {
+            self.write_log_line(&stderr);
         }
     }
 
@@ -390,17 +221,27 @@ impl MaintenanceTui {
         if self.io_failed {
             return;
         }
+
         let mut pending = match stream {
             ProcessOutputStream::Stdout => std::mem::take(&mut self.stdout_pending),
             ProcessOutputStream::Stderr => std::mem::take(&mut self.stderr_pending),
         };
         pending.push_str(&sanitize_terminal_text(bytes));
+        if let Some(percent) = extract_percentage(pending.as_bytes()) {
+            if let Some(active) = &mut self.active {
+                active.percent = Some(
+                    active
+                        .percent
+                        .map_or(percent, |current| current.max(percent)),
+                );
+            }
+        }
         let mut complete_lines = Vec::new();
         while let Some(newline) = pending.find('\n') {
             complete_lines.push(pending[..newline].to_owned());
             pending.drain(..=newline);
         }
-        if display_width(&pending) > MAX_LOG_LINE_WIDTH {
+        if pending.len() >= MAX_PENDING_OUTPUT {
             complete_lines.push(std::mem::take(&mut pending));
         }
         match stream {
@@ -408,46 +249,16 @@ impl MaintenanceTui {
             ProcessOutputStream::Stderr => self.stderr_pending = pending,
         }
         for line in complete_lines {
-            self.write_log_line(stream, &line);
+            self.write_log_line(&line);
         }
         self.draw_footer();
     }
 
-    fn update_elapsed(&mut self, elapsed: Duration, heartbeat: bool) {
-        // Some package managers report progress without a trailing newline.
-        // Surface that partial line on the next live tick instead of hiding it
-        // until the child exits.
-        self.flush_pending();
-        let backend_name = if let Some(active) = &mut self.active {
+    fn update_elapsed(&mut self, elapsed: Duration) {
+        if let Some(active) = &mut self.active {
             active.elapsed = elapsed;
-            active.backend_name.clone()
-        } else {
-            return;
-        };
-        if heartbeat {
-            self.begin_content();
-            self.write_line(&format!(
-                "{} {} is still running · {} elapsed",
-                self.styled("ℹ", Tone::Info),
-                backend_name,
-                format_duration(elapsed)
-            ));
+            self.draw_footer();
         }
-        self.draw_footer();
-    }
-
-    fn styled(&self, value: &str, tone: Tone) -> String {
-        if !self.color {
-            return value.to_owned();
-        }
-        let code = match tone {
-            Tone::Success => "32",
-            Tone::Warning => "33",
-            Tone::Error => "31",
-            Tone::Info => "36",
-            Tone::Muted => "2",
-        };
-        format!("\x1b[{code}m{value}\x1b[0m")
     }
 
     fn write_raw(&mut self, value: &str) {
@@ -470,8 +281,9 @@ impl ExecutionObserver for MaintenanceTui {
     fn observe(&mut self, _plan: &ExecutionPlan, event: ProcessEvent) {
         match event {
             ProcessEvent::Output { stream, bytes } => self.accept_output(stream, &bytes),
-            ProcessEvent::Tick { elapsed } => self.update_elapsed(elapsed, false),
-            ProcessEvent::Heartbeat { elapsed } => self.update_elapsed(elapsed, true),
+            ProcessEvent::Tick { elapsed } | ProcessEvent::Heartbeat { elapsed } => {
+                self.update_elapsed(elapsed)
+            }
         }
     }
 
@@ -481,96 +293,53 @@ impl ExecutionObserver for MaintenanceTui {
 }
 
 fn terminal_width() -> usize {
-    env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
+    detected_terminal_width()
+        .or_else(|| {
+            env::var("COLUMNS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+        })
         .unwrap_or(DEFAULT_WIDTH)
         .clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
-fn tone_for_status(status: &OperationStatus) -> Tone {
-    match status {
-        OperationStatus::Updated
-        | OperationStatus::UpToDate
-        | OperationStatus::Completed
-        | OperationStatus::AlreadyInstalled
-        | OperationStatus::Success => Tone::Success,
-        OperationStatus::Failed => Tone::Error,
-        OperationStatus::Protected
-        | OperationStatus::Busy
-        | OperationStatus::Blocked
-        | OperationStatus::Deferred => Tone::Warning,
-        OperationStatus::DryRun | OperationStatus::Available | OperationStatus::Selected => {
-            Tone::Info
+#[cfg(unix)]
+fn detected_terminal_width() -> Option<usize> {
+    use std::os::fd::AsRawFd;
+
+    let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+    let result = unsafe { libc::ioctl(io::stdout().as_raw_fd(), libc::TIOCGWINSZ, &mut size) };
+    (result == 0 && size.ws_col > 0).then_some(usize::from(size.ws_col))
+}
+
+#[cfg(not(unix))]
+fn detected_terminal_width() -> Option<usize> {
+    None
+}
+
+fn extract_percentage(bytes: &[u8]) -> Option<u8> {
+    let mut latest = None;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'%' {
+            continue;
         }
-        OperationStatus::NotApplicable
-        | OperationStatus::NotSelected
-        | OperationStatus::Unavailable
-        | OperationStatus::Cancelled
-        | OperationStatus::Skipped => Tone::Muted,
+        let mut start = index;
+        while start > 0 && bytes[start - 1].is_ascii_digit() && index - start < 3 {
+            start -= 1;
+        }
+        if start == index || (start > 0 && bytes[start - 1].is_ascii_digit()) {
+            continue;
+        }
+        if let Ok(value) = std::str::from_utf8(&bytes[start..index])
+            .unwrap_or("")
+            .parse::<u8>()
+        {
+            if value <= 100 {
+                latest = Some(value);
+            }
+        }
     }
-}
-
-fn visible_records(
-    report: &MultiOperationReport,
-    verbose: bool,
-) -> impl Iterator<Item = &BackendOperationRecord> {
-    report
-        .records
-        .iter()
-        .filter(move |record| verbose || !record.status.is_optional_unavailable())
-}
-
-fn summary_lines(report: &MultiOperationReport, dry_run: bool) -> Vec<String> {
-    if dry_run {
-        let planned = report
-            .records
-            .iter()
-            .filter(|record| record.command.is_some())
-            .count();
-        return vec![
-            "Dry run completed; no native command was executed.".to_owned(),
-            format!("{planned} operation(s) planned"),
-        ];
-    }
-    let count = |predicate: fn(&OperationStatus) -> bool| {
-        report
-            .records
-            .iter()
-            .filter(|record| predicate(&record.status))
-            .count()
-    };
-    vec![
-        format!(
-            "{} completed · {} updated · {} up to date",
-            count(|status| matches!(
-                status,
-                OperationStatus::Completed | OperationStatus::Success
-            )),
-            count(|status| matches!(status, OperationStatus::Updated)),
-            count(|status| matches!(status, OperationStatus::UpToDate)),
-        ),
-        format!(
-            "{} deferred · {} not applicable · {} protected · {} busy · {} blocked · {} cancelled · {} failed",
-            count(|status| matches!(status, OperationStatus::Deferred)),
-            count(|status| matches!(status, OperationStatus::NotApplicable)),
-            count(|status| matches!(status, OperationStatus::Protected)),
-            count(|status| matches!(status, OperationStatus::Busy)),
-            count(|status| matches!(status, OperationStatus::Blocked)),
-            count(|status| matches!(status, OperationStatus::Cancelled)),
-            count(|status| matches!(status, OperationStatus::Failed)),
-        ),
-    ]
-}
-
-fn progress_bar(completed: usize, total: usize) -> String {
-    let total = total.max(1);
-    let filled = completed.min(total) * FOOTER_BAR_WIDTH / total;
-    format!(
-        "[{}{}]",
-        "█".repeat(filled),
-        "░".repeat(FOOTER_BAR_WIDTH - filled)
-    )
+    latest
 }
 
 fn sanitize_terminal_text(bytes: &[u8]) -> String {
@@ -590,10 +359,7 @@ fn sanitize_terminal_text(bytes: &[u8]) -> String {
                 Some(']') => {
                     let mut previous_escape = false;
                     for next in chars.by_ref() {
-                        if next == '\u{7}' {
-                            break;
-                        }
-                        if previous_escape && next == '\\' {
+                        if next == '\u{7}' || (previous_escape && next == '\\') {
                             break;
                         }
                         previous_escape = next == '\u{1b}';
@@ -605,7 +371,7 @@ fn sanitize_terminal_text(bytes: &[u8]) -> String {
         }
         match character {
             '\n' => output.push('\n'),
-            '\t' => output.push_str("  "),
+            '\t' => output.push('\t'),
             '\r' if chars.peek() == Some(&'\n') => {}
             '\r' => output.push('\n'),
             value if value.is_control() => {}
@@ -615,64 +381,23 @@ fn sanitize_terminal_text(bytes: &[u8]) -> String {
     output
 }
 
-fn wrap_line(value: &str, width: usize) -> Vec<String> {
-    if value.is_empty() {
-        return vec![String::new()];
-    }
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in value.split_whitespace() {
-        let separator = if current.is_empty() { "" } else { " " };
-        if display_width(&current) + separator.len() + display_width(word) > width
-            && !current.is_empty()
-        {
-            lines.push(std::mem::take(&mut current));
-        }
-        if display_width(word) > width {
-            if !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
-            }
-            lines.push(truncate(word, width));
-        } else {
-            if !current.is_empty() {
-                current.push(' ');
-            }
-            current.push_str(word);
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
-}
-
 fn truncate(value: &str, max_width: usize) -> String {
     if display_width(value) <= max_width {
         return value.to_owned();
     }
-    if max_width <= 1 {
-        return "…".chars().take(max_width).collect();
+    if max_width == 0 {
+        return String::new();
     }
-    let mut output = String::new();
-    for character in value.chars().take(max_width - 1) {
-        output.push(character);
+    if max_width == 1 {
+        return "…".to_owned();
     }
+    let mut output = value.chars().take(max_width - 1).collect::<String>();
     output.push('…');
     output
 }
 
 fn display_width(value: &str) -> usize {
     value.chars().count()
-}
-
-fn pad_to_width(value: &str, width: usize) -> String {
-    format!(
-        "{value}{}",
-        " ".repeat(width.saturating_sub(display_width(value)))
-    )
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -685,8 +410,7 @@ fn format_duration(duration: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{progress_bar, sanitize_terminal_text, summary_lines, wrap_line};
-    use crate::domain::{BackendOperationRecord, MultiOperationReport, OperationStatus};
+    use super::{extract_percentage, sanitize_terminal_text, truncate};
 
     #[test]
     fn terminal_projection_removes_control_sequences_but_keeps_text() {
@@ -696,55 +420,23 @@ mod tests {
     }
 
     #[test]
-    fn terminal_projection_turns_progress_carriage_returns_into_safe_lines() {
+    fn terminal_projection_turns_carriage_returns_into_safe_lines() {
         let output = sanitize_terminal_text(b"first\rsecond\r\nthird");
 
         assert_eq!(output, "first\nsecond\nthird");
     }
 
     #[test]
-    fn progress_bar_handles_a_growing_queue() {
-        let before_follow_up = progress_bar(1, 2);
-        let after_follow_up = progress_bar(1, 3);
-
-        assert!(before_follow_up.contains('█'));
-        assert!(after_follow_up.contains('░'));
-        assert_ne!(before_follow_up, after_follow_up);
+    fn apt_style_percentages_are_detected_from_streamed_output() {
+        assert_eq!(extract_percentage(b"Progress: [ 42%]"), Some(42));
+        assert_eq!(extract_percentage(b"download 8% then 100%"), Some(100));
+        assert_eq!(extract_percentage(b"version 1200%"), None);
+        assert_eq!(extract_percentage(b"no percentage"), None);
     }
 
     #[test]
-    fn summary_keeps_failure_and_protected_counts_separate() {
-        let report = MultiOperationReport {
-            operation: "update".to_owned(),
-            records: vec![
-                record(OperationStatus::Completed),
-                record(OperationStatus::Protected),
-                record(OperationStatus::Failed),
-            ],
-        };
-        let summary = summary_lines(&report, false).join("\n");
-
-        assert!(summary.contains("1 completed"));
-        assert!(summary.contains("1 protected"));
-        assert!(summary.contains("1 failed"));
-    }
-
-    #[test]
-    fn wrapped_lines_never_exceed_the_requested_width() {
-        let lines = wrap_line("a deliberately long line for terminal cards", 12);
-
-        assert!(lines.iter().all(|line| line.chars().count() <= 12));
-    }
-
-    fn record(status: OperationStatus) -> BackendOperationRecord {
-        BackendOperationRecord {
-            backend_id: "test".to_owned(),
-            backend_name: "Test".to_owned(),
-            action: None,
-            command: None,
-            status,
-            message: None,
-            privilege_status: None,
-        }
+    fn truncation_never_exceeds_terminal_width() {
+        assert_eq!(truncate("a deliberately long footer", 8), "a delib…");
+        assert_eq!(truncate("value", 0), "");
     }
 }

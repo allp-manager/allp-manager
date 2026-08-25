@@ -131,11 +131,11 @@ Development maintenance supports `--target`:
 
 ## Live Maintenance Presentation
 
-For a real interactive `update` or `upgrade`, Allp automatically uses the
-inline live maintenance dashboard when stdin, stdout, and stderr are terminals and
-`TERM` is not `dumb`. It leaves native logs in scrollback, emits state/error
-cards, and maintains a one-line footer with the active backend, action,
-elapsed time, and queue progress.
+For a real interactive `update` or `upgrade`, Allp automatically uses an inline
+APT-style maintenance progress line when stdin, stdout, and stderr are terminals
+and `TERM` is not `dumb`. It leaves native logs in scrollback without UI cards
+or prefixes and redraws only one fitted line with percentage, active backend,
+action, elapsed time, and queue progress.
 
 `--no-tui` forces the established classic streaming presentation for either
 maintenance command:
@@ -147,9 +147,9 @@ allp upgrade --no-tui
 
 The option is presentation-only: it never changes a backend plan, native argv,
 privilege boundary, confirmation, exit code, or status classification.
-`--no-color` keeps the dashboard but removes ANSI color. JSON, dry-run,
+`--no-color` keeps the progress line but removes ANSI color. JSON, dry-run,
 redirected/non-TTY output, `TERM=dumb`, and `--no-interactive` do not start the
-dashboard and retain the normal machine-safe or classic output contract. See
+progress renderer and retain the normal machine-safe or classic output contract. See
 [Terminal UI](TERMINAL_UI.md) for the rendering and fallback details.
 
 ## Self-Update And Doctor

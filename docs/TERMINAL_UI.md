@@ -17,39 +17,36 @@ Color is disabled when:
 - `TERM=dumb`.
 
 JSON output never contains ANSI escape sequences. In the classic stream, native
-package-manager output is printed directly. The live maintenance dashboard
+package-manager output is printed directly. The live maintenance progress line
 described below keeps that output visible while adding only a safe terminal
 projection around it; it never rewrites the planned native command, its
 arguments, or its plan-level privilege requirement.
 
-## Live Maintenance Dashboard
+## Live Maintenance Progress
 
 Real, interactive `update` and `upgrade` execution uses an inline live
-dashboard during the execution phase. It is deliberately **not** a full-screen
-or alternate-screen application: the terminal keeps its ordinary scrollback and
-Ctrl+C does not need to restore terminal mode. Administrator authentication is
-completed before the dashboard starts; no sudo password prompt is permitted
-while it is rendering.
+progress line during the execution phase. It is deliberately **not** a
+full-screen or alternate-screen application: the terminal keeps its ordinary
+scrollback and Ctrl+C does not need to restore terminal mode. Administrator
+authentication is completed before progress rendering starts; no sudo password
+prompt is permitted while it owns the current line.
 
-![Illustrative live update dashboard](assets/tui-maintenance.svg)
+The display follows the compact style used by APT:
 
-The dashboard has three parts:
+```text
+Progress: [ 42%] [########............] APT · Upgrade packages · 0/1 · 8s
+```
 
-- Native stdout and stderr continue to scroll in the normal terminal buffer.
-  Stdout lines use a subtle `›` marker and stderr lines use a warning `!`
-  marker so their origin stays clear.
-- A boxed card is emitted when an operation starts and when it resolves. Failed
-  operations use the error color; deferred, protected, and busy results use a
-  warning color; successful results use the success color. The final summary is
-  also a card, so an error never disappears into a long package-manager log.
-- The single footer line at the bottom is redrawn in place. It shows the active
-  backend, exact action label, elapsed time, and `Queue: completed/total`.
-  The bar advances only as queued operations complete; it does not treat elapsed
-  time as package progress. A metadata refresh can discover a follow-up upgrade,
-  in which case the queue and footer total grow visibly instead of pretending
-  the original count was final.
+Native stdout and stderr continue to scroll without cards or marker prefixes.
+The renderer clears only its own unterminated line before native output, a
+confirmation, or a sudo prompt is written, then redraws it below that content.
+It reads the actual terminal width and truncates its own status text before the
+last column so the line cannot wrap and corrupt prompt placement. Percentages
+reported by a native package manager are reflected in the bar; otherwise the
+bar advances as queued operations complete. The normal maintenance summary is
+printed after the live line is removed.
 
-The dashboard starts only for a real maintenance run when all of the following
+The progress line starts only for a real maintenance run when all of the following
 are true:
 
 - human (non-JSON) output is selected;
@@ -58,10 +55,10 @@ are true:
 - the command is interactive (not `--no-interactive`); and
 - `--no-tui` was not supplied.
 
-Dry runs retain their complete plan and normal summary rather than starting a
-live dashboard. Redirected output, JSON, non-interactive maintenance, and
-`TERM=dumb` retain the established classic stream so scripts keep a stable
-contract. `--no-color` only removes color: it does not disable the dashboard.
+Dry runs retain their complete plan and normal summary rather than starting live
+progress. Redirected output, JSON, non-interactive maintenance, and `TERM=dumb`
+retain the established classic stream so scripts keep a stable contract.
+`--no-color` only removes color: it does not disable the progress line.
 
 To force the classic stream in an interactive terminal, use:
 
@@ -74,33 +71,25 @@ allp upgrade --no-tui
 
 The process runner remains the only component that prepares a native command,
 applies the plan's privilege boundary, and starts the child process. The
-dashboard is an observer: it receives output and timing events after that work
-has been decided and cannot rewrite, approve, or elevate a command.
+progress renderer is an observer: it receives output and timing events after
+that work has been decided and cannot rewrite, approve, or elevate a command.
 
 If any selected operation needs administrator access, Allp performs one
 interactive `sudo -v` preflight after the final confirmation and before the
-dashboard is created. Its standard streams stay attached to the real terminal;
+progress renderer is created. Its standard streams stay attached to the real terminal;
 Allp never reads or stores a password. During dashboard execution, privileged
 children use `sudo -n -- …`. Before a later root operation, Allp checks the
 cached credential with `sudo -n -v`. If it has expired, the footer is cleared,
 an interactive `sudo -v` owns the normal terminal, and the footer is redrawn
 only after authentication succeeds. A failed or unavailable revalidation
 produces a structured blocked result rather than mixing a password prompt into
-the dashboard output.
+the progress output.
 
-For safety, the on-screen log is a terminal-safe projection of untrusted native
-output: control sequences are removed before display. The runner keeps the
-captured native result for status classification, while the dashboard only
-renders readable text. If dashboard output itself fails, it relinquishes the
+For safety, native output shown while progress is active is a terminal-safe
+projection: control sequences are removed but readable content is not prefixed
+or placed in UI cards. If progress output itself fails, it relinquishes the
 stream and the runner falls back to ordinary stdout/stderr forwarding without
 interrupting the package-manager operation.
-
-The running card's command preview is a readable rendering of the validated
-plan. It is not a promise that the displayed text is a byte-for-byte shell
-wrapper: for example, an original-user Homebrew plan may be launched through a
-validated `sudo -H -u` boundary with a sanitized `env -i` environment. The
-native executable, arguments, plan privilege, and safety checks remain the
-ones that were confirmed before execution.
 
 ## Search Scope Selector
 

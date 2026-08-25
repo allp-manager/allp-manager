@@ -9,10 +9,10 @@ use crate::{
     execution::render_native_command,
 };
 #[cfg(unix)]
-use std::os::unix::process::{Child, CommandExt, ExitStatusExt};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::{
     io::{IsTerminal, Read, Write},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -415,7 +415,7 @@ impl StdProcessRunner {
         heartbeat_allowed: bool,
     ) -> AllpResult<ProcessStatus> {
         let mut process = process;
-        
+
         #[cfg(unix)]
         process.process_group(0);
 
@@ -434,10 +434,12 @@ impl StdProcessRunner {
         let _stdout_reader = read_stream(stdout, StreamKind::Stdout, sender.clone());
         let _stderr_reader = read_stream(stderr, StreamKind::Stderr, sender);
         let started = Instant::now();
-        let timeout = plan
-            .command
-            .timeout
-            .unwrap_or(DEFAULT_CAPTURE_TIMEOUT);
+        // Mutating package-manager commands are intentionally unbounded unless
+        // their backend supplied an explicit deadline. The 15-second default
+        // belongs to short captured probes; applying it here kills normal
+        // operations such as `apt-get update` and `brew update-if-needed` on
+        // ordinary networks.
+        let timeout = plan.command.timeout;
         let mut last_output = started;
         let mut next_heartbeat = FIRST_HEARTBEAT_AFTER;
         let heartbeat_enabled = heartbeat_allowed && std::io::stderr().is_terminal();
@@ -460,20 +462,19 @@ impl StdProcessRunner {
             }
             if let Some(status) = child.try_wait()? {
                 break status;
-                
             }
 
-            
-            if started.elapsed() >= timeout {
+            if execution_timed_out(timeout, started.elapsed()) {
                 terminate_process_tree(&mut child)?;
 
+                let timeout = timeout.expect("a timed-out execution has an explicit deadline");
                 return Err(AllpError::Timeout(format!(
                     "Native command timed out after {} second(s): {}",
                     timeout.as_secs(),
                     render_native_command(&plan.command)
                 )));
             }
-            
+
             if last_tick.elapsed() >= TUI_TICK_INTERVAL {
                 emit_progress_event(
                     plan,
@@ -514,6 +515,10 @@ impl StdProcessRunner {
             stderr,
         })
     }
+}
+
+fn execution_timed_out(timeout: Option<Duration>, elapsed: Duration) -> bool {
+    timeout.is_some_and(|timeout| elapsed >= timeout)
 }
 
 fn terminate_process_tree(child: &mut Child) -> AllpResult<()> {
@@ -801,7 +806,7 @@ fn format_elapsed(duration: Duration) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    
+
     #[derive(Default)]
     struct RecordingObserver {
         events: Vec<ProcessEvent>,
@@ -814,18 +819,31 @@ mod tests {
     }
 
     #[test]
+    fn execution_without_an_explicit_timeout_is_unbounded() {
+        assert!(!execution_timed_out(
+            None,
+            Duration::from_secs(24 * 60 * 60)
+        ));
+        assert!(!execution_timed_out(
+            Some(Duration::from_secs(30)),
+            Duration::from_secs(29)
+        ));
+        assert!(execution_timed_out(
+            Some(Duration::from_secs(30)),
+            Duration::from_secs(30)
+        ));
+    }
+
+    #[test]
     fn execute_times_out_and_terminates_process_group() {
         let runner = StdProcessRunner;
-    
+
         let mut command = NativeCommand::new("/bin/sh");
-    
-        command = command.args([
-            "-c",
-            "sleep 30",
-        ]);
-    
+
+        command = command.args(["-c", "sleep 30"]);
+
         command.timeout = Some(Duration::from_millis(250));
-    
+
         let plan = ExecutionPlan {
             backend_id: "test".to_owned(),
             backend_name: "Test".to_owned(),
@@ -840,11 +858,11 @@ mod tests {
             requires_root: false,
             interactive: false,
         };
-    
+
         let started = Instant::now();
-    
+
         let result = runner.execute(&plan);
-    
+
         assert!(matches!(result, Err(AllpError::Timeout(_))));
         assert!(started.elapsed() < Duration::from_secs(3));
     }
@@ -852,16 +870,13 @@ mod tests {
     #[test]
     fn execute_timeout_terminates_descendants() {
         let runner = StdProcessRunner;
-    
+
         let mut command = NativeCommand::new("/bin/sh");
-    
-        command = command.args([
-            "-c",
-            "sleep 30 & wait",
-        ]);
-    
+
+        command = command.args(["-c", "sleep 30 & wait"]);
+
         command.timeout = Some(Duration::from_millis(250));
-    
+
         let plan = ExecutionPlan {
             backend_id: "test".to_owned(),
             backend_name: "Test".to_owned(),
@@ -876,15 +891,15 @@ mod tests {
             requires_root: false,
             interactive: false,
         };
-    
+
         let started = Instant::now();
-    
+
         let result = runner.execute(&plan);
-    
+
         assert!(matches!(result, Err(AllpError::Timeout(_))));
         assert!(started.elapsed() < Duration::from_secs(3));
     }
-    
+
     impl ProcessRunner for HookRecordingRunner {
         fn capture(&self, _command: &NativeCommand) -> AllpResult<CommandOutput> {
             Ok(CommandOutput {

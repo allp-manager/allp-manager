@@ -153,15 +153,15 @@ Mutating backend operations run sequentially and continue after failures. Any fa
 
 For real execution, Allp first renders the complete plan, explains child-only privilege elevation for root-required plans, and prompts once for the batch. `--no-interactive` cannot provide that confirmation; use `--dry-run`, run interactively, or provide fully resolved choices with `--yes`.
 
-In a real interactive terminal, execution is shown in the live maintenance
-dashboard: native logs remain in normal scrollback, outcome cards identify
-successes and failures, and a footer shows the explicit queue count
-`Queue: completed/total` rather than time-based package progress. Use
-`allp update --no-tui` to force the classic stream. The dashboard is disabled
+In a real interactive terminal, execution uses one APT-style progress line at
+the bottom. Native logs remain in normal scrollback without cards or prefixes;
+the line shows native percentages when available plus the active backend,
+action, elapsed time, and queue count. Use `allp update --no-tui` to force the
+classic stream. Live progress is disabled
 for JSON, dry runs, redirected/non-TTY output, `TERM=dumb`, and
 `--no-interactive`. For selected root-required maintenance plans, Allp performs
-one `sudo -v` preflight after final confirmation and before the dashboard starts,
-then uses `sudo -n --` for those children. The dashboard does not rewrite the
+one `sudo -v` preflight after final confirmation and before progress starts,
+then uses `sudo -n --` for those children. The renderer does not rewrite the
 planned native argv or plan-level privilege requirement.
 
 ## `upgrade`
@@ -181,7 +181,7 @@ Runs each detected backend's declared bulk-upgrade action. Unsupported backends 
 
 Upgrade prompts default to No for riskier batches because they may cross constraints, alter manifests, update lockfiles, or change application behavior.
 
-The same live maintenance dashboard and `--no-tui` fallback used by `update`
+The same live maintenance progress line and `--no-tui` fallback used by `update`
 apply to real interactive upgrades. See [Terminal UI](TERMINAL_UI.md) for the
 terminal/JSON fallback and safe-output rules.
 

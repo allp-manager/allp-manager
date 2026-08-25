@@ -46,9 +46,10 @@ impl Renderer {
         self.color && !self.json
     }
 
-    /// Starts the live maintenance dashboard only when it can safely remain a
-    /// human-facing presentation layer. JSON, redirected streams, noninteractive
-    /// execution, and `TERM=dumb` retain the established plain output contract.
+    /// Starts the single-line maintenance progress display only when it can
+    /// safely remain a human-facing presentation layer. JSON, redirected
+    /// streams, noninteractive execution, and `TERM=dumb` retain the established
+    /// plain output contract.
     pub fn maintenance_tui(
         &self,
         operation: &str,

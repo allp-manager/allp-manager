@@ -32,7 +32,7 @@ pub struct CommonOptions {
     #[arg(long)]
     pub no_color: bool,
 
-    /// Use the classic streaming output instead of the live maintenance dashboard.
+    /// Use classic streaming output without the live maintenance progress line.
     #[arg(long)]
     pub no_tui: bool,
 }
