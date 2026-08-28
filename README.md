@@ -1,3 +1,6 @@
+
+[telegram](https://t.me/im_wrench)
+
 # Allp
 
 [English](README.md) | [فارسی](README.fa.md)
