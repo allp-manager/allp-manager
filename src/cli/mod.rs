@@ -4,7 +4,7 @@ pub mod prompt;
 pub mod spinner;
 pub mod tui;
 
-pub use args::{Cli, Commands};
+pub use args::{Cli, Commands, ProfileCommands};
 pub use output::Renderer;
 pub use prompt::{
     confirm_conflicting_identity, confirm_execution, confirm_fuzzy_candidate, select_candidate,
