@@ -4,6 +4,7 @@ pub mod install;
 pub mod list;
 mod maintenance;
 pub mod remove;
+pub mod profile;
 pub mod search;
 pub mod update;
 pub mod upgrade;
@@ -16,6 +17,7 @@ use crate::{
 };
 use std::path::Path;
 
+#[derive(Clone, Copy)]
 pub struct OperationContext<'a> {
     pub backends: &'a DetectedBackendSet,
     pub discovery: &'a DiscoveryReport,
