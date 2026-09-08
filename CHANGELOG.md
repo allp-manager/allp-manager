@@ -4,6 +4,12 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-08
+
+### Release Title
+
+Allp v0.6.2 — Reliable Package Profile Snapshots
+
 ### Fixed
 
 - Python runtimes without pip no longer block package-profile snapshots; they
