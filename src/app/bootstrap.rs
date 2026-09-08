@@ -5,7 +5,10 @@ use crate::{
         providers::{select_provider, BootstrapProvider},
     },
     capabilities::{CapabilityAvailability, CapabilityRegistry},
-    cli::{confirm_execution, select_search_scope, Cli, Commands, ConfirmationRequest, Renderer},
+    cli::{
+        confirm_execution, select_search_scope, Cli, Commands, ConfirmationRequest, ProfileCommands,
+        Renderer,
+    },
     diagnostics::DoctorReport,
     discovery::{BackendDiscovery, DetectionState, DiscoveryResult},
     domain::{AllpError, AllpResult, ExecutionPlan, OperationKind, PrivilegeRequirement},
@@ -180,6 +183,7 @@ impl App {
                     | Commands::Doctor(_)
                     | Commands::SelfUpdate(_)
                     | Commands::Update(_)
+                    | Commands::Profile(_)
             )
             && !bootstrap_query_available
         {
@@ -263,6 +267,18 @@ impl App {
             Commands::Info(args) => {
                 operations::info::run(&context, &args.package, args.full, args.raw)?;
             }
+            Commands::Profile(args) => match args.command {
+                ProfileCommands::Save(args) => operations::profile::save(&context, &args.name)?,
+                ProfileCommands::List(_) => operations::profile::list(&context)?,
+                ProfileCommands::Show(args) => operations::profile::show(&context, &args.name)?,
+                ProfileCommands::Install(args) => operations::profile::install(&context, &args.name)?,
+                ProfileCommands::Export(args) => {
+                    operations::profile::export(&context, &args.name, &args.path)?
+                }
+                ProfileCommands::Import(args) => {
+                    operations::profile::import(&context, &args.path, args.name.as_deref())?
+                }
+            },
             Commands::Doctor(args) => {
                 let mut report = DoctorReport::collect(
                     platform,
