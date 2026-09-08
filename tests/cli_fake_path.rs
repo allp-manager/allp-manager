@@ -4802,6 +4802,50 @@ fn profile_save_show_export_and_import_round_trip_through_cli() {
 }
 
 #[test]
+fn profile_save_treats_python_without_pip_as_an_empty_inventory() {
+    let dir = temp_dir("profile-python-without-pip");
+    install_fake_apt(&dir, &dir.join("executed"), 0, 0);
+    install_fake_python_runtime_only(&dir);
+
+    let save = run_allp(&dir, &["profile", "save", "dev", "--no-color"]);
+
+    assert!(save.status.success(), "stderr: {}", stderr(&save));
+    assert!(stdout(&save).contains("Saved profile 'dev' with 2 package(s)"));
+
+    let profile = fs::read_to_string(dir.join("xdg-config/allp/profiles/dev.toml"))
+        .expect("profile should be written");
+    assert!(profile.contains("backend = \"apt\""));
+    assert!(!profile.contains("backend = \"python\""));
+}
+
+#[test]
+fn profile_save_reports_the_backend_error_when_refusing_a_partial_snapshot() {
+    let dir = temp_dir("profile-list-failure");
+    write_executable(
+        &dir,
+        "npm",
+        r#"#!/bin/sh
+if [ "$1" = "list" ]; then
+  printf '%s\n' 'npm inventory unavailable' >&2
+  exit 42
+fi
+exit 0
+"#,
+    );
+
+    let save = run_allp(&dir, &["profile", "save", "dev", "--no-color"]);
+
+    assert_eq!(save.status.code(), Some(8));
+    let err = stderr(&save);
+    assert!(err.contains("Node.js"), "unexpected error: {err}");
+    assert!(
+        err.contains("npm inventory unavailable"),
+        "unexpected error: {err}"
+    );
+    assert!(!dir.join("xdg-config/allp/profiles/dev.toml").exists());
+}
+
+#[test]
 fn profile_install_dry_run_uses_declared_backend() {
     let dir = temp_dir("profile-install-dry-run");
     install_fake_apt(&dir, &dir.join("executed"), 0, 0);

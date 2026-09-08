@@ -109,7 +109,14 @@ impl Backend for PythonBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
     ) -> AllpResult<Vec<InstalledPackage>> {
-        let output = python_pip_capture(commands, runner, &["list", "--format=freeze"])?;
+        let Some(output) =
+            python_pip_capture_if_available(commands, runner, &["list", "--format=freeze"])?
+        else {
+            // A Python runtime without pip has no pip-managed inventory for
+            // this backend. It must not make an otherwise complete system
+            // package profile impossible to save.
+            return Ok(Vec::new());
+        };
         Ok(output
             .lines()
             .filter_map(|line| {
@@ -576,16 +583,24 @@ fn python_pip_capture(
     runner: &dyn ProcessRunner,
     args: &[&str],
 ) -> AllpResult<String> {
+    python_pip_capture_if_available(commands, runner, args)?.ok_or_else(|| {
+        AllpError::InvalidInput(
+            "Python was detected, but pip is not available for this interpreter. Install pip for the active Python, use a virtual environment, or choose pipx/uv when appropriate."
+                .to_owned(),
+        )
+    })
+}
+
+fn python_pip_capture_if_available(
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    args: &[&str],
+) -> AllpResult<Option<String>> {
     let command = python_pip_command(commands, args)?;
     let backend = PythonBackend;
     match capture_checked(&backend, runner, command) {
-        Err(AllpError::CommandFailed { stderr, .. }) if is_missing_pip_error(&stderr) => {
-            Err(AllpError::InvalidInput(
-                "Python was detected, but pip is not available for this interpreter. Install pip for the active Python, use a virtual environment, or choose pipx/uv when appropriate."
-                    .to_owned(),
-            ))
-        }
-        result => result,
+        Err(AllpError::CommandFailed { stderr, .. }) if is_missing_pip_error(&stderr) => Ok(None),
+        result => result.map(Some),
     }
 }
 

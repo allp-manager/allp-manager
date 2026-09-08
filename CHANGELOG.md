@@ -4,6 +4,13 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Python runtimes without pip no longer block package-profile snapshots; they
+  contribute an empty Python inventory instead.
+- `profile save` now reports the exact backend inventory failures that prevented
+  a complete snapshot and confirms that no partial profile was written.
+
 ## [0.6.1] - 2026-09-08
 
 ### Release Title

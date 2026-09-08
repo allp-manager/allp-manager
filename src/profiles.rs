@@ -92,11 +92,17 @@ pub fn save_current(context: &OperationContext<'_>, name: &str) -> AllpResult<Pr
     let report = operations::list::gather(context)?;
 
     if !report.complete {
-        return Err(AllpError::PartialFailure(
-            "cannot save a profile because installed-package discovery was incomplete; \
-             fix the reported backend errors and retry"
-                .to_owned(),
-        ));
+        let details = report
+            .issues
+            .iter()
+            .map(|issue| format!("  - {}: {}", issue.backend_name, issue.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(AllpError::PartialFailure(format!(
+            "cannot save a profile because installed-package discovery was incomplete:\n\
+                 {details}\n\
+                 Fix these backend errors and retry; no partial profile was written."
+        )));
     }
 
     let mut packages = report
