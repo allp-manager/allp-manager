@@ -4,7 +4,11 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
-Target base version: `0.6.0`.
+## [0.6.1] - 2026-09-08
+
+### Release Title
+
+Allp v0.6.1 — Safer Search, Updates, and Package Profiles
 
 ### Added
 
@@ -42,6 +46,19 @@ Target base version: `0.6.0`.
 - Completed the profile CLI integration omitted across the merged profile PRs,
   restored locked builds, and preflight all required profile backends before
   any package installation begins.
+
+### Known Limitations
+
+- Package profiles preserve backend-qualified package IDs and do not translate
+  them across distributions. Saved versions are inventory metadata, not pins,
+  and system package inventories can include automatically installed
+  dependencies.
+- Profile installation executes packages sequentially after backend preflight;
+  a package missing from an otherwise available backend can still stop a run
+  after earlier packages were installed.
+- Interactive APT upgrades in the live TUI can hide the native confirmation
+  prompt. Use `allp upgrade --yes` for an approved unattended run or
+  `allp upgrade --no-tui` to keep the native prompt visible.
 
 ## [0.5.0] - 2026-08-25
 

@@ -6,7 +6,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه Build فعلی: **0.6.0.1** (نسخه پایه Cargo: **0.6.0**)
+نسخه Build فعلی: **0.6.1.1** (نسخه پایه Cargo: **0.6.1**)
 سطح بلوغ: **Public Alpha**
 
 ## چرا Allp وجود دارد
@@ -58,7 +58,7 @@ sh install-allp.sh
 نصاب سیستم‌عامل و معماری Linux/macOS را تشخیص می‌دهد، آرشیو دقیق release و
 فایل SHA-256 کنار آن را دانلود و بررسی می‌کند، مطمئن می‌شود آرشیو فقط باینری
 `allp` را دارد و آن را در `~/.local/bin` می‌گذارد. عمداً روش `curl | sh`
-پیشنهاد نشده است. برای نصب یک نسخهٔ مشخص، شماره‌ای مثل `0.6.0` را آرگومان اول
+پیشنهاد نشده است. برای نصب یک نسخهٔ مشخص، شماره‌ای مثل `0.6.1` را آرگومان اول
 بدهید؛ مسیر نصب را هم می‌توان با `ALLP_INSTALL_DIR` عوض کرد.
 
 اگر باینری در حال اجرا متعلق به یک بستهٔ توزیعی باشد، `allp self-update` هیچ‌وقت

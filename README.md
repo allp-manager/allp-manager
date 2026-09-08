@@ -9,7 +9,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, rpm-ostree on Bazzite/Atomic hosts, Flatpak, Snap, Homebrew/Linuxbrew, Python and Node installers, and Rust/Cargo, then shows the exact native command or local API request before anything mutates the system.
 
-Current build version: **0.6.0.1** (Cargo base version **0.6.0**)
+Current build version: **0.6.1.1** (Cargo base version **0.6.1**)
 Maturity: **public alpha**
 
 ## Why Allp Exists
@@ -63,7 +63,7 @@ sh install-allp.sh
 The installer detects Linux/macOS architecture, downloads the exact release
 archive and adjacent SHA-256 file, verifies it, checks the archive contains only
 the `allp` binary, and installs to `~/.local/bin`. It is deliberately not
-documented as a `curl | sh` pipeline. Pass an exact version such as `0.6.0` as
+documented as a `curl | sh` pipeline. Pass an exact version such as `0.6.1` as
 the first argument, or set `ALLP_INSTALL_DIR` to choose another user-writable
 directory.
 
