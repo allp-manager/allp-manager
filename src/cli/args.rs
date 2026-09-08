@@ -321,6 +321,84 @@ pub struct InfoArgs {
     pub common: CommonOptions,
 }
 
+
+#[derive(Debug, Clone, Args)]
+pub struct ProfileSaveArgs {
+    /// Name of the profile to create from the current installed package state.
+    pub name: String,
+
+    #[command(flatten)]
+    pub common: CommonOptions,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ProfileNameArgs {
+    /// Profile name.
+    pub name: String,
+
+    #[command(flatten)]
+    pub common: CommonOptions,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ProfileInstallArgs {
+    /// Profile name.
+    pub name: String,
+
+    #[command(flatten)]
+    pub mutation: MutationOptions,
+
+    #[command(flatten)]
+    pub common: CommonOptions,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ProfileExportArgs {
+    /// Profile name.
+    pub name: String,
+
+    /// Destination TOML file.
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub common: CommonOptions,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ProfileImportArgs {
+    /// Source TOML file.
+    pub path: PathBuf,
+
+    /// Override the profile name. Otherwise the source filename is used.
+    #[arg(long)]
+    pub name: Option<String>,
+
+    #[command(flatten)]
+    pub common: CommonOptions,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ProfileCommands {
+    /// Save the currently installed packages as a profile.
+    Save(ProfileSaveArgs),
+    /// List saved profiles.
+    List(DetectArgs),
+    /// Show a profile and its package entries.
+    Show(ProfileNameArgs),
+    /// Install all packages declared by a profile.
+    Install(ProfileInstallArgs),
+    /// Export a saved profile to a TOML file.
+    Export(ProfileExportArgs),
+    /// Import a TOML profile into Allp's profile store.
+    Import(ProfileImportArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ProfileArgs {
+    #[command(subcommand)]
+    pub command: ProfileCommands,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Detect supported package managers available in the current environment.
@@ -350,6 +428,9 @@ pub enum Commands {
     /// Report platform, capability, backend, and self-update diagnostics.
     Doctor(DoctorArgs),
 
+    /// Save and apply reproducible sets of installed packages.
+    Profile(ProfileArgs),
+
     /// Securely check for and install an official Allp release.
     SelfUpdate(SelfUpdateArgs),
 
@@ -365,17 +446,18 @@ pub enum Commands {
 
 impl Commands {
     pub fn is_mutating(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Install(_)
-                | Self::Remove(_)
-                | Self::Update(_)
-                | Self::Upgrade(_)
-                | Self::SelfUpdate(_)
-                | Self::InternalSnapdInstall(_)
-                | Self::InternalReplace(_)
-                | Self::InternalDeferredReplace(_)
-        )
+            | Self::Remove(_)
+            | Self::Update(_)
+            | Self::Upgrade(_)
+            | Self::SelfUpdate(_)
+            | Self::InternalSnapdInstall(_)
+            | Self::InternalReplace(_)
+            | Self::InternalDeferredReplace(_) => true,
+            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(_)),
+            _ => false,
+        }
     }
 
     pub fn common(&self) -> &CommonOptions {
@@ -388,6 +470,14 @@ impl Commands {
             Self::List(args) => &args.common,
             Self::Info(args) => &args.common,
             Self::Doctor(args) => &args.common,
+            Self::Profile(args) => match &args.command {
+                ProfileCommands::Save(a) => &a.common,
+                ProfileCommands::List(a) => &a.common,
+                ProfileCommands::Show(a) => &a.common,
+                ProfileCommands::Install(a) => &a.common,
+                ProfileCommands::Export(a) => &a.common,
+                ProfileCommands::Import(a) => &a.common,
+            },
             Self::SelfUpdate(args) => &args.common,
             Self::InternalSnapdInstall(args) => &args.common,
             Self::InternalReplace(args) => &args.common,
@@ -409,6 +499,7 @@ impl Commands {
             Self::Info(args) => args.backend.backend.as_deref(),
             Self::Detect(_)
             | Self::Doctor(_)
+            | Self::Profile(_)
             | Self::SelfUpdate(_)
             | Self::InternalSnapdInstall(_)
             | Self::InternalReplace(_)
@@ -440,6 +531,7 @@ impl Commands {
             Self::Update(args) => args.mutation.dry_run || args.check_only,
             Self::Upgrade(args) => args.mutation.dry_run,
             Self::SelfUpdate(args) => args.mutation.dry_run || args.check_only,
+            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(a) if a.mutation.dry_run),
             _ => false,
         }
     }
@@ -450,6 +542,7 @@ impl Commands {
             Self::Update(args) => args.mutation.no_interactive,
             Self::Upgrade(args) => args.mutation.no_interactive,
             Self::SelfUpdate(args) => args.mutation.no_interactive,
+            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(a) if a.mutation.no_interactive),
             _ => false,
         }
     }
@@ -460,6 +553,7 @@ impl Commands {
             Self::Update(args) => args.mutation.yes,
             Self::Upgrade(args) => args.mutation.yes,
             Self::SelfUpdate(args) => args.mutation.yes,
+            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(a) if a.mutation.yes),
             _ => false,
         }
     }
@@ -470,6 +564,7 @@ impl Commands {
             Self::Update(args) => args.mutation.allow_bootstrap,
             Self::Upgrade(args) => args.mutation.allow_bootstrap,
             Self::SelfUpdate(args) => args.mutation.allow_bootstrap,
+            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(a) if a.mutation.allow_bootstrap),
             _ => false,
         }
     }
