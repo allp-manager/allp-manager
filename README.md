@@ -173,6 +173,58 @@ layering only as a last resort, every layering plan points users toward
 Homebrew, Flatpak, or containers first. See
 [the Bazzite backend guide](docs/BAZZITE_BACKEND.md).
 
+## Package Profiles (Experimental)
+
+Package profiles capture package identifiers and their owning backends in a
+portable TOML document. They are useful for reviewing a machine's package set,
+moving an explicit package list between compatible systems, and replaying that
+list through Allp's normal search, planning, and confirmation flow.
+
+```bash
+allp profile save dev
+allp profile list
+allp profile show dev
+allp profile export dev dev.toml
+allp profile import dev.toml
+allp profile import dev.toml --name laptop-dev
+allp profile install dev --dry-run
+allp profile install dev
+```
+
+Example profile:
+
+```toml
+version = 1
+name = "rust-dev"
+
+[[packages]]
+backend = "apt"
+package = "git"
+
+[[packages]]
+backend = "rust"
+package = "ripgrep"
+
+[[packages]]
+backend = "flatpak"
+package = "org.mozilla.firefox"
+```
+
+Profiles deliberately preserve the backend instead of guessing an equivalent
+package on another ecosystem. All required backends are checked before the
+first installation, then packages are installed sequentially with the same
+safety checks and confirmations as `allp install`. Review a profile with
+`show`, or export and edit it, before applying it on another machine.
+
+In profile format version 1, the stored package version is observed inventory
+metadata, not a version pin; installation resolves the version currently
+available from the named backend. `profile save` records every package exposed
+by each backend's installed-package listing, which can include system
+dependencies on APT, DNF, or Pacman. Profiles therefore work best between
+systems with compatible backends and should not yet be treated as a universal
+cross-distribution lockfile. Import uses the name declared inside the TOML file
+unless `--name` overrides it.
+
 ## Live Maintenance Progress
 
 ![Allp live maintenance dashboard](docs/assets/tui-maintenance.svg)

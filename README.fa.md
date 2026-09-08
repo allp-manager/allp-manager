@@ -167,9 +167,60 @@ install/remove هم deployment جدیدی می‌سازند که معمولاً 
 Flatpak یا container را پیشنهاد می‌کند. جزئیات در
 [راهنمای Bazzite](docs/BAZZITE_BACKEND.md) آمده است.
 
+## پروفایل پکیج‌ها (Experimental)
+
+پروفایل پکیج، شناسهٔ پکیج‌ها و Backend مالک آن‌ها را در یک فایل TOML نگه
+می‌دارد. با آن می‌توان فهرست نرم‌افزارهای یک سیستم را بازبینی و export کرد و
+روی یک سیستم سازگار، همان فهرست را دوباره از مسیر عادی search، plan و confirmation
+در Allp نصب کرد.
+
+```bash
+allp profile save dev
+allp profile list
+allp profile show dev
+allp profile export dev dev.toml
+allp profile import dev.toml
+allp profile import dev.toml --name laptop-dev
+allp profile install dev --dry-run
+allp profile install dev
+```
+
+نمونهٔ فایل پروفایل:
+
+```toml
+version = 1
+name = "rust-dev"
+
+[[packages]]
+backend = "apt"
+package = "git"
+
+[[packages]]
+backend = "rust"
+package = "ripgrep"
+
+[[packages]]
+backend = "flatpak"
+package = "org.mozilla.firefox"
+```
+
+پروفایل عمداً Backend را حفظ می‌کند و میان ecosystemهای مختلف معادل‌سازی
+حدسی انجام نمی‌دهد. Allp پیش از اولین نصب، در دسترس بودن تمام Backendهای لازم
+را بررسی می‌کند و سپس پکیج‌ها را به‌ترتیب و با همان کنترل‌ها و تأییدهای `allp
+install` نصب می‌کند. قبل از استفاده روی سیستم دیگر، پروفایل را با `show` یا
+نسخهٔ exportشده بازبینی کنید.
+
+در format نسخهٔ ۱، version ذخیره‌شده فقط نسخهٔ مشاهده‌شده هنگام inventory است
+و pin محسوب نمی‌شود؛ هنگام نصب، نسخهٔ موجود در Backend انتخاب می‌شود. همچنین
+`profile save` هر چیزی را که دستور list آن Backend نصب‌شده بداند ذخیره می‌کند؛
+در APT، DNF و Pacman این فهرست می‌تواند dependencyهای سیستم را هم شامل شود.
+بنابراین این قابلیت فعلاً برای سیستم‌های دارای Backendهای سازگار مناسب است و
+یک lockfile عمومی cross-distribution نیست. دستور import نام داخل فایل TOML را
+استفاده می‌کند، مگر اینکه با `--name` نام دیگری داده شود.
+
 ## داشبورد زندهٔ عملیات نگهداری
 
-در اجرای واقعی و تعاملی `update` یا `upgrade`، نسخهٔ ۰.۵.۰ Allp در مرحلهٔ اجرا
+در اجرای واقعی و تعاملی `update` یا `upgrade`، Allp در مرحلهٔ اجرا
 یک داشبورد زندهٔ inline نشان می‌دهد. لاگ‌های Native در scrollback معمول
 ترمینال باقی می‌مانند، cardهای وضعیت و خطا اتفاق‌های مهم را جدا می‌کنند، و
 footer نام Backend فعال، action دقیق، زمان سپری‌شده و تکمیل صریح صف را نشان

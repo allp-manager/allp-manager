@@ -20,6 +20,8 @@ Target base version: `0.6.0`.
   canaries for APT, DNF, Pacman, Flatpak, and Snap.
 - Native dpkg/rpm/Pacman update-authority detection so built-in self-update
   never overwrites a package-manager-owned binary.
+- Experimental TOML package profiles for saving, listing, reviewing, exporting,
+  importing, dry-running, and reinstalling backend-qualified package sets.
 
 ### Changed
 
@@ -37,6 +39,9 @@ Target base version: `0.6.0`.
   successful no-match result.
 - Read-only and offline self-update checks no longer mutate update-channel
   provenance.
+- Completed the profile CLI integration omitted across the merged profile PRs,
+  restored locked builds, and preflight all required profile backends before
+  any package installation begins.
 
 ## [0.5.0] - 2026-08-25
 

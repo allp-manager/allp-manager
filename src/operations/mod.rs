@@ -3,8 +3,8 @@ pub mod info;
 pub mod install;
 pub mod list;
 mod maintenance;
-pub mod remove;
 pub mod profile;
+pub mod remove;
 pub mod search;
 pub mod update;
 pub mod upgrade;
@@ -32,6 +32,7 @@ pub struct OperationContext<'a> {
     pub allow_stale_metadata: bool,
     pub verbose: u8,
     pub state_dir: &'a Path,
+    pub config_dir: &'a Path,
     pub backend_filter: Option<&'a str>,
     pub search_scope: Option<SearchScope>,
     pub target: Option<DeveloperTarget>,
@@ -39,6 +40,16 @@ pub struct OperationContext<'a> {
 }
 
 impl<'a> OperationContext<'a> {
+    pub fn with_backend_filter<'b>(
+        &'b self,
+        backend_filter: Option<&'b str>,
+    ) -> OperationContext<'b> {
+        OperationContext {
+            backend_filter,
+            ..*self
+        }
+    }
+
     pub fn effective_search_scope(&self) -> SearchScope {
         self.search_scope.unwrap_or_else(|| {
             if self.backend_filter.is_some() {

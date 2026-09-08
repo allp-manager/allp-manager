@@ -128,6 +128,8 @@ docs-check:
 	grep -q 'install-allp.sh' README.fa.md
 	grep -q 'allp install pycharm' README.md
 	grep -q 'allp install pycharm' README.fa.md
+	grep -q 'allp profile save' README.md
+	grep -q 'allp profile save' README.fa.md
 	grep -q -- '--no-tui' README.md
 	grep -q -- '--no-tui' README.fa.md
 	grep -q -- '--no-tui' docs/CLI_CONTRACT.md

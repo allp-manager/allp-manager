@@ -321,7 +321,6 @@ pub struct InfoArgs {
     pub common: CommonOptions,
 }
 
-
 #[derive(Debug, Clone, Args)]
 pub struct ProfileSaveArgs {
     /// Name of the profile to create from the current installed package state.
@@ -369,7 +368,7 @@ pub struct ProfileImportArgs {
     /// Source TOML file.
     pub path: PathBuf,
 
-    /// Override the profile name. Otherwise the source filename is used.
+    /// Override the profile name. Otherwise the name declared in the profile is used.
     #[arg(long)]
     pub name: Option<String>,
 
@@ -531,7 +530,9 @@ impl Commands {
             Self::Update(args) => args.mutation.dry_run || args.check_only,
             Self::Upgrade(args) => args.mutation.dry_run,
             Self::SelfUpdate(args) => args.mutation.dry_run || args.check_only,
-            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(a) if a.mutation.dry_run),
+            Self::Profile(args) => {
+                matches!(&args.command, ProfileCommands::Install(a) if a.mutation.dry_run)
+            }
             _ => false,
         }
     }
@@ -542,7 +543,9 @@ impl Commands {
             Self::Update(args) => args.mutation.no_interactive,
             Self::Upgrade(args) => args.mutation.no_interactive,
             Self::SelfUpdate(args) => args.mutation.no_interactive,
-            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(a) if a.mutation.no_interactive),
+            Self::Profile(args) => {
+                matches!(&args.command, ProfileCommands::Install(a) if a.mutation.no_interactive)
+            }
             _ => false,
         }
     }
@@ -553,7 +556,9 @@ impl Commands {
             Self::Update(args) => args.mutation.yes,
             Self::Upgrade(args) => args.mutation.yes,
             Self::SelfUpdate(args) => args.mutation.yes,
-            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(a) if a.mutation.yes),
+            Self::Profile(args) => {
+                matches!(&args.command, ProfileCommands::Install(a) if a.mutation.yes)
+            }
             _ => false,
         }
     }
@@ -564,7 +569,9 @@ impl Commands {
             Self::Update(args) => args.mutation.allow_bootstrap,
             Self::Upgrade(args) => args.mutation.allow_bootstrap,
             Self::SelfUpdate(args) => args.mutation.allow_bootstrap,
-            Self::Profile(args) => matches!(&args.command, ProfileCommands::Install(a) if a.mutation.allow_bootstrap),
+            Self::Profile(args) => {
+                matches!(&args.command, ProfileCommands::Install(a) if a.mutation.allow_bootstrap)
+            }
             _ => false,
         }
     }

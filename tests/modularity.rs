@@ -128,6 +128,7 @@ fn generic_search_accepts_a_new_backend_without_operation_changes() {
         allow_stale_metadata: false,
         verbose: 0,
         state_dir: &state_dir,
+        config_dir: &state_dir,
         backend_filter: None,
         search_scope: None,
         target: None,

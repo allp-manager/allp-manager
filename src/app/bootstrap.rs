@@ -6,8 +6,8 @@ use crate::{
     },
     capabilities::{CapabilityAvailability, CapabilityRegistry},
     cli::{
-        confirm_execution, select_search_scope, Cli, Commands, ConfirmationRequest, ProfileCommands,
-        Renderer,
+        confirm_execution, select_search_scope, Cli, Commands, ConfirmationRequest,
+        ProfileCommands, Renderer,
     },
     diagnostics::DoctorReport,
     discovery::{BackendDiscovery, DetectionState, DiscoveryResult},
@@ -235,6 +235,7 @@ impl App {
             ),
             verbose,
             state_dir: &platform.state_dir,
+            config_dir: &platform.config_dir,
             backend_filter: backend_filter.as_deref(),
             search_scope,
             target,
@@ -277,7 +278,9 @@ impl App {
                 ProfileCommands::Save(args) => operations::profile::save(&context, &args.name)?,
                 ProfileCommands::List(_) => operations::profile::list(&context)?,
                 ProfileCommands::Show(args) => operations::profile::show(&context, &args.name)?,
-                ProfileCommands::Install(args) => operations::profile::install(&context, &args.name)?,
+                ProfileCommands::Install(args) => {
+                    operations::profile::install(&context, &args.name)?
+                }
                 ProfileCommands::Export(args) => {
                     operations::profile::export(&context, &args.name, &args.path)?
                 }

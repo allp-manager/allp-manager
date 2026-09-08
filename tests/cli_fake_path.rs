@@ -4748,3 +4748,118 @@ fn search_query_is_not_executed_through_a_shell() {
         "query argument was interpreted by a shell"
     );
 }
+
+#[test]
+fn profile_save_show_export_and_import_round_trip_through_cli() {
+    let dir = temp_dir("profile-round-trip");
+    install_fake_apt(&dir, &dir.join("executed"), 0, 0);
+
+    let save = run_allp(&dir, &["profile", "save", "dev", "--no-color"]);
+    assert!(save.status.success(), "stderr: {}", stderr(&save));
+    assert!(stdout(&save).contains("Saved profile 'dev' with 2 package(s)"));
+
+    let show = run_allp(&dir, &["profile", "show", "dev", "--no-color"]);
+    assert!(show.status.success(), "stderr: {}", stderr(&show));
+    assert!(stdout(&show).contains("apt:git (1.0)"));
+
+    let exported = dir.join("dev.toml");
+    let export = run_allp(
+        &dir,
+        &[
+            "profile",
+            "export",
+            "dev",
+            exported.to_str().expect("temporary path should be UTF-8"),
+            "--no-color",
+        ],
+    );
+    assert!(export.status.success(), "stderr: {}", stderr(&export));
+    let exported_text = fs::read_to_string(&exported).expect("profile should be exported");
+    assert!(exported_text.contains("name = \"dev\""));
+    assert!(exported_text.contains("package = \"git\""));
+
+    let import = run_allp(
+        &dir,
+        &[
+            "profile",
+            "import",
+            exported.to_str().expect("temporary path should be UTF-8"),
+            "--name",
+            "imported",
+            "--json",
+        ],
+    );
+    assert!(import.status.success(), "stderr: {}", stderr(&import));
+    let json: Value =
+        serde_json::from_slice(&import.stdout).expect("profile import JSON should parse");
+    assert_eq!(json["schema_version"], 2);
+    assert_eq!(json["results"]["name"], "imported");
+
+    let list = run_allp(&dir, &["profile", "list", "--no-color"]);
+    assert!(list.status.success(), "stderr: {}", stderr(&list));
+    assert!(stdout(&list).contains("dev"));
+    assert!(stdout(&list).contains("imported"));
+}
+
+#[test]
+fn profile_install_dry_run_uses_declared_backend() {
+    let dir = temp_dir("profile-install-dry-run");
+    install_fake_apt(&dir, &dir.join("executed"), 0, 0);
+    let profile_dir = dir.join("xdg-config/allp/profiles");
+    fs::create_dir_all(&profile_dir).expect("profile directory should be created");
+    fs::write(
+        profile_dir.join("dev.toml"),
+        "version = 1\nname = \"dev\"\n\n[[packages]]\nbackend = \"apt\"\npackage = \"git\"\n",
+    )
+    .expect("profile should be written");
+
+    let output = run_allp(
+        &dir,
+        &[
+            "profile",
+            "install",
+            "dev",
+            "--dry-run",
+            "--no-interactive",
+            "--no-color",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("Installing profile 'dev' (1 package(s))"));
+    assert!(
+        out.contains("\nAPT\n   Action: Install system package"),
+        "unexpected profile plan: {out}"
+    );
+    assert!(out.contains("Dry run complete; no command was executed"));
+    assert!(out.contains("dry run completed; no package was installed"));
+    assert!(!dir.join("executed").exists());
+}
+
+#[test]
+fn profile_install_rejects_missing_backends_before_any_package_runs() {
+    let dir = temp_dir("profile-missing-backend");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    let profile_dir = dir.join("xdg-config/allp/profiles");
+    fs::create_dir_all(&profile_dir).expect("profile directory should be created");
+    fs::write(
+        profile_dir.join("mixed.toml"),
+        "version = 1\nname = \"mixed\"\n\n[[packages]]\nbackend = \"apt\"\npackage = \"git\"\n\n[[packages]]\nbackend = \"flatpak\"\npackage = \"org.mozilla.firefox\"\n",
+    )
+    .expect("profile should be written");
+
+    let output = run_allp(
+        &dir,
+        &["profile", "install", "mixed", "--yes", "--no-color"],
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("flatpak (not detected)"));
+    assert!(stderr(&output).contains("no packages were installed"));
+    assert!(
+        !marker.exists(),
+        "APT must not run before backend preflight"
+    );
+}

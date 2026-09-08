@@ -35,6 +35,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
             allow_stale_metadata: context.allow_stale_metadata,
             verbose: context.verbose,
             state_dir: context.state_dir,
+            config_dir: context.config_dir,
             backend_filter: active_backend_filter,
             search_scope: context.search_scope,
             target: context.target,

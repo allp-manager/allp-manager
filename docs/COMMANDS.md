@@ -229,6 +229,36 @@ allp doctor --json
 
 Reports platform, user/privilege context, Allp ownership and writability, resolved executable paths, backend states, Snap socket, Flatpak remotes, trusted update source, release target, and data directories. A backend argument scopes the report; `doctor homebrew` includes the shared locator's provider attempts, selected and resolved paths, version, prefix, and owner. It is read-only and does not print credentials.
 
+## `profile`
+
+```bash
+allp profile save dev
+allp profile list
+allp profile show dev
+allp profile export dev dev.toml
+allp profile import dev.toml
+allp profile import dev.toml --name laptop-dev
+allp profile install dev --dry-run
+allp profile install dev
+```
+
+Package profiles are an experimental, versioned TOML inventory. `save` records
+the package IDs and backend IDs returned by installed-package discovery. `show`
+and `list` inspect Allp's profile store; `export` and `import` move a profile as
+an ordinary TOML file. Import uses the embedded profile name unless `--name`
+overrides it.
+
+`install` first verifies that every declared backend is detected and supports
+installation, so a missing backend cannot stop the run after earlier packages
+have already changed the system. It then applies packages sequentially through
+the ordinary `allp install` path. Use `--dry-run` before a real restore.
+
+Format version 1 preserves observed package versions as inventory metadata but
+does not pin them. Backend IDs are also preserved: Allp does not translate an
+APT package into a DNF package or infer cross-ecosystem equivalence. Native
+system listings may include dependencies, so exported profiles must be reviewed
+before being moved to another host.
+
 ## `self-update`
 
 ```bash
