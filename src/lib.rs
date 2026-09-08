@@ -16,3 +16,4 @@ pub mod release;
 pub mod requirements;
 pub mod self_update;
 pub mod state;
+pub mod profiles;
