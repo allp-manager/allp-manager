@@ -1,0 +1,2 @@
+firefox - Installs Firefox snap and provides some system integration
+activity-aware-firefox - wrapper to make Firefox aware of Plasma Desktop activities

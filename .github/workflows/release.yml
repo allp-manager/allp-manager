@@ -55,6 +55,7 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --lib --bins --test catalog --test exit_codes --test modularity
       - run: bash scripts/check-architecture.sh
+      - run: sh -n scripts/install-release.sh
       - run: cargo build --release
 
   binary:
@@ -144,6 +145,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 '${{ needs.validate.outputs.tag }}')"
           scripts/release-finalize.sh --archive
           scripts/release-finalize.sh --checksum
+          install -m 0755 scripts/install-release.sh dist/install-allp.sh
+          (cd dist && sha256sum install-allp.sh >install-allp.sh.sha256)
       - name: Verify checksums and generate release manifest
         shell: bash
         run: |

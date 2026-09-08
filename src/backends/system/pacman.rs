@@ -1,11 +1,12 @@
 use crate::{
     backends::{
         contract::command_path,
-        util::{capture_checked, match_kind, parse_key_value_lines},
+        util::{capture_allowing_no_matches, capture_checked, match_kind, parse_key_value_lines},
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpResult, BackendCategory, Capability, DeveloperTarget, ExecutionPlan, InstalledPackage,
+        AllpResult, BackendCategory, BackendSearchIssue, BackendSearchIssueKind,
+        BackendSearchReport, Capability, DeveloperTarget, ExecutionPlan, InstalledPackage,
         MaintenancePlan, NativeCommand, OperationKind, PackageCandidate, PackageDomain,
         PackageInfo, PrivilegeRequirement,
     },
@@ -50,60 +51,23 @@ impl Backend for PacmanBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let pacman = command_path(self, commands, "pacman")?;
-        let output = capture_checked(
+        let output = capture_allowing_no_matches(
             self,
             runner,
             NativeCommand::new(pacman).args(["-Ss", query]),
+            |output| {
+                let stderr = output.stderr.trim().to_ascii_lowercase();
+                output.code == Some(1)
+                    && output.stdout.trim().is_empty()
+                    && (stderr.is_empty() || stderr.contains("no packages match"))
+            },
         )?;
-        let mut lines = output.lines().peekable();
-        let mut candidates = Vec::new();
-
-        while let Some(header) = lines.next() {
-            if header.starts_with(' ') || !header.contains('/') {
-                continue;
-            }
-            let mut parts = header.split_whitespace();
-            let Some(repo_and_name) = parts.next() else {
-                continue;
-            };
-            let version = parts.next().map(str::to_owned);
-            let Some((repository, package_id)) = repo_and_name.split_once('/') else {
-                continue;
-            };
-            let has_description = lines.peek().is_some_and(|line| line.starts_with(' '));
-            let description = if has_description {
-                lines.next().map(|line| line.trim().to_owned())
-            } else {
-                None
-            };
-
-            let candidate_match = match_kind(package_id, query);
-            candidates.push(PackageCandidate {
-                backend_id: self.id().to_owned(),
-                backend_name: self.display_name().to_owned(),
-                category: self.category(),
-                domain: PackageDomain::System,
-                package_id: package_id.to_owned(),
-                display_name: package_id.to_owned(),
-                version,
-                description,
-                source: Some(repository.to_owned()),
-                installers: vec![self.display_name().to_owned()],
-                artifact_kind: "system package".to_owned(),
-                scope: Some("system".to_owned()),
-                match_kind: candidate_match,
-                identity: PackageCandidate::infer_identity(
-                    candidate_match,
-                    PackageDomain::System,
-                    "system package",
-                ),
-                metadata: Default::default(),
-            });
-        }
-
-        Ok(candidates)
+        Ok(output
+            .as_deref()
+            .map(|output| parse_pacman_search(self, output, query))
+            .unwrap_or_default())
     }
 
     fn list_installed(
@@ -290,6 +254,75 @@ impl Backend for PacmanBackend {
     }
 }
 
+fn parse_pacman_search(backend: &PacmanBackend, output: &str, query: &str) -> BackendSearchReport {
+    let mut lines = output.lines().peekable();
+    let mut report = BackendSearchReport::default();
+    let mut rejected_lines = 0usize;
+
+    while let Some(header) = lines.next() {
+        if header.trim().is_empty() {
+            continue;
+        }
+        if header.starts_with(' ') {
+            rejected_lines += 1;
+            continue;
+        }
+        let mut parts = header.split_whitespace();
+        let Some(repo_and_name) = parts.next() else {
+            rejected_lines += 1;
+            continue;
+        };
+        let Some((repository, package_id)) = repo_and_name.split_once('/') else {
+            rejected_lines += 1;
+            continue;
+        };
+        if repository.is_empty() || package_id.is_empty() {
+            rejected_lines += 1;
+            continue;
+        }
+        let version = parts.next().map(str::to_owned);
+        let description = if lines.peek().is_some_and(|line| line.starts_with(' ')) {
+            lines.next().map(|line| line.trim().to_owned())
+        } else {
+            None
+        };
+
+        let candidate_match = match_kind(package_id, query);
+        report.candidates.push(PackageCandidate {
+            backend_id: backend.id().to_owned(),
+            backend_name: backend.display_name().to_owned(),
+            category: backend.category(),
+            domain: PackageDomain::System,
+            package_id: package_id.to_owned(),
+            display_name: package_id.to_owned(),
+            version,
+            description,
+            source: Some(repository.to_owned()),
+            installers: vec![backend.display_name().to_owned()],
+            artifact_kind: "system package".to_owned(),
+            scope: Some("system".to_owned()),
+            match_kind: candidate_match,
+            identity: PackageCandidate::infer_identity(
+                candidate_match,
+                PackageDomain::System,
+                "system package",
+            ),
+            metadata: Default::default(),
+        });
+    }
+
+    if rejected_lines > 0 {
+        report.issues.push(BackendSearchIssue {
+            kind: BackendSearchIssueKind::UnrecognizedOutput,
+            stage: Some("pacman -Ss".to_owned()),
+            message: format!(
+                "Pacman returned {rejected_lines} non-empty line(s) in an unrecognized format"
+            ),
+        });
+    }
+    report
+}
+
 struct PlanSpec<T> {
     operation: OperationKind,
     action: &'static str,
@@ -317,5 +350,41 @@ fn plan<const N: usize>(
         privilege: PrivilegeRequirement::RootRequired,
         requires_root: true,
         interactive: true,
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::{parse_pacman_search, PacmanBackend};
+    use crate::domain::BackendSearchIssueKind;
+
+    #[test]
+    fn pacman_search_fixtures_distinguish_matches_no_matches_and_unknown_output() {
+        let valid = parse_pacman_search(
+            &PacmanBackend,
+            include_str!("../../../tests/fixtures/pacman/search-valid.txt"),
+            "firefox",
+        );
+        assert_eq!(valid.candidates.len(), 2);
+        assert!(valid.issues.is_empty());
+
+        let empty = parse_pacman_search(
+            &PacmanBackend,
+            include_str!("../../../tests/fixtures/pacman/search-no-match.txt"),
+            "missing",
+        );
+        assert!(empty.candidates.is_empty());
+        assert!(empty.issues.is_empty());
+
+        let unknown = parse_pacman_search(
+            &PacmanBackend,
+            include_str!("../../../tests/fixtures/pacman/search-unrecognized.txt"),
+            "firefox",
+        );
+        assert!(unknown.candidates.is_empty());
+        assert_eq!(
+            unknown.issues[0].kind,
+            BackendSearchIssueKind::UnrecognizedOutput
+        );
     }
 }

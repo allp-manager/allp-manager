@@ -1,0 +1,4 @@
+extra/firefox 142.0-1
+    Standalone web browser from mozilla.org
+extra/firefox-i18n-fa 142.0-1
+    Persian language pack for Firefox

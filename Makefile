@@ -111,7 +111,10 @@ docs-check:
 	test -f docs/BAZZITE_BACKEND.md
 	test -f docs/assets/tui-maintenance.svg
 	test -f docs/SELF_UPDATE.md
+	test -f docs/BACKEND_CONTRACT.md
+	test -f docs/JSON_SCHEMA.md
 	test -f docs/RELEASE_MANIFEST.md
+	test -x scripts/install-release.sh
 	test -n '$(CURRENT_VERSION)'
 	grep -q '$(CURRENT_VERSION)' README.md
 	grep -q '$(CURRENT_VERSION)' README.fa.md
@@ -121,6 +124,8 @@ docs-check:
 	grep -q 'make quality' README.fa.md
 	grep -q 'allp self-update' README.md
 	grep -q 'allp self-update' README.fa.md
+	grep -q 'install-allp.sh' README.md
+	grep -q 'install-allp.sh' README.fa.md
 	grep -q 'allp install pycharm' README.md
 	grep -q 'allp install pycharm' README.fa.md
 	grep -q -- '--no-tui' README.md

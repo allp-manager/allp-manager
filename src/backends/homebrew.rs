@@ -6,10 +6,11 @@ use crate::{
     },
     discovery::revalidate_homebrew_executable,
     domain::{
-        AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
-        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
-        OperationKind, OperationStatus, PackageCandidate, PackageDomain, PackageInfo,
-        PrivilegeRequirement, RuntimePrivilegeContext,
+        AllpError, AllpResult, BackendCategory, BackendOperationRecord, BackendSearchIssue,
+        BackendSearchIssueKind, BackendSearchReport, Capability, DeveloperTarget, ExecutionPlan,
+        InstalledPackage, MaintenancePlan, NativeCommand, OperationKind, OperationStatus,
+        PackageCandidate, PackageDomain, PackageInfo, PrivilegeRequirement,
+        RuntimePrivilegeContext,
     },
     execution::{CommandOutput, ProcessRunner},
 };
@@ -123,10 +124,11 @@ impl Backend for HomebrewBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let brew = command_path(self, commands, "brew")?;
         let mut candidates = Vec::new();
-        append_search(
+        let mut issues = Vec::new();
+        if let Some(issue) = append_search(
             self,
             runner.capture_with_privilege(
                 &homebrew_command(brew).args(["search", "--formula", query]),
@@ -136,8 +138,10 @@ impl Backend for HomebrewBackend {
             "Homebrew formulae",
             "Homebrew formula",
             &mut candidates,
-        );
-        append_search(
+        ) {
+            issues.push(issue);
+        }
+        if let Some(issue) = append_search(
             self,
             runner.capture_with_privilege(
                 &homebrew_command(brew).args(["search", "--cask", query]),
@@ -147,7 +151,9 @@ impl Backend for HomebrewBackend {
             "Homebrew casks",
             "Homebrew cask",
             &mut candidates,
-        );
+        ) {
+            issues.push(issue);
+        }
 
         if candidates.is_empty() {
             let output = capture_checked_with_privilege(
@@ -166,7 +172,7 @@ impl Backend for HomebrewBackend {
             );
         }
 
-        Ok(candidates)
+        Ok(BackendSearchReport { candidates, issues })
     }
 
     fn list_installed(
@@ -583,9 +589,9 @@ fn append_search(
     source: &str,
     artifact_kind: &str,
     candidates: &mut Vec<PackageCandidate>,
-) {
-    if let Ok(output) = result {
-        if output.success {
+) -> Option<BackendSearchIssue> {
+    match result {
+        Ok(output) if output.success => {
             append_lines(
                 backend,
                 &output.stdout,
@@ -594,7 +600,28 @@ fn append_search(
                 artifact_kind,
                 candidates,
             );
+            None
         }
+        Ok(output) => Some(BackendSearchIssue {
+            kind: BackendSearchIssueKind::CommandFailed,
+            stage: Some(format!("brew search {artifact_kind}")),
+            message: output
+                .stderr
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("Homebrew search command failed")
+                .to_owned(),
+        }),
+        Err(error) => Some(BackendSearchIssue {
+            kind: BackendSearchIssueKind::CommandFailed,
+            stage: Some(format!("brew search {artifact_kind}")),
+            message: error
+                .to_string()
+                .lines()
+                .next()
+                .unwrap_or("Homebrew search failed")
+                .to_owned(),
+        }),
     }
 }
 

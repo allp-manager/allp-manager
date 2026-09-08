@@ -1,8 +1,8 @@
 use crate::{
     domain::{
-        AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
-        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
-        PackageCandidate, PackageDomain, PackageInfo, RuntimePrivilegeContext,
+        AllpError, AllpResult, BackendCategory, BackendOperationRecord, BackendSearchReport,
+        Capability, DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan,
+        NativeCommand, PackageCandidate, PackageDomain, PackageInfo, RuntimePrivilegeContext,
     },
     execution::ProcessRunner,
     platform::PlatformContext,
@@ -160,7 +160,7 @@ pub trait Backend: Send + Sync {
         _commands: &CommandMap,
         _runner: &dyn ProcessRunner,
         _query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         Err(self.unsupported("search"))
     }
 

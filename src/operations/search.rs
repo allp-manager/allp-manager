@@ -3,8 +3,8 @@ use crate::{
     cli::Spinner,
     discovery::{BackendDetection, DetectionState},
     domain::{
-        AllpError, BackendIssue, Capability, MatchKind, PackageCandidate, SearchBackendState,
-        SearchBackendSummary, SearchReport, SearchScope,
+        AllpError, BackendIssue, BackendSearchIssueKind, Capability, MatchKind, PackageCandidate,
+        SearchBackendState, SearchBackendSummary, SearchReport, SearchScope,
     },
     identity::resolver,
     operations::OperationContext,
@@ -61,7 +61,7 @@ pub fn run(
             limit,
             include_fuzzy,
             required_capability: None,
-            scope: context.search_scope.unwrap_or(SearchScope::AllSources),
+            scope: context.effective_search_scope(),
         },
     )?;
     context.renderer.search(&report);
@@ -155,19 +155,23 @@ pub fn gather_with_policy_excluding(
 
             for (backend_id, backend_name, result) in receiver {
                 match result {
-                    Ok(mut found) => {
+                    Ok(mut backend_report) => {
+                        let (state, summary_message) = classify_backend_report(&backend_report);
                         update_backend_summary(
                             &mut backend_summaries,
                             &backend_id,
-                            if found.is_empty() {
-                                SearchBackendState::NoMatches
-                            } else {
-                                SearchBackendState::ParsedResults
-                            },
-                            found.len(),
-                            None,
+                            state,
+                            backend_report.candidates.len(),
+                            summary_message,
                         );
-                        candidates.append(&mut found);
+                        issues.extend(backend_report.issues.drain(..).map(|issue| BackendIssue {
+                            backend_id: backend_id.clone(),
+                            backend_name: backend_name.clone(),
+                            kind: issue.kind,
+                            stage: issue.stage,
+                            message: issue.message,
+                        }));
+                        candidates.append(&mut backend_report.candidates);
                     }
                     Err(error) => {
                         let (state, message) = classify_search_error(&error);
@@ -182,6 +186,8 @@ pub fn gather_with_policy_excluding(
                             issues.push(BackendIssue {
                                 backend_id,
                                 backend_name,
+                                kind: BackendSearchIssueKind::CommandFailed,
+                                stage: None,
                                 message,
                             });
                         }
@@ -202,14 +208,41 @@ pub fn gather_with_policy_excluding(
     candidates.retain(|candidate| policy.scope.matches_candidate(candidate));
     sort_candidates_for_query(&mut candidates, query);
     let candidates = apply_visibility(candidates, policy);
+    let groups = resolver::group_candidates(&candidates);
 
     Ok(SearchReport {
         query: query.to_owned(),
+        effective_scope: policy.scope,
         complete: issues.is_empty(),
         candidates,
+        groups,
         issues,
         backend_summaries,
     })
+}
+
+fn classify_backend_report(
+    report: &crate::domain::BackendSearchReport,
+) -> (SearchBackendState, Option<String>) {
+    let has_unrecognized_output = report
+        .issues
+        .iter()
+        .any(|issue| issue.kind == BackendSearchIssueKind::UnrecognizedOutput);
+    let state = if report.issues.is_empty() {
+        if report.candidates.is_empty() {
+            SearchBackendState::NoMatches
+        } else {
+            SearchBackendState::ParsedResults
+        }
+    } else if report.candidates.is_empty() && has_unrecognized_output {
+        SearchBackendState::UnrecognizedOutput
+    } else {
+        SearchBackendState::PartialResults
+    };
+    (
+        state,
+        report.issues.first().map(|issue| issue.message.clone()),
+    )
 }
 
 fn initial_backend_summaries(
@@ -580,6 +613,40 @@ fn has_development_library_penalty(package_id: &str) -> bool {
 mod tests {
     use super::*;
     use crate::domain::{BackendCategory, PackageDomain};
+
+    #[test]
+    fn backend_report_contract_distinguishes_empty_unknown_and_partial() {
+        let empty = crate::domain::BackendSearchReport::default();
+        assert_eq!(
+            classify_backend_report(&empty).0,
+            SearchBackendState::NoMatches
+        );
+
+        let unknown = crate::domain::BackendSearchReport::default().with_issue(
+            crate::domain::BackendSearchIssue {
+                kind: BackendSearchIssueKind::UnrecognizedOutput,
+                stage: Some("fixture".to_owned()),
+                message: "unknown output".to_owned(),
+            },
+        );
+        assert_eq!(
+            classify_backend_report(&unknown).0,
+            SearchBackendState::UnrecognizedOutput
+        );
+
+        let partial = crate::domain::BackendSearchReport {
+            candidates: vec![candidate(
+                "system-example",
+                BackendCategory::System,
+                "firefox",
+            )],
+            issues: unknown.issues,
+        };
+        assert_eq!(
+            classify_backend_report(&partial).0,
+            SearchBackendState::PartialResults
+        );
+    }
 
     fn candidate(
         backend_id: &str,

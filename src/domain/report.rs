@@ -1,24 +1,65 @@
-use crate::domain::{PackageCandidate, PrivilegeStatus};
+use crate::domain::{CandidateGroup, PackageCandidate, PrivilegeStatus, SearchScope};
 use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendSearchIssueKind {
+    UnrecognizedOutput,
+    CommandFailed,
+    IncompleteMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BackendSearchIssue {
+    pub kind: BackendSearchIssueKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BackendSearchReport {
+    pub candidates: Vec<PackageCandidate>,
+    pub issues: Vec<BackendSearchIssue>,
+}
+
+impl BackendSearchReport {
+    pub fn complete(candidates: Vec<PackageCandidate>) -> Self {
+        Self {
+            candidates,
+            issues: Vec::new(),
+        }
+    }
+
+    pub fn with_issue(mut self, issue: BackendSearchIssue) -> Self {
+        self.issues.push(issue);
+        self
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BackendIssue {
     pub backend_id: String,
     pub backend_name: String,
+    pub kind: BackendSearchIssueKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchReport {
     pub query: String,
+    pub effective_scope: SearchScope,
     pub complete: bool,
     pub candidates: Vec<PackageCandidate>,
+    pub groups: Vec<CandidateGroup>,
     pub issues: Vec<BackendIssue>,
     #[serde(skip)]
     pub backend_summaries: Vec<SearchBackendSummary>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchBackendSummary {
     pub backend_id: String,
     pub backend_name: String,
@@ -27,13 +68,16 @@ pub struct SearchBackendSummary {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SearchBackendState {
     Available,
     Unavailable,
     Skipped,
     NoConfiguredRemotes,
     SearchFailed,
+    UnrecognizedOutput,
+    PartialResults,
     ParsedResults,
     NoMatches,
 }

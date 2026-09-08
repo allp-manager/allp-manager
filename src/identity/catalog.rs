@@ -7,6 +7,14 @@ pub struct CanonicalIdentity {
     pub software_type: SoftwareType,
     pub aliases: &'static [&'static str],
     pub official_sources: &'static [&'static str],
+    pub verified_packages: &'static [VerifiedPackageIdentity],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VerifiedPackageIdentity {
+    pub backend_id: &'static str,
+    pub package_id: &'static str,
+    pub evidence: &'static str,
 }
 
 pub const HOMEBREW_ID: &str = "homebrew";
@@ -21,6 +29,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
             "https://brew.sh/",
             "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh",
         ],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "apt",
@@ -28,6 +37,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::PackageManager,
         aliases: &["apt", "apt-get", "advanced package tool"],
         official_sources: &["https://salsa.debian.org/apt-team/apt"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "pacman",
@@ -35,6 +45,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::PackageManager,
         aliases: &["pacman", "arch pacman"],
         official_sources: &["https://gitlab.archlinux.org/pacman/pacman"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "dnf",
@@ -42,6 +53,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::PackageManager,
         aliases: &["dnf", "dnf5", "fedora dnf"],
         official_sources: &["https://github.com/rpm-software-management/dnf5"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "zypper",
@@ -49,6 +61,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::PackageManager,
         aliases: &["zypper", "opensuse zypper"],
         official_sources: &["https://github.com/openSUSE/zypper"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "apk",
@@ -56,6 +69,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::PackageManager,
         aliases: &["apk", "alpine apk"],
         official_sources: &["https://gitlab.alpinelinux.org/alpine/apk-tools"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "flatpak",
@@ -63,6 +77,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::UniversalApplication,
         aliases: &["flatpak"],
         official_sources: &["https://flatpak.org/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "snap",
@@ -70,6 +85,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::UniversalApplication,
         aliases: &["snap", "snapcraft"],
         official_sources: &["https://snapcraft.io/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "python",
@@ -77,6 +93,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::LanguageRuntime,
         aliases: &["python", "python3", "cpython"],
         official_sources: &["https://www.python.org/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "pip",
@@ -84,6 +101,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::RegistryClient,
         aliases: &["pip", "pip3"],
         official_sources: &["https://pip.pypa.io/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "pipx",
@@ -91,6 +109,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::RegistryClient,
         aliases: &["pipx"],
         official_sources: &["https://pipx.pypa.io/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "uv",
@@ -98,6 +117,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::RegistryClient,
         aliases: &["uv", "astral uv"],
         official_sources: &["https://docs.astral.sh/uv/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "nodejs",
@@ -105,6 +125,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::LanguageRuntime,
         aliases: &["node", "nodejs", "node.js"],
         official_sources: &["https://nodejs.org/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "npm",
@@ -112,6 +133,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::RegistryClient,
         aliases: &["npm", "node package manager"],
         official_sources: &["https://www.npmjs.com/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "pnpm",
@@ -119,6 +141,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::RegistryClient,
         aliases: &["pnpm"],
         official_sources: &["https://pnpm.io/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "yarn",
@@ -126,6 +149,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::RegistryClient,
         aliases: &["yarn", "yarnpkg"],
         official_sources: &["https://yarnpkg.com/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "rust",
@@ -133,6 +157,7 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::LanguageRuntime,
         aliases: &["rust", "rustlang", "rust language"],
         official_sources: &["https://www.rust-lang.org/"],
+        verified_packages: &[],
     },
     CanonicalIdentity {
         id: "cargo",
@@ -140,6 +165,41 @@ const IDENTITIES: &[CanonicalIdentity] = &[
         software_type: SoftwareType::RegistryClient,
         aliases: &["cargo", "rust package manager", "crates.io"],
         official_sources: &["https://doc.rust-lang.org/cargo/"],
+        verified_packages: &[],
+    },
+    CanonicalIdentity {
+        id: "firefox",
+        display_name: "Firefox",
+        software_type: SoftwareType::DesktopApplication,
+        aliases: &["firefox", "mozilla firefox", "firefox browser"],
+        official_sources: &["https://www.mozilla.org/firefox/"],
+        verified_packages: &[
+            VerifiedPackageIdentity {
+                backend_id: "apt",
+                package_id: "firefox",
+                evidence: "built-in Firefox package mapping for APT",
+            },
+            VerifiedPackageIdentity {
+                backend_id: "dnf",
+                package_id: "firefox",
+                evidence: "built-in Firefox package mapping for DNF",
+            },
+            VerifiedPackageIdentity {
+                backend_id: "pacman",
+                package_id: "firefox",
+                evidence: "built-in Firefox package mapping for Pacman",
+            },
+            VerifiedPackageIdentity {
+                backend_id: "flatpak",
+                package_id: "org.mozilla.firefox",
+                evidence: "built-in Firefox application-ID mapping for Flatpak",
+            },
+            VerifiedPackageIdentity {
+                backend_id: "snap",
+                package_id: "firefox",
+                evidence: "built-in Firefox package mapping for Snap",
+            },
+        ],
     },
 ];
 

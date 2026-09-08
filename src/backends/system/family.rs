@@ -5,9 +5,9 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpResult, BackendCategory, Capability, DeveloperTarget, ExecutionPlan, InstalledPackage,
-        MaintenancePlan, NativeCommand, OperationKind, PackageCandidate, PackageDomain,
-        PackageInfo, PrivilegeRequirement,
+        AllpResult, BackendCategory, BackendSearchReport, Capability, DeveloperTarget,
+        ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand, OperationKind,
+        PackageCandidate, PackageDomain, PackageInfo, PrivilegeRequirement,
     },
     execution::ProcessRunner,
 };
@@ -86,7 +86,7 @@ impl Backend for SystemFamilyBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let Some(template) = self.config.search else {
             return Err(self.unsupported("search"));
         };
@@ -96,7 +96,9 @@ impl Backend for SystemFamilyBackend {
             runner,
             NativeCommand::new(program).args(template.args).arg(query),
         )?;
-        Ok(parse_search(self, &output, query))
+        Ok(BackendSearchReport::complete(parse_search(
+            self, &output, query,
+        )))
     }
 
     fn list_installed(

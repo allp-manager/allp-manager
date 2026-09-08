@@ -1518,7 +1518,7 @@ fn discovery_is_fresh_and_backend_can_appear_after_path_change() {
     assert!(first.status.success());
     let first_json: Value =
         serde_json::from_slice(&first.stdout).expect("detect JSON should parse");
-    assert_eq!(first_json["schema_version"], 1);
+    assert_eq!(first_json["schema_version"], 2);
     assert!(first_json["results"]
         .as_array()
         .expect("results should be an array")
@@ -1767,7 +1767,17 @@ fn homebrew_install_prefers_official_bootstrap_over_npm_name_collision() {
     let marker = dir.join("executed");
     install_fake_node(&dir, &marker);
 
-    let output = run_allp(&dir, &["install", "Homebrew", "--dry-run", "--no-color"]);
+    let output = run_allp(
+        &dir,
+        &[
+            "install",
+            "Homebrew",
+            "--scope",
+            "all",
+            "--dry-run",
+            "--no-color",
+        ],
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let out = stdout(&output);
@@ -2006,7 +2016,7 @@ fn snap_search_publisher_verification_is_normalized() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json: Value = serde_json::from_slice(&output.stdout).expect("search JSON should parse");
-    let result = &json["results"][0];
+    let result = &json["results"]["candidates"][0];
     assert_eq!(result["source"], "JetBrains · Verified");
     assert_eq!(result["metadata"]["snap.publisher_name"], "JetBrains");
     assert_eq!(
@@ -2027,10 +2037,8 @@ fn snap_discovery_rows_are_not_rendered_as_installable_exact_packages() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let out = stdout(&output);
     assert!(out.contains("Exact search match"));
-    assert!(out.contains("Exact search-name match · availability not yet verified"));
-    assert!(out.contains("discovery version: 2026.1.4"));
-    assert!(out.contains("publisher: JetBrains ✓"));
-    assert!(out.contains("availability: not yet verified"));
+    assert!(out.contains("JetBrains · Verified"));
+    assert!(out.contains("availability not yet verified"));
     assert!(!out.contains("Exact package name"));
 }
 
@@ -2886,7 +2894,7 @@ fn update_dry_run_json_is_clean_and_executes_zero_commands() {
     assert!(stderr(&output).is_empty());
     assert!(!marker.exists(), "dry run must not execute native command");
     let json: Value = serde_json::from_slice(&output.stdout).expect("update JSON should parse");
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["command"], "update");
     assert_eq!(json["results"][0]["status"], "dry_run");
 }
@@ -4178,9 +4186,8 @@ fn flatpak_telegram_result_is_included_in_combined_apps_search() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let out = stdout(&output);
     assert!(out.contains("org.telegram.desktop"));
-    assert!(out.contains("Name: Telegram Desktop"));
-    assert!(out.contains("Remote: flathub"));
-    assert!(out.contains("Type: universal application"));
+    assert!(out.contains("(Telegram Desktop)"));
+    assert!(out.contains("flathub"));
     assert!(out.contains("Search Summary"));
     assert!(out.contains("Flatpak  1 result") || out.contains("Flatpak 1 result"));
     let commands = fs::read_to_string(marker).expect("flatpak commands should be recorded");
@@ -4659,9 +4666,16 @@ fn json_search_stdout_is_parseable_without_human_logs() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(stderr(&output).is_empty());
     let json: Value = serde_json::from_slice(&output.stdout).expect("search JSON should parse");
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["command"], "search");
-    assert!(json["results"].as_array().expect("results array").len() <= 25);
+    assert_eq!(json["results"]["effective_scope"], "apps_and_tools");
+    assert!(
+        json["results"]["candidates"]
+            .as_array()
+            .expect("candidate array")
+            .len()
+            <= 25
+    );
 }
 
 #[test]

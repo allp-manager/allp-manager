@@ -6,10 +6,7 @@ use crate::{
         select_no_alternative_action, select_package_candidate, should_page_candidate_selection,
         AlternativeNoMatchAction, ConfirmationRequest,
     },
-    domain::{
-        AllpError, AllpResult, Capability, MatchKind, PackageDomain, SearchBackendState,
-        SearchScope,
-    },
+    domain::{AllpError, AllpResult, Capability, MatchKind, PackageDomain, SearchBackendState},
     execution::{render_execution_plan_with_context, ProcessStatus},
     operations::{
         search::{self, SearchPolicy},
@@ -45,7 +42,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         };
         let policy = SearchPolicy {
             required_capability: Some(Capability::Install),
-            scope: context.search_scope.unwrap_or(SearchScope::AllSources),
+            scope: context.effective_search_scope(),
             ..SearchPolicy::default()
         };
         let report = if let Some(request) = &alternative_request {
@@ -128,13 +125,17 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
             ));
         }
 
-        let scope = context.search_scope.unwrap_or(SearchScope::AllSources);
+        let scope = context.effective_search_scope();
+        let selectable_groups = crate::identity::resolver::group_candidates(&selectable);
         if !context.renderer.json()
             && !should_page_candidate_selection(&selectable, context.no_interactive)
         {
-            context
-                .renderer
-                .install_sources(&current_query, scope, &selectable);
+            context.renderer.install_sources(
+                &current_query,
+                scope,
+                &selectable,
+                &selectable_groups,
+            );
         }
         let preferred_identity_index = preferred_official_identity_index(&selectable);
         if selectable.len() > 1 && context.no_interactive && preferred_identity_index.is_none() {

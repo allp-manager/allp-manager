@@ -4,7 +4,7 @@ use crate::{
     discovery::{DetectedBackendSet, DiscoveryReport, HomebrewDiscovery},
     execution::ProcessRunner,
     platform::PlatformContext,
-    self_update::OFFICIAL_REPOSITORY,
+    self_update::{detect_update_authority, UpdateAuthority, OFFICIAL_REPOSITORY},
 };
 use serde::Serialize;
 use std::{collections::BTreeSet, path::Path};
@@ -24,6 +24,7 @@ pub struct DoctorReport {
     pub backends: Vec<crate::discovery::BackendDetection>,
     pub github_repository: String,
     pub github_update_source_status: String,
+    pub update_authority: UpdateAuthority,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,6 +103,7 @@ impl DoctorReport {
             })
             .collect();
         let compatible_release_target = platform.target_triple();
+        let update_authority = detect_update_authority(&platform, runner);
         let flatpak = discovery
             .entries
             .iter()
@@ -182,6 +184,7 @@ impl DoctorReport {
             ),
             github_update_source_status:
                 "trusted source configured; network not contacted by doctor".to_owned(),
+            update_authority,
         }
     }
 

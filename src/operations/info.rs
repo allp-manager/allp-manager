@@ -77,9 +77,10 @@ pub fn run(context: &OperationContext<'_>, package: &str, full: bool, raw: bool)
     let selectable = search_report.candidates;
 
     if !context.renderer.json() {
+        let groups = crate::identity::resolver::group_candidates(&selectable);
         context
             .renderer
-            .candidates(&selectable, SearchScope::AllSources);
+            .candidates(&selectable, &groups, SearchScope::AllSources);
     }
     if selectable.len() > 1 && context.no_interactive {
         return Err(AllpError::AmbiguousSelection(

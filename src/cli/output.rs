@@ -11,18 +11,20 @@ use crate::{
         render_execution_plan_with_context, render_execution_plan_with_privilege_session,
         render_native_argv, render_native_command,
     },
-    self_update::{SelfUpdateCheck, UpdateAvailability},
+    self_update::{SelfUpdateCheck, UpdateAuthority, UpdateAvailability},
 };
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
     io::{self, IsTerminal, Write},
+    path::Path,
 };
 
 #[derive(Debug, Clone)]
 pub struct Renderer {
     color: bool,
     json: bool,
+    verbose: u8,
 }
 
 impl Renderer {
@@ -36,7 +38,13 @@ impl Renderer {
                     .map(|term| term != "dumb")
                     .unwrap_or(true),
             json,
+            verbose: 0,
         }
+    }
+
+    pub fn with_verbose(mut self, verbose: u8) -> Self {
+        self.verbose = verbose;
+        self
     }
 
     pub fn json(&self) -> bool {
@@ -125,6 +133,17 @@ impl Renderer {
             "  Update source status: {}",
             report.github_update_source_status
         );
+        match &report.update_authority {
+            UpdateAuthority::AllpSelfUpdate => {
+                println!("  Update authority: Allp self-update");
+            }
+            UpdateAuthority::NativePackageManager {
+                manager,
+                package_id,
+            } => {
+                println!("  Update authority: {manager} package `{package_id}`");
+            }
+        }
         println!("\nPaths");
         println!("  Cache: {}", report.platform.cache_dir.display());
         println!("  State: {}", report.platform.state_dir.display());
@@ -224,6 +243,10 @@ impl Renderer {
         if self.json {
             #[derive(Serialize)]
             struct JsonCheck<'a> {
+                schema_version: u8,
+                command: &'static str,
+                complete: bool,
+                update_authority: UpdateAuthority,
                 current_version: String,
                 current_base_version: String,
                 current_build_revision: u64,
@@ -237,6 +260,10 @@ impl Renderer {
                 message: &'a Option<String>,
             }
             self.render_json(&JsonCheck {
+                schema_version: 2,
+                command: "self-update",
+                complete: true,
+                update_authority: UpdateAuthority::AllpSelfUpdate,
                 current_version: check.current_build.display_version(),
                 current_base_version: check.current_version.to_string(),
                 current_build_revision: check.current_build.build_revision,
@@ -325,9 +352,45 @@ impl Renderer {
         }
     }
 
+    pub fn self_update_managed(&self, authority: &UpdateAuthority, install_path: &Path) {
+        let Some((manager, package_id)) = authority.native_manager() else {
+            return;
+        };
+        let message = format!(
+            "Allp is owned by {manager} package `{package_id}`. Built-in replacement is disabled; update it through the package source that installed it."
+        );
+        if self.json {
+            #[derive(Serialize)]
+            struct ManagedCheck<'a> {
+                schema_version: u8,
+                command: &'static str,
+                complete: bool,
+                status: &'static str,
+                update_authority: &'a UpdateAuthority,
+                install_path: String,
+                message: &'a str,
+            }
+            self.render_json(&ManagedCheck {
+                schema_version: 2,
+                command: "self-update",
+                complete: true,
+                status: "managed_externally",
+                update_authority: authority,
+                install_path: install_path.display().to_string(),
+                message: &message,
+            });
+        } else {
+            println!("{message}");
+        }
+    }
+
     #[cfg(test)]
     fn with_color_for_test(color: bool, json: bool) -> Self {
-        Self { color, json }
+        Self {
+            color,
+            json,
+            verbose: 0,
+        }
     }
 
     pub fn render_json<T: Serialize + ?Sized>(&self, value: &T) {
@@ -352,7 +415,7 @@ impl Renderer {
         }
 
         self.render_json(&Envelope {
-            schema_version: 1,
+            schema_version: 2,
             command,
             complete,
             results,
@@ -627,12 +690,22 @@ impl Renderer {
 
     pub fn search(&self, report: &SearchReport) {
         if self.json {
-            self.render_json_envelope(
-                "search",
-                report.complete,
-                &report.candidates,
-                &report.issues,
-            );
+            #[derive(Serialize)]
+            struct SearchResults<'a> {
+                query: &'a str,
+                effective_scope: SearchScope,
+                candidates: &'a [PackageCandidate],
+                groups: &'a [crate::domain::CandidateGroup],
+                backends: &'a [crate::domain::SearchBackendSummary],
+            }
+            let results = SearchResults {
+                query: &report.query,
+                effective_scope: report.effective_scope,
+                candidates: &report.candidates,
+                groups: &report.groups,
+                backends: &report.backend_summaries,
+            };
+            self.render_json_envelope("search", report.complete, &results, &report.issues);
             return;
         }
 
@@ -640,7 +713,7 @@ impl Renderer {
             println!("No packages found for '{}'.", report.query);
         } else {
             println!("{}", self.heading("Search Results"));
-            self.candidates(&report.candidates, SearchScope::AllSources);
+            self.candidates(&report.candidates, &report.groups, report.effective_scope);
         }
 
         for issue in &report.issues {
@@ -654,7 +727,12 @@ impl Renderer {
         self.search_summary(report);
     }
 
-    pub fn candidates(&self, candidates: &[PackageCandidate], scope: SearchScope) {
+    pub fn candidates(
+        &self,
+        candidates: &[PackageCandidate],
+        groups: &[crate::domain::CandidateGroup],
+        scope: SearchScope,
+    ) {
         if candidates
             .iter()
             .any(|candidate| matches!(candidate.match_kind, crate::domain::MatchKind::Related))
@@ -662,7 +740,7 @@ impl Renderer {
             println!("Related matches may not represent the same software.");
         }
 
-        self.grouped_candidates(candidates, scope);
+        self.grouped_candidates(candidates, groups, scope);
     }
 
     pub fn install_sources(
@@ -670,6 +748,7 @@ impl Renderer {
         query: &str,
         scope: SearchScope,
         candidates: &[PackageCandidate],
+        groups: &[crate::domain::CandidateGroup],
     ) {
         if self.json {
             return;
@@ -682,7 +761,7 @@ impl Renderer {
         println!("{}", self.heading(&format!("{title} for \"{query}\"")));
         self.result_counts(candidates, scope);
         self.selection_warnings(query, scope, candidates);
-        self.grouped_candidates(candidates, scope);
+        self.grouped_candidates(candidates, groups, scope);
     }
 
     pub fn preflight_stage(
@@ -717,57 +796,133 @@ impl Renderer {
         }
     }
 
-    fn grouped_candidates(&self, candidates: &[PackageCandidate], scope: SearchScope) {
-        for section in ResultSection::ordered_for_scope(scope) {
-            let entries = candidates
+    fn grouped_candidates(
+        &self,
+        candidates: &[PackageCandidate],
+        groups: &[crate::domain::CandidateGroup],
+        scope: SearchScope,
+    ) {
+        use crate::domain::IdentityConfidence;
+
+        self.render_identity_region(
+            "Confirmed identities",
+            groups.iter().filter(|group| {
+                matches!(
+                    group.confidence,
+                    IdentityConfidence::Official | IdentityConfidence::Verified
+                )
+            }),
+            candidates,
+        );
+        self.render_identity_region(
+            "Possible relationships — verify before choosing",
+            groups
                 .iter()
-                .enumerate()
-                .filter(|(_, candidate)| candidate.result_section() == *section)
-                .collect::<Vec<_>>();
-            if entries.is_empty() {
-                continue;
+                .filter(|group| group.confidence == IdentityConfidence::Probable),
+            candidates,
+        );
+
+        // Unverified results retain the product-oriented source sections. A
+        // confirmed canonical group above may span more than one such source.
+        for section in ResultSection::ordered_for_scope(scope) {
+            let section_groups = groups
+                .iter()
+                .filter(|group| group.confidence == IdentityConfidence::Unverified)
+                .filter(|group| {
+                    group.selection_numbers.iter().any(|number| {
+                        candidates
+                            .get(number.saturating_sub(1))
+                            .is_some_and(|candidate| candidate.result_section() == *section)
+                    })
+                });
+            self.render_identity_region(section.label(), section_groups, candidates);
+        }
+
+        self.render_identity_region(
+            "Conflicting names — not the same software",
+            groups
+                .iter()
+                .filter(|group| group.confidence == IdentityConfidence::Conflicting),
+            candidates,
+        );
+    }
+
+    fn render_identity_region<'a>(
+        &self,
+        label: &str,
+        groups: impl Iterator<Item = &'a crate::domain::CandidateGroup>,
+        candidates: &[PackageCandidate],
+    ) {
+        let groups = groups.collect::<Vec<_>>();
+        if groups.is_empty() {
+            return;
+        }
+        println!("\n{}", self.subheading(label));
+        for group in groups {
+            if group.selection_numbers.len() > 1 {
+                println!(
+                    "  {} · {:?} relationship",
+                    self.bold(group.canonical_name.as_deref().unwrap_or("Known software")),
+                    group.confidence
+                );
             }
-            println!("\n{}", self.subheading(section.label()));
-            for (index, candidate) in entries {
+            for selection_number in &group.selection_numbers {
+                let Some(candidate) = candidates.get(selection_number.saturating_sub(1)) else {
+                    continue;
+                };
                 let version = candidate.version.as_deref().unwrap_or("unknown");
                 let source = candidate.source.as_deref().unwrap_or("unknown source");
+                let package = if candidate.display_name != candidate.package_id {
+                    format!("{} ({})", candidate.package_id, candidate.display_name)
+                } else {
+                    candidate.package_id.clone()
+                };
                 println!(
-                    "[{}] {:<12} {:<32} {:<18} {}",
-                    index + 1,
+                    "[{}] {:<12} {:<32} {} · {} · {} · {}",
+                    selection_number,
                     self.bold(&candidate.backend_name),
-                    candidate.package_id,
-                    candidate_label(candidate),
-                    version
+                    package,
+                    version,
+                    candidate.scope.as_deref().unwrap_or("unknown scope"),
+                    source,
+                    candidate_label(candidate)
                 );
-                println!(
-                    "    source: {source} · type: {} · scope: {}",
-                    candidate.artifact_kind,
-                    candidate.scope.as_deref().unwrap_or("unknown")
-                );
-                if let Some(canonical) = &candidate.identity.canonical_name {
+                if self.verbose > 0 {
                     println!(
-                        "    identity: {canonical} · confidence: {:?} · relationship: {:?}",
-                        candidate.identity.confidence, candidate.identity.distribution
+                        "    type: {} · identity: {} · confidence: {:?} · relationship: {:?}",
+                        candidate.artifact_kind,
+                        candidate
+                            .identity
+                            .canonical_name
+                            .as_deref()
+                            .unwrap_or("unverified"),
+                        candidate.identity.confidence,
+                        candidate.identity.distribution,
                     );
-                }
-                if !candidate.installers.is_empty() {
-                    println!("    installers: {}", candidate.installers.join(", "));
+                    if let Some(source) = &candidate.identity.confidence_source {
+                        println!("    confidence source: {source}");
+                    }
+                    if !candidate.installers.is_empty() {
+                        println!("    installers: {}", candidate.installers.join(", "));
+                    }
+                    if candidate.backend_id == "snap" {
+                        render_snap_candidate_metadata(candidate);
+                    }
+                    if let Some(remote) = candidate.metadata.get("flatpak.remote") {
+                        println!("    remote: {remote}");
+                    }
+                    if let Some(description) = &candidate.description {
+                        println!("    {description}");
+                    }
+                } else if candidate.backend_id == "snap" {
+                    if let Some(availability) = candidate.metadata.get("snap.availability") {
+                        if availability == "discovered" {
+                            println!("    availability not yet verified");
+                        }
+                    }
                 }
                 if let Some(warning) = &candidate.identity.warning {
-                    println!("    warning: {warning}");
-                }
-                if candidate.display_name != candidate.package_id {
-                    println!("    Name: {}", candidate.display_name);
-                }
-                if candidate.backend_id == "snap" {
-                    render_snap_candidate_metadata(candidate);
-                }
-                if let Some(remote) = candidate.metadata.get("flatpak.remote") {
-                    println!("    Remote: {remote}");
-                }
-                println!("    Type: {}", candidate.artifact_kind);
-                if let Some(description) = &candidate.description {
-                    println!("    {}", description);
+                    println!("    {} warning: {warning}", self.warning("⚠"));
                 }
             }
         }
@@ -806,6 +961,30 @@ impl Renderer {
                         self.error("✖"),
                         summary.backend_name,
                         summary.message.as_deref().unwrap_or("search failed")
+                    );
+                }
+                crate::domain::SearchBackendState::UnrecognizedOutput => {
+                    println!(
+                        "{} {} output was not recognized · {}",
+                        self.error("✖"),
+                        summary.backend_name,
+                        summary
+                            .message
+                            .as_deref()
+                            .unwrap_or("parser rejected the output")
+                    );
+                }
+                crate::domain::SearchBackendState::PartialResults => {
+                    println!(
+                        "{} {:<8} {} {} · incomplete: {}",
+                        self.warning("⚠"),
+                        summary.backend_name,
+                        summary.result_count,
+                        plural(summary.result_count, "result", "results"),
+                        summary
+                            .message
+                            .as_deref()
+                            .unwrap_or("part of the output was not usable")
                     );
                 }
                 crate::domain::SearchBackendState::Unavailable => {
@@ -1217,7 +1396,7 @@ impl Renderer {
                 })
                 .collect::<Vec<_>>();
             self.render_json(&MaintenanceEnvelope {
-                schema_version: 1,
+                schema_version: 2,
                 command: &report.operation,
                 complete: !report.has_failures(),
                 requires_confirmation: !dry_run,

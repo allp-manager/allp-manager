@@ -5,10 +5,10 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
-        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
-        OperationKind, OperationStatus, PackageCandidate, PackageDomain, PackageInfo,
-        PrivilegeRequirement,
+        AllpError, AllpResult, BackendCategory, BackendOperationRecord, BackendSearchIssue,
+        BackendSearchIssueKind, BackendSearchReport, Capability, DeveloperTarget, ExecutionPlan,
+        InstalledPackage, MaintenancePlan, NativeCommand, OperationKind, OperationStatus,
+        PackageCandidate, PackageDomain, PackageInfo, PrivilegeRequirement,
     },
     execution::{render_execution_plan_with_context, ProcessRunner, ProcessStatus},
 };
@@ -86,7 +86,7 @@ impl Backend for AptBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let apt_cache = command_path(self, commands, "apt-cache")?;
         let output = capture_checked(
             self,
@@ -94,49 +94,30 @@ impl Backend for AptBackend {
             NativeCommand::new(apt_cache).args(["search", "--names-only", query]),
         )?;
 
-        let mut candidates = Vec::new();
-        for line in output.lines() {
-            let Some((package_id, description)) = line.split_once(" - ") else {
-                continue;
-            };
-            let package_id = package_id.trim();
-            if package_id.is_empty() {
-                continue;
+        let mut report = parse_apt_search(self, &output, query);
+        for candidate in report
+            .candidates
+            .iter_mut()
+            .filter(|candidate| candidate.package_id.eq_ignore_ascii_case(query))
+        {
+            match self.candidate_version(commands, runner, &candidate.package_id) {
+                Ok(version) => candidate.version = version,
+                Err(error) => report.issues.push(BackendSearchIssue {
+                    kind: BackendSearchIssueKind::IncompleteMetadata,
+                    stage: Some("candidate-version".to_owned()),
+                    message: format!(
+                        "found `{}` but could not read its candidate version: {}",
+                        candidate.package_id,
+                        error
+                            .to_string()
+                            .lines()
+                            .next()
+                            .unwrap_or("metadata lookup failed")
+                    ),
+                }),
             }
-
-            let version = if package_id.eq_ignore_ascii_case(query) {
-                self.candidate_version(commands, runner, package_id)
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
-
-            let candidate_match = match_kind(package_id, query);
-            candidates.push(PackageCandidate {
-                backend_id: self.id().to_owned(),
-                backend_name: self.display_name().to_owned(),
-                category: self.category(),
-                domain: PackageDomain::System,
-                package_id: package_id.to_owned(),
-                display_name: package_id.to_owned(),
-                version,
-                description: Some(description.trim().to_owned()),
-                source: Some("APT repositories".to_owned()),
-                installers: vec![self.display_name().to_owned()],
-                artifact_kind: "system package".to_owned(),
-                scope: Some("system".to_owned()),
-                match_kind: candidate_match,
-                identity: PackageCandidate::infer_identity(
-                    candidate_match,
-                    PackageDomain::System,
-                    "system package",
-                ),
-                metadata: Default::default(),
-            });
         }
-
-        Ok(candidates)
+        Ok(report)
     }
 
     fn list_installed(
@@ -434,6 +415,57 @@ impl Backend for AptBackend {
     }
 }
 
+fn parse_apt_search(backend: &AptBackend, output: &str, query: &str) -> BackendSearchReport {
+    let mut report = BackendSearchReport::default();
+    let mut rejected_lines = 0usize;
+
+    for line in output.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((package_id, description)) = line.split_once(" - ") else {
+            rejected_lines += 1;
+            continue;
+        };
+        let package_id = package_id.trim();
+        if package_id.is_empty() {
+            rejected_lines += 1;
+            continue;
+        }
+
+        let candidate_match = match_kind(package_id, query);
+        report.candidates.push(PackageCandidate {
+            backend_id: backend.id().to_owned(),
+            backend_name: backend.display_name().to_owned(),
+            category: backend.category(),
+            domain: PackageDomain::System,
+            package_id: package_id.to_owned(),
+            display_name: package_id.to_owned(),
+            version: None,
+            description: Some(description.trim().to_owned()),
+            source: Some("APT repositories".to_owned()),
+            installers: vec![backend.display_name().to_owned()],
+            artifact_kind: "system package".to_owned(),
+            scope: Some("system".to_owned()),
+            match_kind: candidate_match,
+            identity: PackageCandidate::infer_identity(
+                candidate_match,
+                PackageDomain::System,
+                "system package",
+            ),
+            metadata: Default::default(),
+        });
+    }
+
+    if rejected_lines > 0 {
+        report.issues.push(BackendSearchIssue {
+            kind: BackendSearchIssueKind::UnrecognizedOutput,
+            stage: Some("apt-cache search".to_owned()),
+            message: format!(
+                "APT returned {rejected_lines} non-empty line(s) in an unrecognized format"
+            ),
+        });
+    }
+    report
+}
+
 impl AptBackend {
     fn installed_version(
         &self,
@@ -703,7 +735,38 @@ fn package_count_message(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_apt_busy, parse_apt_upgrade_result};
+    use super::{parse_apt_busy, parse_apt_search, parse_apt_upgrade_result, AptBackend};
+    use crate::domain::BackendSearchIssueKind;
+
+    #[test]
+    fn apt_search_fixtures_distinguish_matches_no_matches_and_unknown_output() {
+        let valid = parse_apt_search(
+            &AptBackend,
+            include_str!("../../../tests/fixtures/apt/search-valid.txt"),
+            "firefox",
+        );
+        assert_eq!(valid.candidates.len(), 2);
+        assert!(valid.issues.is_empty());
+
+        let empty = parse_apt_search(
+            &AptBackend,
+            include_str!("../../../tests/fixtures/apt/search-no-match.txt"),
+            "missing",
+        );
+        assert!(empty.candidates.is_empty());
+        assert!(empty.issues.is_empty());
+
+        let unknown = parse_apt_search(
+            &AptBackend,
+            include_str!("../../../tests/fixtures/apt/search-unrecognized.txt"),
+            "firefox",
+        );
+        assert!(unknown.candidates.is_empty());
+        assert_eq!(
+            unknown.issues[0].kind,
+            BackendSearchIssueKind::UnrecognizedOutput
+        );
+    }
 
     #[test]
     fn parses_apt_lock_holder_details() {

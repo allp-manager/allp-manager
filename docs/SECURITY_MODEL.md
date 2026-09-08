@@ -5,7 +5,10 @@ Allp executes native package-manager commands. The security model is intentional
 ## Command Execution
 
 - Commands are represented as executable path plus argument vector.
-- Allp does not execute through `sh -c`, `bash -c`, or shell interpolation.
+- Package-manager operations do not execute through `sh -c`, `bash -c`, or
+  shell interpolation. The separately confirmed official Homebrew bootstrap
+  runs Homebrew's downloaded installer through a visible shell plan after
+  checksum/source review.
 - Rendered command strings are for display only.
 - Package IDs beginning with `-` are rejected before native mutation.
 
@@ -51,6 +54,8 @@ Installing an executable, enabling a service, adding a remote, changing configur
 - Extracted binary SHA-256 and byte size are carried through every helper boundary and rechecked before diagnostic execution, copying, and replacement. A same-version staged-file substitution is rejected before execution.
 - When Allp is effectively root, self-update helpers such as `curl` and `tar` are resolved from fixed system locations first and must canonicalize to root-owned, non-group/world-writable files whose ancestors satisfy the same trust policy; an inherited user-owned PATH hit is rejected.
 - Replacement keeps a rollback backup until post-install verification succeeds.
+- A binary owned by dpkg, rpm, or Pacman is never replaced by Allp's built-in
+  updater; ownership hands update authority back to the native package source.
 - Temporary response headers use exclusive owner-only files, and Unix update staging uses owner-only directories.
 - State files contain channel, legacy ETag metadata, version/build identity, and timestamps only, never credentials. An ETag is not sent without cached verified response data.
 

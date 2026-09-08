@@ -154,7 +154,7 @@ progress renderer and retain the normal machine-safe or classic output contract.
 
 ## Self-Update And Doctor
 
-`allp update` checks the trusted official GitHub build source before backend updates unless `--skip-self-update`, `--offline`, or the guarded same-process-chain completion marker applies. The default is the verified continuous main-branch channel; an explicitly selected stable channel remains configured. `--self-only` stops after that phase. `--check-only` and dry run cannot replace the binary. Unsupported targets leave the installed binary unchanged and ordinary updates can continue.
+`allp update` checks the trusted official GitHub build source before backend updates unless `--skip-self-update`, `--offline`, or the guarded same-process-chain completion marker applies. Fresh state defaults to stable; migrated implicit alpha state remains continuous, and every explicit channel choice remains configured. `--self-only` stops after that phase. `--check-only` and dry run cannot replace the binary. Unsupported targets and native-package-owned binaries leave the installed binary unchanged and ordinary updates can continue.
 
 `allp doctor` is read-only. It reports normalized platform, capability, Snap, Flatpak, backend, install-path, update-source, and data-directory state without exposing credentials. `allp doctor homebrew` scopes output to the shared validated Homebrew locator and its provider history.
 

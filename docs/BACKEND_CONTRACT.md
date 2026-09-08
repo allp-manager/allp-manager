@@ -63,6 +63,23 @@ Backends may execute native read-only commands and parse output into:
 
 Prefer stable machine-readable native output where available.
 
+`search` returns a `BackendSearchReport`, not a bare candidate vector. Its
+observable states are:
+
+- candidates with no issues: `Matches`;
+- no candidates and no issues after recognizing the native no-match form:
+  `NoMatches`;
+- no candidates plus `UnrecognizedOutput`: parser drift, never a no-match;
+- candidates plus one or more issues: partial results with `complete=false`.
+
+Issues identify their kind (`unrecognized_output`, `command_failed`, or
+`incomplete_metadata`) and may identify the failing stage. A backend that runs
+multiple read-only commands keeps valid candidates when one stage fails and
+records the failure; it must not discard good results or silently claim full
+coverage. Every stable parser change requires sanitized valid, no-match, and
+malformed fixtures. Multi-stage parsers also require a partial-result fixture
+or an equivalent injected-command test.
+
 Candidates include a package domain and may include installer choices. Source/registry and installer are separate concepts: PyPI is a source; pip, pipx, and uv are installers. The npm registry is a source; npm, pnpm, and Yarn are installers. crates.io is a source and Cargo is its installer.
 
 `raw_info` is optional and returns native backend info output for `allp info --raw`. It must be read-only.

@@ -1,0 +1,1 @@
+firefox 142.0-1 extra

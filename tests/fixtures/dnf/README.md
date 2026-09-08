@@ -1,3 +1,4 @@
 # DNF Fixtures
 
-Place DNF and DNF5 parser fixtures here.
+Sanitized DNF4 and DNF5 search output covers valid layouts, native no-match
+text, and deliberately unrecognized output.

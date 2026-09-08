@@ -1,8 +1,11 @@
+mod authority;
 mod checksum;
 mod continuous;
 mod github;
 mod replacement;
 mod trusted_helper;
+
+pub use authority::{detect_update_authority, UpdateAuthority};
 
 pub use continuous::{
     ContinuousBuildManifest, CONTINUOUS_MANIFEST_NAME, CONTINUOUS_WORKFLOW_NAME,
@@ -47,10 +50,18 @@ pub const OFFICIAL_REPOSITORY: GitHubRepository = GitHubRepository {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateChannel {
-    #[default]
     Continuous,
+    #[default]
     Stable,
     Prerelease,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateChannelOrigin {
+    Explicit,
+    LegacyContinuous,
+    DefaultStable,
 }
 
 impl UpdateChannel {
@@ -133,9 +144,47 @@ pub struct SelfUpdateState {
     pub last_successful_build: Option<AllpBuildIdentity>,
     pub etag: Option<String>,
     pub update_channel: UpdateChannel,
-    /// Distinguishes an explicit user choice from the pre-continuous legacy default.
+    /// Kept as a rollback-compatibility mirror. New code uses `origin`; older
+    /// binaries see `true` and preserve the migrated channel.
     #[serde(default)]
     pub channel_configured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<UpdateChannelOrigin>,
+}
+
+pub fn resolve_update_channel(
+    state_path: &std::path::Path,
+    requested: Option<UpdateChannel>,
+) -> AllpResult<(UpdateChannel, SelfUpdateState)> {
+    let loaded = state::read_json::<SelfUpdateState>(state_path)?;
+    let state_existed = loaded.is_some();
+    let mut persisted = loaded.unwrap_or_default();
+
+    let (channel, origin) = if let Some(channel) = requested {
+        (channel, UpdateChannelOrigin::Explicit)
+    } else if let Some(origin) = persisted.origin {
+        (persisted.update_channel, origin)
+    } else if persisted.channel_configured {
+        (persisted.update_channel, UpdateChannelOrigin::Explicit)
+    } else if state_existed {
+        (
+            UpdateChannel::Continuous,
+            UpdateChannelOrigin::LegacyContinuous,
+        )
+    } else {
+        (UpdateChannel::Stable, UpdateChannelOrigin::DefaultStable)
+    };
+
+    let changed = persisted.update_channel != channel
+        || persisted.origin != Some(origin)
+        || !persisted.channel_configured;
+    persisted.update_channel = channel;
+    persisted.origin = Some(origin);
+    persisted.channel_configured = true;
+    if changed || !state_existed {
+        state::write_json_atomically(state_path, &persisted)?;
+    }
+    Ok((channel, persisted))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,7 +243,6 @@ impl<'a> SelfUpdater<'a> {
         let current_version = current_build.base_version;
         let mut persisted =
             state::read_json::<SelfUpdateState>(&self.state_path)?.unwrap_or_default();
-        persisted.update_channel = channel;
 
         if offline {
             state::write_json_atomically(&self.state_path, &persisted)?;
@@ -414,6 +462,98 @@ mod tests {
         fn response_etag(&self) -> Option<String> {
             self.etag.clone()
         }
+    }
+
+    #[test]
+    fn fresh_update_policy_stays_stable_across_repeated_runs() {
+        let state_path = temporary_state("fresh-policy");
+        let _ = std::fs::remove_file(&state_path);
+
+        let (first, first_state) =
+            resolve_update_channel(&state_path, None).expect("fresh update policy should resolve");
+        let (second, second_state) = resolve_update_channel(&state_path, None)
+            .expect("persisted fresh policy should resolve");
+
+        assert_eq!(first, UpdateChannel::Stable);
+        assert_eq!(second, UpdateChannel::Stable);
+        assert_eq!(first_state.origin, Some(UpdateChannelOrigin::DefaultStable));
+        assert_eq!(
+            second_state.origin,
+            Some(UpdateChannelOrigin::DefaultStable)
+        );
+        assert!(second_state.channel_configured);
+        let _ = std::fs::remove_file(state_path);
+    }
+
+    #[test]
+    fn legacy_implicit_state_migrates_once_to_continuous() {
+        let state_path = temporary_state("legacy-policy");
+        let legacy = SelfUpdateState {
+            update_channel: UpdateChannel::Stable,
+            channel_configured: false,
+            origin: None,
+            ..SelfUpdateState::default()
+        };
+        state::write_json_atomically(&state_path, &legacy).expect("legacy state should write");
+
+        let (channel, migrated) =
+            resolve_update_channel(&state_path, None).expect("legacy policy should migrate");
+        assert_eq!(channel, UpdateChannel::Continuous);
+        assert_eq!(migrated.origin, Some(UpdateChannelOrigin::LegacyContinuous));
+        assert!(migrated.channel_configured);
+
+        let (again, persisted) =
+            resolve_update_channel(&state_path, None).expect("migration should be sticky");
+        assert_eq!(again, UpdateChannel::Continuous);
+        assert_eq!(
+            persisted.origin,
+            Some(UpdateChannelOrigin::LegacyContinuous)
+        );
+        let _ = std::fs::remove_file(state_path);
+    }
+
+    #[test]
+    fn explicit_update_channel_overrides_and_remains_sticky() {
+        let state_path = temporary_state("explicit-policy");
+        let _ = std::fs::remove_file(&state_path);
+
+        let (selected, selected_state) =
+            resolve_update_channel(&state_path, Some(UpdateChannel::Continuous))
+                .expect("explicit policy should persist");
+        assert_eq!(selected, UpdateChannel::Continuous);
+        assert_eq!(selected_state.origin, Some(UpdateChannelOrigin::Explicit));
+        assert!(selected_state.channel_configured);
+
+        let (again, persisted) =
+            resolve_update_channel(&state_path, None).expect("explicit policy should be sticky");
+        assert_eq!(again, UpdateChannel::Continuous);
+        assert_eq!(persisted.origin, Some(UpdateChannelOrigin::Explicit));
+        let _ = std::fs::remove_file(state_path);
+    }
+
+    #[test]
+    fn check_only_writes_never_change_channel_origin() {
+        let source = StaticSource {
+            calls: Mutex::new(0),
+            release: None,
+            etag: None,
+        };
+        let platform = linux_x86_platform();
+        let state_path = temporary_state("preserve-origin");
+        let (_, before) = resolve_update_channel(&state_path, Some(UpdateChannel::Prerelease))
+            .expect("policy should persist");
+
+        SelfUpdater::new(&source, &platform, state_path.clone())
+            .check(UpdateChannel::Prerelease, true)
+            .expect("offline check should persist operational state");
+        let after = state::read_json::<SelfUpdateState>(&state_path)
+            .expect("state should read")
+            .expect("state should exist");
+
+        assert_eq!(after.update_channel, before.update_channel);
+        assert_eq!(after.origin, before.origin);
+        assert_eq!(after.channel_configured, before.channel_configured);
+        let _ = std::fs::remove_file(state_path);
     }
 
     #[test]

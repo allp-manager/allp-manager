@@ -4,6 +4,40 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+Target base version: `0.6.0`.
+
+### Added
+
+- Structured backend search reports with explicit unrecognized-output,
+  incomplete-metadata, and partial-result states.
+- Sanitized APT, DNF4/DNF5, Pacman, and Flatpak search fixtures covering valid,
+  no-match, malformed, and partial output.
+- Domain-level candidate identity groups with stable selection numbers and
+  negative coverage preventing same-name unrelated packages from merging.
+- The initial auditable cross-backend identity mapping for Firefox across APT,
+  DNF, Pacman, Flatpak, and Snap, including confidence provenance.
+- A checksum-verifying prebuilt release installer and scheduled real-backend
+  canaries for APT, DNF, Pacman, Flatpak, and Snap.
+- Native dpkg/rpm/Pacman update-authority detection so built-in self-update
+  never overwrites a package-manager-owned binary.
+
+### Changed
+
+- Fresh installations default to the stable update channel; existing implicit
+  alpha state migrates once to continuous and explicit choices remain sticky.
+- Noninteractive search without explicit selectors defaults to apps and tools.
+- Human search results are compact by default, with identity and backend detail
+  under verbose output and clearly separated probable/conflicting regions.
+- CLI JSON moved to schema version 2. Search JSON now exposes effective scope,
+  candidate groups, backend summaries, and structured parser issues.
+
+### Fixed
+
+- Native output that no longer matches a backend parser cannot be reported as a
+  successful no-match result.
+- Read-only and offline self-update checks no longer mutate update-channel
+  provenance.
+
 ## [0.5.0] - 2026-08-25
 
 ### Release Title

@@ -1,0 +1,3 @@
+==================== Name & Summary Matched: firefox ====================
+firefox.x86_64 : Mozilla Firefox Web browser
+firefox-langpacks.x86_64 : Localization files for Firefox

@@ -61,6 +61,9 @@ Implementation tasks live here. Product direction and larger milestones live in 
   - Module: `src/backends/*`, `tests/fixtures/*`
   - Target: 0.4.x alpha hardening
 
+  Stable search coverage for APT, DNF4/DNF5, Pacman, Flatpak, and Snap is now
+  complete; remaining work applies to experimental backend families.
+
 - [ ] Validate experimental Linux-family backends on real distributions
   - Priority: P1
   - Reason: Zypper, APK, XBPS, Portage, eopkg, and swupd are implemented but need host validation.
@@ -126,11 +129,19 @@ Implementation tasks live here. Product direction and larger milestones live in 
   - Module: `src/backends/universal/snap.rs`, CLI prompts
   - Target: 0.5
 
-- [ ] Publish packaged installation instructions
+- [x] Publish checksum-verified prebuilt installation instructions
   - Priority: P2
-  - Reason: Source builds are documented; release package distribution is not finalized.
-  - Module: documentation, release metadata
-  - Target: 0.5
+  - Reason: Release archives can now be installed without a Rust toolchain.
+  - Module: `scripts/install-release.sh`, documentation, release workflow
+  - Target: next release
+
+- [ ] Publish native `.deb`, `.rpm`, and AUR packages only with repository-owned updates
+  - Priority: P1
+  - Reason: A native package owns `/usr/bin/allp`; Allp must never replace that
+    file behind dpkg, rpm, or Pacman. The runtime guard is implemented, but the
+    repository/signing/update delivery path is not.
+  - Module: packaging, repository infrastructure, `src/self_update/authority.rs`
+  - Target: after the public binary release
 
 ## Explicit Non-Goals For 0.5.0
 

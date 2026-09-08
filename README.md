@@ -9,7 +9,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, rpm-ostree on Bazzite/Atomic hosts, Flatpak, Snap, Homebrew/Linuxbrew, Python and Node installers, and Rust/Cargo, then shows the exact native command or local API request before anything mutates the system.
 
-Current build version: **0.5.0.1** (Cargo base version **0.5.0**)
+Current build version: **0.6.0.1** (Cargo base version **0.6.0**)
 Maturity: **public alpha**
 
 ## Why Allp Exists
@@ -51,7 +51,29 @@ JSON is available for read-only commands and dry-run maintenance/install plannin
 
 ## Installation
 
-Build from source:
+Install the verified prebuilt release without Rust:
+
+```bash
+curl --fail --location --output install-allp.sh \
+  https://github.com/allp-manager/allp-manager/releases/latest/download/install-allp.sh
+less install-allp.sh
+sh install-allp.sh
+```
+
+The installer detects Linux/macOS architecture, downloads the exact release
+archive and adjacent SHA-256 file, verifies it, checks the archive contains only
+the `allp` binary, and installs to `~/.local/bin`. It is deliberately not
+documented as a `curl | sh` pipeline. Pass an exact version such as `0.6.0` as
+the first argument, or set `ALLP_INSTALL_DIR` to choose another user-writable
+directory.
+
+If a distribution package owns the running binary, `allp self-update` never
+overwrites `/usr/bin/allp`; it reports the owning dpkg/rpm/Pacman package and
+hands updates back to that package source. Native `.deb`, `.rpm`, and AUR
+publication is intentionally deferred until signed repository update delivery
+exists.
+
+Build from source for development:
 
 ```bash
 git clone https://github.com/allp-manager/allp-manager.git
@@ -68,7 +90,7 @@ allp --version
 allp update && allp upgrade
 ```
 
-`allp --version` prints the display/build version; `allp --version --verbose` also prints the base version, build revision, channel, commit, build ID, target, timestamp, and whether CI marked the build official. `allp update` defaults to verified continuous main-branch builds so fixes can update `0.5.0.1` to `0.5.0.2` without changing Cargo SemVer. Use `--update-channel stable` to persist the tagged-release channel.
+`allp --version` prints the display/build version; `allp --version --verbose` also prints the base version, build revision, channel, commit, build ID, target, timestamp, and whether CI marked the build official. Fresh installs default to the verified tagged `stable` channel. Existing alpha state that used the old implicit channel remains on verified `continuous` builds; any explicit `--update-channel stable|continuous|prerelease` choice is sticky.
 
 `make install` builds the release binary and installs it as
 `/usr/local/bin/allp`. It uses `sudo install` for that one file copy. For a
@@ -78,7 +100,7 @@ user-local install without sudo:
 make install-user
 ```
 
-Requirements:
+Source-build requirements:
 
 - Rust 1.74 or newer
 - Cargo
@@ -155,7 +177,7 @@ Homebrew, Flatpak, or containers first. See
 
 ![Allp live maintenance dashboard](docs/assets/tui-maintenance.svg)
 
-On a real interactive `update` or `upgrade`, Allp 0.5.0 presents an inline live
+On a real interactive `update` or `upgrade`, Allp presents an inline live
 APT-style progress line during execution. Native logs remain unchanged in the
 normal terminal scrollback; only the current bottom line is redrawn with the
 percentage, active backend, action, elapsed time, and queue completion. The
@@ -197,6 +219,20 @@ Without `--from` or `--scope`, interactive `search` and `install` ask for one of
 - `apps`: system packages, universal applications, and Homebrew
 - `dev`: Python, Node, and Rust/Cargo ecosystems
 - `all`: every eligible source
+
+JSON, redirected, and `--no-interactive` searches cannot ask that question, so
+they default to `apps` unless `--from` or `--scope` is explicit. Eligible
+backends search concurrently in bounded groups of four. A parser that receives
+unknown native output reports `unrecognized_output` instead of claiming no
+matches; valid rows from a partially failed backend are retained with
+`complete=false`.
+
+Default human output is one line per candidate. `-v` adds identity,
+relationship, artifact, installer, and native metadata. Verified canonical
+relationships are grouped, probable relationships appear in an explicit
+uncertainty section, and unverified same-name results remain separate. Allp can
+recognize relationships, but it does not choose between meaningful sources for
+you.
 
 Results are ranked as `Exact`, `Related`, or `Fuzzy`. All exact matches are shown, related matches are capped per backend, and weak fuzzy matches require `--all`.
 
@@ -328,13 +364,13 @@ allp update --offline
 allp update --update-channel prerelease
 ```
 
-Continuous verified main-branch builds are the default channel; stable and prerelease selections are explicit and persisted. Stable release metadata must contain `allp-release-manifest.json`, while continuous builds use their dedicated manifest and trusted workflow identity. Allp compares base SemVer before build revision, selects an asset by OS, architecture, libc, executable format, and target, and reports unsupported targets without staging an update.
+Fresh installs use the stable tagged-release channel. Migrated alpha installs may retain the verified continuous main-branch channel; stable, continuous, and prerelease selections are explicit and persisted. Stable release metadata must contain `allp-release-manifest.json`, while continuous builds use their dedicated manifest and trusted workflow identity. Allp compares base SemVer before build revision, selects an asset by OS, architecture, libc, executable format, and target, and reports unsupported targets without staging an update.
 
 If the installed build is newer than the selected channel, Allp reports the
 distinct `LocalAhead` state and does not downgrade it; this is not described as
 up to date.
 
-A binary installed with `make reinstall` is marked as a local development build, but it still follows a newer verified continuous build from `main` (including the local revision-1 collision). That means a merged GitHub change is detected by the default `allp update` channel once its successful continuous build is published; the normal replacement confirmation remains in place.
+A binary installed with `make reinstall` is marked as a local development build. When continuous is selected, it still follows a newer verified continuous build from `main` (including the local revision-1 collision); the normal replacement confirmation remains in place.
 
 Downloads are HTTPS-only, bounded by redirects, time, and size, restricted to the exact official repository/tag/asset, and verified with SHA-256 before safe extraction. The staged binary must report the expected version. Linux and macOS replacement uses same-directory staging, a rollback backup, post-install verification, and minimal elevation for non-writable installations. Windows uses a verified deferred helper. A guarded relaunch continues `allp update` once without entering an update loop. Offline mode contacts neither GitHub nor backend remote sources.
 

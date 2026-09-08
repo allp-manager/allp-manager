@@ -21,6 +21,17 @@ pub enum IdentityConfidence {
     Conflicting,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateGroup {
+    pub group_id: String,
+    pub canonical_id: Option<String>,
+    pub canonical_name: Option<String>,
+    pub confidence: IdentityConfidence,
+    /// One-based indexes into the ordered candidate list. These are also the
+    /// stable numbers accepted by interactive selection.
+    pub selection_numbers: Vec<usize>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DistributionRelationship {
@@ -59,6 +70,8 @@ pub struct IdentityMetadata {
     pub canonical_id: Option<String>,
     pub canonical_name: Option<String>,
     pub official_source: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_source: Option<String>,
     pub warning: Option<String>,
 }
 
@@ -76,6 +89,7 @@ impl IdentityMetadata {
             canonical_id: None,
             canonical_name: None,
             official_source: false,
+            confidence_source: None,
             warning: None,
         }
     }
@@ -94,6 +108,7 @@ impl IdentityMetadata {
             canonical_id: Some(canonical_id.to_owned()),
             canonical_name: Some(canonical_name.to_owned()),
             official_source: true,
+            confidence_source: Some("built-in official installer catalog".to_owned()),
             warning: None,
         }
     }

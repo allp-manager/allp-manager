@@ -50,9 +50,14 @@ Default policy:
 - show at most 25 visible results;
 - hide fuzzy matches unless `--all` is used.
 
-Backend failures are reported as issues. A completed search can still return zero results.
+Backend failures are reported as issues. Recognized empty output is a completed
+zero-result search; unrecognized non-empty output is an incomplete parser error.
+Valid candidates from a partially parsed backend remain visible.
 
-Without `--from`, search may span system packages, universal applications, Homebrew, Python packages, and Node packages. Matching names across ecosystems do not imply the same software.
+Without `--from`, interactive search asks for a scope. JSON, redirected, and
+`--no-interactive` search defaults to apps and tools unless `--scope` is
+explicit. Matching names across ecosystems do not imply the same software;
+verified identities may be grouped for recognition without choosing a source.
 
 ## `install <query>`
 
@@ -149,7 +154,7 @@ Examples:
 
 Mutating backend operations run sequentially and continue after failures. Any failure returns exit code `8`.
 
-`--skip-self-update` bypasses only the GitHub phase. `--self-only` never runs backend updates. `--check-only` and `--dry-run` do not replace the Allp binary. `--offline` contacts neither GitHub nor backend remote sources. The documented default is the verified `continuous` main-branch build channel; an explicit `--update-channel stable` choice is persisted.
+`--skip-self-update` bypasses only the GitHub phase. `--self-only` never runs backend updates. `--check-only` and `--dry-run` do not replace the Allp binary. `--offline` contacts neither GitHub nor backend remote sources. Fresh state defaults to verified `stable`; migrated implicit alpha state remains `continuous`, and any explicit `--update-channel` choice is persisted.
 
 For real execution, Allp first renders the complete plan, explains child-only privilege elevation for root-required plans, and prompts once for the batch. `--no-interactive` cannot provide that confirmation; use `--dry-run`, run interactively, or provide fully resolved choices with `--yes`.
 

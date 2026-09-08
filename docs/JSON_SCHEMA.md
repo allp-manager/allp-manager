@@ -4,10 +4,16 @@ JSON stdout uses a versioned envelope.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "search",
   "complete": true,
-  "results": [],
+  "results": {
+    "query": "firefox",
+    "effective_scope": "apps_and_tools",
+    "candidates": [],
+    "groups": [],
+    "backends": []
+  },
   "issues": []
 }
 ```
@@ -37,7 +43,18 @@ Human logs, spinners, and prompts must not be written to JSON stdout.
 
 ## Search Result Fields
 
-Search results include backend identity, package ID, display name, version, source/registry, installer choices, artifact type, scope, description, backend category, package domain, and match kind.
+Search schema v2 uses an object payload. `effective_scope` records the scope
+actually searched; JSON and other noninteractive calls without `--from` or
+`--scope` default to `apps_and_tools`. `candidates` includes backend identity,
+package ID, display name, version, source/registry, installer choices, artifact
+type, scope, description, backend category, package domain, and match kind.
+`groups` exposes stable one-based `selection_numbers`, canonical identity when
+known, and confidence. `backends` exposes per-backend result count and parser
+state, including `partial_results` and `unrecognized_output`.
+
+Issues include `kind`, optional `stage`, backend identity, and a human-readable
+message. Any partial or unrecognized parser output sets envelope `complete` to
+`false` while preserving candidates that were parsed safely.
 
 `match_kind` serializes as:
 

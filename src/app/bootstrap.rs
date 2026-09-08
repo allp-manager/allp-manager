@@ -8,15 +8,18 @@ use crate::{
     cli::{confirm_execution, select_search_scope, Cli, Commands, ConfirmationRequest, Renderer},
     diagnostics::DoctorReport,
     discovery::{BackendDiscovery, DetectionState, DiscoveryResult},
-    domain::{AllpError, AllpResult, ExecutionPlan, OperationKind, PrivilegeRequirement},
+    domain::{
+        AllpError, AllpResult, ExecutionPlan, OperationKind, PrivilegeRequirement, SearchScope,
+    },
     execution::{privilege::runtime_context, ProcessRunner, StdProcessRunner},
     operations::{self, OperationContext},
     platform::PlatformContext,
     requirements::bootstrap_requirement_for_backend,
     self_update::{
-        apply_replacement, stage_release, CurlHttpClient, ExpectedBinary, ExpectedBuildIdentity,
-        GitHubActionsBuildSource, ReplacementOutcome, SelfUpdateState, SelfUpdater,
-        UpdateAvailability, UpdateChannel, SELF_UPDATE_COMPLETED_ENV, SELF_UPDATE_VERSION_ENV,
+        apply_replacement, detect_update_authority, resolve_update_channel, stage_release,
+        CurlHttpClient, ExpectedBinary, ExpectedBuildIdentity, GitHubActionsBuildSource,
+        ReplacementOutcome, SelfUpdateState, SelfUpdater, UpdateAuthority, UpdateAvailability,
+        UpdateChannel, SELF_UPDATE_COMPLETED_ENV, SELF_UPDATE_VERSION_ENV,
     },
     state,
 };
@@ -59,7 +62,7 @@ impl App {
             ));
         }
 
-        let renderer = Renderer::new(no_color, json);
+        let renderer = Renderer::new(no_color, json).with_verbose(verbose);
         let privilege_context = runtime_context();
         if let Commands::InternalSnapdInstall(args) = &command {
             validate_internal_socket(&args.socket)?;
@@ -131,13 +134,16 @@ impl App {
         if search_scope.is_none()
             && backend_filter.is_none()
             && matches!(&command, Commands::Search(_) | Commands::Install(_))
-            && !no_interactive
         {
-            if privilege_context.is_root() {
-                renderer.runtime_context_notice(&privilege_context);
-                root_context_notice_shown = true;
+            if no_interactive {
+                search_scope = Some(SearchScope::AppsAndTools);
+            } else {
+                if privilege_context.is_root() {
+                    renderer.runtime_context_notice(&privilege_context);
+                    root_context_notice_shown = true;
+                }
+                search_scope = Some(select_search_scope(no_interactive)?);
             }
-            search_scope = Some(select_search_scope(no_interactive)?);
         }
 
         let mut discovery = self.detector.discover_with_context_filtered(
@@ -403,20 +409,16 @@ impl App {
         yes: bool,
         render_check: bool,
     ) -> AllpResult<SelfUpdatePhase> {
+        let update_authority = detect_update_authority(platform, self.runner.as_ref());
+        if matches!(
+            update_authority,
+            UpdateAuthority::NativePackageManager { .. }
+        ) {
+            renderer.self_update_managed(&update_authority, &platform.current_executable);
+            return Ok(SelfUpdatePhase::NoChange);
+        }
         let state_path = platform.state_dir.join("self-update.json");
-        let mut persisted = state::read_json::<SelfUpdateState>(&state_path)?.unwrap_or_default();
-        let channel = if let Some(requested) = requested_channel {
-            persisted.update_channel = requested;
-            persisted.channel_configured = true;
-            state::write_json_atomically(&state_path, &persisted)?;
-            requested
-        } else if persisted.channel_configured {
-            persisted.update_channel
-        } else {
-            // Migrate the old implicit stable default. An explicit `--update-channel stable`
-            // remains sticky through `channel_configured`.
-            UpdateChannel::Continuous
-        };
+        let (channel, persisted) = resolve_update_channel(&state_path, requested_channel)?;
         let client = CurlHttpClient::default();
         let source =
             GitHubActionsBuildSource::official_with_etag(&client, persisted.etag.as_deref());

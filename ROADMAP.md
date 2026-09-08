@@ -2,7 +2,14 @@
 
 This roadmap describes direction, not a promise. Allp keeps native package managers as the source of truth.
 
-## Current Release: v0.5.0
+## Current Development: v0.6.0
+
+v0.6.0 focuses on parser reliability, decision-oriented search output,
+cross-backend identity grouping, safe stable-by-default updates, and a public
+prebuilt installation path. The complete pending change set is tracked under
+`[Unreleased]` in `CHANGELOG.md` until the release tag is prepared.
+
+## Current Published Release: v0.5.0
 
 v0.5.0 is a public-alpha developer-ecosystem and image-based Linux release
 with:

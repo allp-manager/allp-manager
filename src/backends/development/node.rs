@@ -5,10 +5,10 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpError, AllpResult, BackendCategory, Capability, DeveloperTarget, ExecutionPlan,
-        InstalledPackage, MaintenancePlan, NativeCommand, OperationKind, OperationStatus,
-        PackageCandidate, PackageDomain, PackageInfo, PrivilegeRequirement,
-        RuntimePrivilegeContext,
+        AllpError, AllpResult, BackendCategory, BackendSearchIssue, BackendSearchIssueKind,
+        BackendSearchReport, Capability, DeveloperTarget, ExecutionPlan, InstalledPackage,
+        MaintenancePlan, NativeCommand, OperationKind, OperationStatus, PackageCandidate,
+        PackageDomain, PackageInfo, PrivilegeRequirement, RuntimePrivilegeContext,
     },
     execution::{render_native_command, ProcessRunner},
 };
@@ -96,7 +96,7 @@ impl Backend for NodeBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let npm = command_path(self, commands, "npm")?;
         let output = capture_checked(
             self,
@@ -104,18 +104,7 @@ impl Backend for NodeBackend {
             NativeCommand::new(npm).args(["search", query, "--json", "--searchlimit=20"]),
         )?;
         let installers = installer_choices(commands);
-        let mut candidates = parse_npm_search(self, &output, query, &installers);
-        if candidates.is_empty() {
-            candidates.push(candidate(
-                self,
-                query,
-                None,
-                None,
-                match_kind(query, query),
-                installers,
-            ));
-        }
-        Ok(candidates)
+        Ok(parse_npm_search(self, &output, query, &installers))
     }
 
     fn list_installed(
@@ -1158,43 +1147,43 @@ fn parse_npm_search(
     output: &str,
     query: &str,
     installers: &[String],
-) -> Vec<PackageCandidate> {
-    if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(output) {
-        return items
-            .iter()
-            .filter_map(|item| {
-                let package_id = item.get("name")?.as_str()?;
-                Some(candidate(
-                    backend,
-                    package_id,
-                    item.get("version")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    item.get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    match_kind(package_id, query),
-                    installers.to_vec(),
-                ))
-            })
-            .collect();
-    }
+) -> BackendSearchReport {
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(output) else {
+        return BackendSearchReport::default().with_issue(BackendSearchIssue {
+            kind: BackendSearchIssueKind::UnrecognizedOutput,
+            stage: Some("npm search --json".to_owned()),
+            message: "npm returned output that was not the requested JSON array".to_owned(),
+        });
+    };
 
-    output
-        .lines()
-        .filter_map(|line| {
-            let mut columns = line.split_whitespace();
-            let package_id = columns.next()?;
-            Some(candidate(
-                backend,
-                package_id,
-                None,
-                Some(columns.collect::<Vec<_>>().join(" ")),
-                match_kind(package_id, query),
-                installers.to_vec(),
-            ))
-        })
-        .collect()
+    let mut report = BackendSearchReport::default();
+    let mut rejected_items = 0usize;
+    for item in &items {
+        let Some(package_id) = item.get("name").and_then(Value::as_str) else {
+            rejected_items += 1;
+            continue;
+        };
+        report.candidates.push(candidate(
+            backend,
+            package_id,
+            item.get("version")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            item.get("description")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            match_kind(package_id, query),
+            installers.to_vec(),
+        ));
+    }
+    if rejected_items > 0 {
+        report.issues.push(BackendSearchIssue {
+            kind: BackendSearchIssueKind::UnrecognizedOutput,
+            stage: Some("npm search --json".to_owned()),
+            message: format!("npm returned {rejected_items} search item(s) without a package name"),
+        });
+    }
+    report
 }
 
 fn parse_npm_list(backend: &NodeBackend, output: &str) -> Vec<InstalledPackage> {
@@ -1324,5 +1313,22 @@ fn plan(
         privilege: PrivilegeRequirement::OriginalUserRequired,
         requires_root: false,
         interactive: true,
+    }
+}
+
+#[cfg(test)]
+mod search_contract_tests {
+    use super::{parse_npm_search, NodeBackend};
+    use crate::domain::BackendSearchIssueKind;
+
+    #[test]
+    fn malformed_npm_json_is_not_fabricated_into_a_match() {
+        let report = parse_npm_search(&NodeBackend, "not-json", "demo", &["npm".to_owned()]);
+
+        assert!(report.candidates.is_empty());
+        assert_eq!(
+            report.issues[0].kind,
+            BackendSearchIssueKind::UnrecognizedOutput
+        );
     }
 }

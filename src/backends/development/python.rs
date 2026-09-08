@@ -5,9 +5,10 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpError, AllpResult, BackendCategory, Capability, DeveloperTarget, ExecutionPlan,
-        InstalledPackage, MaintenancePlan, NativeCommand, OperationKind, PackageCandidate,
-        PackageDomain, PackageInfo, PrivilegeRequirement,
+        AllpError, AllpResult, BackendCategory, BackendSearchIssue, BackendSearchIssueKind,
+        BackendSearchReport, Capability, DeveloperTarget, ExecutionPlan, InstalledPackage,
+        MaintenancePlan, NativeCommand, OperationKind, PackageCandidate, PackageDomain,
+        PackageInfo, PrivilegeRequirement,
     },
     execution::{render_native_command, ProcessRunner},
 };
@@ -86,21 +87,21 @@ impl Backend for PythonBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let output = python_pip_capture(commands, runner, &["index", "versions", query])?;
         let installers = installer_choices(commands);
-        let mut candidates = parse_pypi_candidates(self, &output, query, installers.clone());
+        let candidates = parse_pypi_candidates(self, &output, query, installers);
         if candidates.is_empty() && !output.trim().is_empty() {
-            candidates.push(candidate(
-                self,
-                query,
-                None,
-                Some(output.lines().next().unwrap_or_default().trim().to_owned()),
-                match_kind(query, query),
-                installers,
-            ));
+            return Ok(
+                BackendSearchReport::default().with_issue(BackendSearchIssue {
+                    kind: BackendSearchIssueKind::UnrecognizedOutput,
+                    stage: Some("pip index versions".to_owned()),
+                    message: "pip returned non-empty output without a recognizable package row"
+                        .to_owned(),
+                }),
+            );
         }
-        Ok(candidates)
+        Ok(BackendSearchReport::complete(candidates))
     }
 
     fn list_installed(
@@ -752,5 +753,22 @@ fn python_scope() -> String {
         "active virtual environment".to_owned()
     } else {
         "current Python environment".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod search_contract_tests {
+    use super::{parse_pypi_candidates, PythonBackend};
+
+    #[test]
+    fn unknown_pip_text_does_not_parse_as_a_package() {
+        let candidates = parse_pypi_candidates(
+            &PythonBackend,
+            "future machine-readable format enabled",
+            "demo",
+            vec!["pip".to_owned()],
+        );
+
+        assert!(candidates.is_empty());
     }
 }

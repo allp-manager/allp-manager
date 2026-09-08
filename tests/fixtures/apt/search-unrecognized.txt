@@ -1,0 +1,1 @@
+Package results are now emitted as JSON; use --format=legacy to restore text output

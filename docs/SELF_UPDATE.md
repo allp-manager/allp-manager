@@ -2,13 +2,19 @@
 
 `allp self-update` and phase 1 of `allp update` use the trusted repository constant `allp-manager/allp-manager`. User-controlled repository URLs are not accepted.
 
-`GitHubReleaseSource` retrieves tagged-release metadata over HTTPS with bounded redirects, time, and response size. `GitHubActionsBuildSource` is the separate continuous-build boundary. Allp has `stable`, `continuous`, and explicit `prerelease` channels. New installations and legacy state that never recorded an explicit choice use `continuous`; `--update-channel stable` is sticky and checks only semantic-version releases.
+`GitHubReleaseSource` retrieves tagged-release metadata over HTTPS with bounded redirects, time, and response size. `GitHubActionsBuildSource` is the separate continuous-build boundary. Allp has `stable`, `continuous`, and explicit `prerelease` channels. Fresh installations default to `stable`. Existing alpha state that used the old implicit channel migrates once to `continuous`; any explicit `--update-channel` choice remains sticky.
+
+Channel provenance is stored as `explicit`, `legacy_continuous`, or
+`default_stable`. The legacy `channel_configured` field remains set as a
+rollback-compatibility mirror so an older binary preserves the migrated
+channel. Read-only, check-only, and offline checks update operational metadata
+without changing channel provenance.
 
 Stable discovery uses GitHub's `/releases/latest` endpoint. Explicit semantic prerelease discovery starts from `refs/tags/v`, so per-push `continuous-v...` mirrors cannot push a tagged release out of a fixed release page. Continuous candidates are ordered deterministically by base version and revision; failed or running workflow runs are skipped, while malformed authoritative metadata fails closed. A 404 before the first continuous publication is a clean no-candidate result. Legacy ETags can remain in state for compatibility, but Allp does not send a conditional request unless it also has a verified descriptor to serve; the current implementation therefore performs an unconditional metadata refresh.
 
-The Cargo package version remains strict three-part SemVer (`0.5.0`). A compiled `AllpBuildIdentity` adds a monotonically increasing build revision, commit, build ID, timestamp, target, channel, and official-provenance bit. The requested build therefore displays `0.5.0.1` without setting an invalid four-part Cargo version. `allp --version --verbose` exposes the complete identity. Local builds display the requested revision but are marked `development` and non-official; only CI can set official provenance.
+The Cargo package version remains strict three-part SemVer (`0.6.0`). A compiled `AllpBuildIdentity` adds a monotonically increasing build revision, commit, build ID, timestamp, target, channel, and official-provenance bit. The requested build therefore displays `0.6.0.1` without setting an invalid four-part Cargo version. `allp --version --verbose` exposes the complete identity. Local builds display the requested revision but are marked `development` and non-official; only CI can set official provenance.
 
-Continuous comparison orders base SemVer first and build revision second. Thus `0.5.0.2` updates `0.5.0.1`, `0.5.1.1` updates `0.5.0.99`, and `0.5.0.200` cannot downgrade `0.5.1.1`. When the installed build is newer than the selected channel, the updater reports the distinct `LocalAhead` state and explicitly declines to downgrade; it is not reported as up to date. Equal revision with different commits is an integrity error for published identities. A locally installed development build from `make reinstall` uses revision `1` as a local marker, so a verified official continuous build is allowed to replace it even when that marker collides; a rerun with the same source commit is normally not forced even if its workflow identity changes.
+Continuous comparison orders base SemVer first and build revision second. Thus `0.6.0.2` updates `0.6.0.1`, `0.6.1.1` updates `0.6.0.99`, and `0.6.0.200` cannot downgrade `0.6.1.1`. When the installed build is newer than the selected channel, the updater reports the distinct `LocalAhead` state and explicitly declines to downgrade; it is not reported as up to date. Equal revision with different commits is an integrity error for published identities. A locally installed development build from `make reinstall` uses revision `1` as a local marker, so a verified official continuous build is allowed to replace it even when that marker collides; a rerun with the same source commit is normally not forced even if its workflow identity changes.
 
 Every usable release must include a validated manifest. Asset selection matches OS, architecture, libc where applicable, executable name, and target triple. A platform with no supported target, or a continuous manifest without the requested target, produces structured `UnsupportedTarget` and leaves the current installation untouched.
 
@@ -21,6 +27,12 @@ The updater validates the exact official repository/tag/asset URL, maximum size,
 Anonymous GitHub API limits still apply. `403` and `429` responses report the available remaining/reset/retry headers so the caller can distinguish a rate limit from malformed update metadata.
 
 Linux and macOS copy the verified binary to the installed binary's directory, preserve mode and ownership, create a rollback backup, rename atomically, verify again, and restore the backup on failure. A non-writable installation displays and elevates only the internal replacement helper.
+
+Before any release lookup or replacement, Linux checks whether dpkg, rpm, or
+Pacman owns the running executable. A native-package-owned binary is updated by
+that package's source of authority; built-in binary replacement is disabled and
+reports `managed_externally`. Package ownership is separate from update-channel
+preference.
 
 Windows copies a verified helper into staging and defers replacement until the current process exits. The helper keeps rollback semantics, launches the new binary with a completion/version marker, and lets the new process clean staging.
 

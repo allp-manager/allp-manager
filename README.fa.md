@@ -6,7 +6,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه Build فعلی: **0.5.0.1** (نسخه پایه Cargo: **0.5.0**)
+نسخه Build فعلی: **0.6.0.1** (نسخه پایه Cargo: **0.6.0**)
 سطح بلوغ: **Public Alpha**
 
 ## چرا Allp وجود دارد
@@ -46,7 +46,27 @@ Allp Package Manager تازه ای نیست. هسته runtime آن cross-platfor
 
 ## نصب و ساخت
 
-ساخت از سورس:
+نصب باینری منتشرشده و بررسی‌شده بدون نیاز به Rust:
+
+```bash
+curl --fail --location --output install-allp.sh \
+  https://github.com/allp-manager/allp-manager/releases/latest/download/install-allp.sh
+less install-allp.sh
+sh install-allp.sh
+```
+
+نصاب سیستم‌عامل و معماری Linux/macOS را تشخیص می‌دهد، آرشیو دقیق release و
+فایل SHA-256 کنار آن را دانلود و بررسی می‌کند، مطمئن می‌شود آرشیو فقط باینری
+`allp` را دارد و آن را در `~/.local/bin` می‌گذارد. عمداً روش `curl | sh`
+پیشنهاد نشده است. برای نصب یک نسخهٔ مشخص، شماره‌ای مثل `0.6.0` را آرگومان اول
+بدهید؛ مسیر نصب را هم می‌توان با `ALLP_INSTALL_DIR` عوض کرد.
+
+اگر باینری در حال اجرا متعلق به یک بستهٔ توزیعی باشد، `allp self-update` هیچ‌وقت
+`/usr/bin/allp` را بازنویسی نمی‌کند؛ مالک dpkg/rpm/Pacman را گزارش می‌دهد و
+به‌روزرسانی را به همان منبع بسته برمی‌گرداند. انتشار `.deb`، `.rpm` و AUR تا
+زمان آماده‌شدن مخزن امضاشده و مسیر update آن عمداً عقب افتاده است.
+
+ساخت از سورس برای توسعه:
 
 ```bash
 git clone https://github.com/allp-manager/allp-manager.git
@@ -63,7 +83,7 @@ allp --version
 allp update && allp upgrade
 ```
 
-`allp --version` نسخه نمایشی Build را نشان می دهد و `allp --version --verbose` نسخه پایه، revision، channel، commit، Build ID، target و رسمی بودن Build را نیز گزارش می کند. کانال پیش فرض `allp update`، Buildهای Continuous اعتبارسنجی شده شاخه `main` است؛ بنابراین یک اصلاح کوچک می تواند بدون تغییر SemVer از `0.5.0.1` به `0.5.0.2` به روز شود. برای Releaseهای tag شده از `--update-channel stable` استفاده کنید.
+`allp --version` نسخه نمایشی Build را نشان می دهد و `allp --version --verbose` نسخه پایه، revision، channel، commit، Build ID، target و رسمی بودن Build را نیز گزارش می کند. نصب تازه به‌صورت پیش‌فرض روی کانال tag شده و اعتبارسنجی‌شدهٔ `stable` است. state آلفای قبلی که کانال ضمنی قدیمی را داشته روی `continuous` می‌ماند و انتخاب صریح `--update-channel stable|continuous|prerelease` پایدار است.
 
 `make install` باینری release را می سازد و آن را به
 `/usr/local/bin/allp` نصب می کند. برای همین کپی فایل از `sudo install` استفاده
@@ -73,7 +93,7 @@ allp update && allp upgrade
 make install-user
 ```
 
-نیازمندی ها:
+نیازمندی‌های ساخت از سورس:
 
 - Rust 1.74 یا جدیدتر
 - Cargo
@@ -194,6 +214,18 @@ allp install htop --from bazzite --dry-run
 - `apps`: Packageهای سیستم، Universal applicationها و Homebrew
 - `dev`: اکوسیستم های Python، Node و Rust/Cargo
 - `all`: همه Sourceهای قابل استفاده
+
+جست‌وجوی JSON، خروجی redirect شده و `--no-interactive` امکان پرسیدن این سؤال
+را ندارند؛ بنابراین اگر `--from` یا `--scope` صریح نباشد، scope مؤثر `apps`
+است. Backendهای واجد شرایط با حداکثر چهار worker هم‌زمان جست‌وجو می‌شوند.
+اگر parser خروجی native را نشناسد، وضعیت `unrecognized_output` می‌دهد، نه
+«بدون نتیجه». نتیجه‌های سالم در شکست جزئی حفظ می‌شوند و `complete=false` است.
+
+خروجی عادی برای هر candidate یک خط است و `-v` جزئیات identity، رابطه، artifact،
+installer و metadata بومی را اضافه می‌کند. رابطه‌های canonical تأییدشده گروه
+می‌شوند، رابطه‌های احتمالی در بخش هشدار روشن می‌آیند و نام‌های یکسانِ
+تأییدنشده جدا می‌مانند. Allp می‌تواند رابطه را بشناسد، اما بین sourceهای
+معنادار به‌جای کاربر تصمیم نمی‌گیرد.
 
 نتیجه ها با سه برچسب نمایش داده می شوند: `Exact`، `Related` و `Fuzzy`. Matchهای Exact همیشه نمایش داده می شوند، Related برای هر Backend محدود است، و Fuzzy فقط با `--all` دیده می شود.
 
@@ -322,13 +354,13 @@ allp update --offline
 allp update --update-channel prerelease
 ```
 
-channel پیش‌فرض، buildهای verified و continuous شاخه `main` است؛ انتخاب stable و prerelease صریح و persist می‌شود. Release پایدار باید `allp-release-manifest.json` معتبر داشته باشد و build continuous از manifest اختصاصی و workflow identity مورد اعتماد استفاده می‌کند. ابتدا SemVer پایه و سپس build revision مقایسه می‌شود؛ asset بر اساس OS، معماری، libc، فرمت executable و target انتخاب می‌شود و target ناسازگار بدون staging گزارش می‌شود.
+نصب تازه از channel پایدار و tag‌شده استفاده می‌کند. نصب آلفای مهاجرت‌کرده ممکن است channel verified و continuous شاخه `main` را حفظ کند؛ انتخاب stable، continuous و prerelease صریح و persist می‌شود. Release پایدار باید `allp-release-manifest.json` معتبر داشته باشد و build continuous از manifest اختصاصی و workflow identity مورد اعتماد استفاده می‌کند. ابتدا SemVer پایه و سپس build revision مقایسه می‌شود؛ asset بر اساس OS، معماری، libc، فرمت executable و target انتخاب می‌شود و target ناسازگار بدون staging گزارش می‌شود.
 
 اگر build نصب‌شده از channel انتخاب‌شده جدیدتر باشد، Allp وضعیت جداگانهٔ
 `LocalAhead` را گزارش می‌کند و downgrade انجام نمی‌دهد؛ این وضعیت «up to date»
 نامیده نمی‌شود.
 
-باینری‌ای که با `make reinstall` نصب می‌شود provenance محلی/development دارد، اما همچنان build جدید و verifiedِ continuous از `main` را دنبال می‌کند؛ حتی اگر revision محلیِ `1` با revision CI یکسان باشد. بنابراین پس از merge شدن تغییر در GitHub و publish موفق continuous build، channel پیش‌فرض `allp update` آن را تشخیص می‌دهد و فقط تأیید معمول برای جایگزینی باقی می‌ماند.
+باینری‌ای که با `make reinstall` نصب می‌شود provenance محلی/development دارد. وقتی continuous صریحاً انتخاب شده باشد، build جدید و verifiedِ `main` را دنبال می‌کند؛ حتی اگر revision محلیِ `1` با revision CI یکسان باشد. تأیید معمول برای جایگزینی همچنان باقی می‌ماند.
 
 Download فقط HTTPS، با timeout، redirect و size limit و فقط برای repository، tag و asset دقیق انجام می شود. SHA-256، مسیرهای archive و نسخه binary staged قبل از نصب بررسی می شوند. در Linux/macOS جایگزینی با staging هم فایل سیستم، backup rollback و verification نهایی انجام می شود؛ برای مسیر non-writable فقط helper کوچک elevate می شود. Windows از helper deferred استفاده می کند. re-execution محافظت شده باعث می شود `allp update` فقط یک بار ادامه یابد و loop نسازد. حالت offline با GitHub یا remote sourceها تماس نمی گیرد.
 

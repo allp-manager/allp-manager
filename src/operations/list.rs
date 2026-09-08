@@ -1,7 +1,7 @@
 use crate::{
     cli::Spinner,
     discovery::path::find_executable,
-    domain::{AllpResult, BackendIssue, Capability, InstalledPackage},
+    domain::{AllpResult, BackendIssue, BackendSearchIssueKind, Capability, InstalledPackage},
     operations::OperationContext,
 };
 use serde::Serialize;
@@ -100,6 +100,8 @@ pub fn gather(context: &OperationContext<'_>) -> AllpResult<InstalledReport> {
                 Err(error) => issues.push(BackendIssue {
                     backend_id,
                     backend_name,
+                    kind: BackendSearchIssueKind::CommandFailed,
+                    stage: None,
                     message: error.to_string(),
                 }),
             }

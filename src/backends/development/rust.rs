@@ -5,7 +5,8 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpResult, BackendCategory, Capability, DeveloperTarget, ExecutionPlan, InstalledPackage,
+        AllpResult, BackendCategory, BackendSearchIssue, BackendSearchIssueKind,
+        BackendSearchReport, Capability, DeveloperTarget, ExecutionPlan, InstalledPackage,
         MaintenancePlan, NativeCommand, OperationKind, OperationStatus, PackageCandidate,
         PackageDomain, PackageInfo, PrivilegeRequirement,
     },
@@ -86,7 +87,7 @@ impl Backend for RustBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let cargo = command_path(self, commands, "cargo")?;
         let output = capture_checked_with_privilege(
             self,
@@ -94,7 +95,18 @@ impl Backend for RustBackend {
             NativeCommand::new(cargo).args(["search", query, "--limit", "20"]),
             PrivilegeRequirement::OriginalUserRequired,
         )?;
-        Ok(parse_search(self, &output, query))
+        let candidates = parse_search(self, &output, query);
+        if candidates.is_empty() && !output.trim().is_empty() {
+            return Ok(
+                BackendSearchReport::default().with_issue(BackendSearchIssue {
+                    kind: BackendSearchIssueKind::UnrecognizedOutput,
+                    stage: Some("cargo search".to_owned()),
+                    message: "Cargo returned non-empty output without a recognizable crate row"
+                        .to_owned(),
+                }),
+            );
+        }
+        Ok(BackendSearchReport::complete(candidates))
     }
 
     fn list_installed(
@@ -379,6 +391,11 @@ mod tests {
         assert_eq!(packages[0].package_id, "ripgrep");
         assert_eq!(packages[0].version.as_deref(), Some("14.1.1"));
         assert_eq!(packages[0].domain, PackageDomain::Rust);
+    }
+
+    #[test]
+    fn malformed_cargo_search_text_does_not_parse_as_a_crate() {
+        assert!(parse_search(&RustBackend, "future output format", "demo").is_empty());
     }
 
     #[test]

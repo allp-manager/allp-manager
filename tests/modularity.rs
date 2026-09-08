@@ -3,8 +3,8 @@ use allp::{
     cli::Renderer,
     discovery::{DetectedBackend, DetectedBackendSet, DiscoveryReport},
     domain::{
-        AllpResult, BackendCategory, Capability, ExecutionPlan, MatchKind, NativeCommand,
-        PackageCandidate, PackageDomain, RuntimePrivilegeContext,
+        AllpResult, BackendCategory, BackendSearchReport, Capability, ExecutionPlan, MatchKind,
+        NativeCommand, PackageCandidate, PackageDomain, RuntimePrivilegeContext,
     },
     execution::{CommandOutput, ProcessRunner, ProcessStatus},
     operations::{search, OperationContext},
@@ -40,8 +40,8 @@ impl Backend for ExampleBackend {
         _commands: &CommandMap,
         _runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
-        Ok(vec![PackageCandidate {
+    ) -> AllpResult<BackendSearchReport> {
+        Ok(BackendSearchReport::complete(vec![PackageCandidate {
             backend_id: self.id().to_owned(),
             backend_name: self.display_name().to_owned(),
             category: self.category(),
@@ -61,7 +61,7 @@ impl Backend for ExampleBackend {
                 "development package",
             ),
             metadata: Default::default(),
-        }])
+        }]))
     }
 }
 

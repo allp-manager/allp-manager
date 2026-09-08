@@ -5,9 +5,9 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpError, AllpResult, BackendCategory, Capability, DeveloperTarget, ExecutionPlan,
-        InstalledPackage, MaintenancePlan, NativeCommand, OperationKind, PackageCandidate,
-        PackageDomain, PackageInfo, PrivilegeRequirement,
+        AllpError, AllpResult, BackendCategory, BackendSearchReport, Capability, DeveloperTarget,
+        ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand, OperationKind,
+        PackageCandidate, PackageDomain, PackageInfo, PrivilegeRequirement,
     },
     execution::ProcessRunner,
 };
@@ -78,14 +78,16 @@ impl Backend for RpmOstreeBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let rpm_ostree = command_path(self, commands, "rpm-ostree")?;
         let output = capture_checked(
             self,
             runner,
             NativeCommand::new(rpm_ostree).args(["search", query]),
         )?;
-        Ok(parse_search(self, &output, query))
+        Ok(BackendSearchReport::complete(parse_search(
+            self, &output, query,
+        )))
     }
 
     fn list_installed(

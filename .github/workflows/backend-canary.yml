@@ -1,0 +1,77 @@
+name: Weekly backend canary
+
+on:
+  schedule:
+    - cron: "17 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-search:
+    name: ${{ matrix.backend }} on ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu
+            image: ubuntu:24.04
+            backend: apt
+            query: bash
+            setup: apt-get update && apt-get install -y ca-certificates curl build-essential
+          - name: Fedora
+            image: fedora:latest
+            backend: dnf
+            query: bash
+            setup: dnf install -y ca-certificates curl gcc make
+          - name: Arch Linux
+            image: archlinux:latest
+            backend: pacman
+            query: bash
+            setup: pacman -Syu --noconfirm ca-certificates curl base-devel
+          - name: Ubuntu Flatpak
+            image: ubuntu:24.04
+            backend: flatpak
+            query: firefox
+            setup: apt-get update && apt-get install -y ca-certificates curl build-essential flatpak && flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native prerequisites
+        shell: bash
+        run: ${{ matrix.setup }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build canary binary
+        run: cargo build --locked
+      - name: Exercise native search parser
+        run: target/debug/allp search "${{ matrix.query }}" --from "${{ matrix.backend }}" --json >canary.json
+      - name: Require complete search output
+        shell: bash
+        run: |
+          grep -q '"schema_version": 2' canary.json
+          grep -q '"complete": true' canary.json
+          grep -q '"package_id":' canary.json
+
+  snap-search:
+    name: Snap on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Start snapd
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y snapd
+          sudo systemctl enable --now snapd.socket
+      - run: cargo build --locked
+      - name: Exercise Snap discovery
+        run: target/debug/allp search hello-world --from snap --json >canary.json
+      - name: Require complete search output
+        shell: bash
+        run: |
+          grep -q '"schema_version": 2' canary.json
+          grep -q '"complete": true' canary.json
+          grep -q '"package_id":' canary.json

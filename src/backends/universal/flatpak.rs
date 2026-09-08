@@ -5,10 +5,10 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
-        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
-        OperationKind, OperationStatus, PackageCandidate, PackageDomain, PackageInfo,
-        PrivilegeRequirement,
+        AllpError, AllpResult, BackendCategory, BackendOperationRecord, BackendSearchIssue,
+        BackendSearchIssueKind, BackendSearchReport, Capability, DeveloperTarget, ExecutionPlan,
+        InstalledPackage, MaintenancePlan, NativeCommand, OperationKind, OperationStatus,
+        PackageCandidate, PackageDomain, PackageInfo, PrivilegeRequirement,
     },
     execution::{ProcessRunner, ProcessStatus},
     platform::PlatformContext,
@@ -152,7 +152,7 @@ impl Backend for FlatpakBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
+    ) -> AllpResult<BackendSearchReport> {
         let flatpak = command_path(self, commands, "flatpak")?;
         let probe = detect_flatpak_probe(commands, runner);
         if !matches!(
@@ -176,57 +176,7 @@ impl Backend for FlatpakBackend {
             ]),
         )?;
 
-        let mut candidates = Vec::new();
-        for line in output.lines() {
-            let columns = split_tab_or_whitespace(line);
-            if columns.len() < 2 || columns[0].eq_ignore_ascii_case("Application") {
-                continue;
-            }
-
-            let package_id = columns[0].clone();
-            let display_name = columns
-                .get(1)
-                .cloned()
-                .unwrap_or_else(|| package_id.clone());
-            let remote = columns.get(5).cloned().filter(|value| !value.is_empty());
-            let mut metadata = std::collections::BTreeMap::new();
-            if let Some(remote) = &remote {
-                metadata.insert("flatpak.remote".to_owned(), remote.clone());
-            }
-            if let Some(branch) = columns.get(4).filter(|value| !value.is_empty()) {
-                metadata.insert("flatpak.branch".to_owned(), branch.clone());
-            }
-            let candidate_match = if package_id.eq_ignore_ascii_case(query)
-                || display_name.eq_ignore_ascii_case(query)
-            {
-                crate::domain::MatchKind::Exact
-            } else {
-                match_kind(&package_id, query)
-            };
-            candidates.push(PackageCandidate {
-                backend_id: self.id().to_owned(),
-                backend_name: self.display_name().to_owned(),
-                category: self.category(),
-                domain: PackageDomain::Universal,
-                package_id: package_id.clone(),
-                display_name: display_name.clone(),
-                description: columns.get(2).cloned().filter(|value| !value.is_empty()),
-                version: columns.get(3).cloned().filter(|value| !value.is_empty()),
-                source: remote.or_else(|| Some("configured Flatpak remotes".to_owned())),
-                installers: vec![self.display_name().to_owned()],
-                artifact_kind: "universal application".to_owned(),
-                scope: None,
-                match_kind: candidate_match,
-                identity: PackageCandidate::infer_identity(
-                    candidate_match,
-                    PackageDomain::Universal,
-                    "universal application",
-                ),
-                metadata,
-            });
-        }
-
-        Ok(candidates)
+        Ok(parse_flatpak_search(self, &output, query))
     }
 
     fn plan_search_prerequisite(&self, commands: &CommandMap) -> AllpResult<Option<ExecutionPlan>> {
@@ -768,6 +718,78 @@ pub fn flathub_is_configured(
     }
 }
 
+fn parse_flatpak_search(
+    backend: &FlatpakBackend,
+    output: &str,
+    query: &str,
+) -> BackendSearchReport {
+    let mut report = BackendSearchReport::default();
+    let mut rejected_lines = 0usize;
+
+    for line in output.lines().filter(|line| !line.trim().is_empty()) {
+        let columns = split_tab_or_whitespace(line);
+        if columns
+            .first()
+            .is_some_and(|column| column.eq_ignore_ascii_case("Application"))
+        {
+            continue;
+        }
+        if columns.len() < 2 || columns[0].trim().is_empty() {
+            rejected_lines += 1;
+            continue;
+        }
+
+        let package_id = columns[0].clone();
+        let display_name = columns[1].clone();
+        let remote = columns.get(5).cloned().filter(|value| !value.is_empty());
+        let mut metadata = std::collections::BTreeMap::new();
+        if let Some(remote) = &remote {
+            metadata.insert("flatpak.remote".to_owned(), remote.clone());
+        }
+        if let Some(branch) = columns.get(4).filter(|value| !value.is_empty()) {
+            metadata.insert("flatpak.branch".to_owned(), branch.clone());
+        }
+        let candidate_match =
+            if package_id.eq_ignore_ascii_case(query) || display_name.eq_ignore_ascii_case(query) {
+                crate::domain::MatchKind::Exact
+            } else {
+                match_kind(&package_id, query)
+            };
+        report.candidates.push(PackageCandidate {
+            backend_id: backend.id().to_owned(),
+            backend_name: backend.display_name().to_owned(),
+            category: backend.category(),
+            domain: PackageDomain::Universal,
+            package_id: package_id.clone(),
+            display_name,
+            description: columns.get(2).cloned().filter(|value| !value.is_empty()),
+            version: columns.get(3).cloned().filter(|value| !value.is_empty()),
+            source: remote.or_else(|| Some("configured Flatpak remotes".to_owned())),
+            installers: vec![backend.display_name().to_owned()],
+            artifact_kind: "universal application".to_owned(),
+            scope: None,
+            match_kind: candidate_match,
+            identity: PackageCandidate::infer_identity(
+                candidate_match,
+                PackageDomain::Universal,
+                "universal application",
+            ),
+            metadata,
+        });
+    }
+
+    if rejected_lines > 0 {
+        report.issues.push(BackendSearchIssue {
+            kind: BackendSearchIssueKind::UnrecognizedOutput,
+            stage: Some("flatpak search".to_owned()),
+            message: format!(
+                "Flatpak returned {rejected_lines} non-empty line(s) in an unrecognized format"
+            ),
+        });
+    }
+    report
+}
+
 #[cfg(test)]
 fn parse_flatpak_remotes(output: &str) -> Vec<FlatpakRemote> {
     parse_flatpak_remotes_with_scope(output, None)
@@ -802,13 +824,56 @@ fn parse_flatpak_remotes_with_scope(output: &str, scope: Option<&str>) -> Vec<Fl
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_flatpak_remotes, parse_flatpak_update_status, FlatpakBackend};
-    use crate::domain::OperationStatus;
+    use super::{
+        parse_flatpak_remotes, parse_flatpak_search, parse_flatpak_update_status, FlatpakBackend,
+    };
+    use crate::domain::{BackendSearchIssueKind, OperationStatus};
     use crate::{
         backends::{Backend, CommandMap},
         domain::{BackendCategory, MatchKind, PackageCandidate, PackageDomain},
     };
     use std::{collections::BTreeMap, path::PathBuf};
+
+    #[test]
+    fn flatpak_search_fixtures_distinguish_complete_partial_and_unknown_output() {
+        let valid = parse_flatpak_search(
+            &FlatpakBackend,
+            include_str!("../../../tests/fixtures/flatpak/search-valid.txt"),
+            "firefox",
+        );
+        assert_eq!(valid.candidates.len(), 2);
+        assert!(valid.issues.is_empty());
+
+        let empty = parse_flatpak_search(
+            &FlatpakBackend,
+            include_str!("../../../tests/fixtures/flatpak/search-no-match.txt"),
+            "missing",
+        );
+        assert!(empty.candidates.is_empty());
+        assert!(empty.issues.is_empty());
+
+        let partial = parse_flatpak_search(
+            &FlatpakBackend,
+            include_str!("../../../tests/fixtures/flatpak/search-partial.txt"),
+            "firefox",
+        );
+        assert_eq!(partial.candidates.len(), 1);
+        assert_eq!(
+            partial.issues[0].kind,
+            BackendSearchIssueKind::UnrecognizedOutput
+        );
+
+        let unknown = parse_flatpak_search(
+            &FlatpakBackend,
+            include_str!("../../../tests/fixtures/flatpak/search-unrecognized.txt"),
+            "firefox",
+        );
+        assert!(unknown.candidates.is_empty());
+        assert_eq!(
+            unknown.issues[0].kind,
+            BackendSearchIssueKind::UnrecognizedOutput
+        );
+    }
 
     #[test]
     fn nothing_to_do_maps_to_up_to_date() {

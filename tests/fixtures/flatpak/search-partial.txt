@@ -1,0 +1,3 @@
+Application	Name	Description	Version	Branch	Remotes
+org.mozilla.firefox	Firefox	Fast, private web browser	142.0	stable	flathub
+malformed-record

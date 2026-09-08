@@ -15,6 +15,23 @@ pub fn capture_checked(
     ensure_success(backend, rendered, output)
 }
 
+pub fn capture_allowing_no_matches(
+    backend: &dyn Backend,
+    runner: &dyn ProcessRunner,
+    command: NativeCommand,
+    is_native_no_match: impl FnOnce(&CommandOutput) -> bool,
+) -> AllpResult<Option<String>> {
+    let rendered = crate::execution::render_native_command(&command);
+    let output = runner.capture(&command)?;
+    if output.success {
+        return Ok(Some(output.stdout));
+    }
+    if is_native_no_match(&output) {
+        return Ok(None);
+    }
+    ensure_success(backend, rendered, output).map(Some)
+}
+
 pub fn capture_checked_with_privilege(
     backend: &dyn Backend,
     runner: &dyn ProcessRunner,

@@ -18,9 +18,11 @@ pub use package::{
     ResultSection, SearchScope,
 };
 pub use report::{
-    BackendIssue, BackendOperationRecord, MaintenancePlan, MultiOperationReport, OperationStatus,
+    BackendIssue, BackendOperationRecord, BackendSearchIssue, BackendSearchIssueKind,
+    BackendSearchReport, MaintenancePlan, MultiOperationReport, OperationStatus,
     SearchBackendState, SearchBackendSummary, SearchReport,
 };
 pub use software_identity::{
-    DistributionRelationship, IdentityConfidence, IdentityMetadata, NameMatchKind, SoftwareType,
+    CandidateGroup, DistributionRelationship, IdentityConfidence, IdentityMetadata, NameMatchKind,
+    SoftwareType,
 };

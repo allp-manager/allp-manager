@@ -37,6 +37,16 @@ pub struct OperationContext<'a> {
 }
 
 impl<'a> OperationContext<'a> {
+    pub fn effective_search_scope(&self) -> SearchScope {
+        self.search_scope.unwrap_or_else(|| {
+            if self.backend_filter.is_some() {
+                SearchScope::AllSources
+            } else {
+                SearchScope::AppsAndTools
+            }
+        })
+    }
+
     pub fn eligible_backends(&self) -> AllpResult<Vec<&DetectedBackend>> {
         if let Some(filter) = self.backend_filter {
             let backend = self

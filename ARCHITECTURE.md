@@ -14,6 +14,11 @@ Allp is a transparent orchestration layer over package managers already installe
 7. Multiple meaningful sources require user choice.
 8. Partial read-only failures are reported and prevent false uniqueness.
 
+Principle 7 limits decisions, not recognition: Allp may recognize and display
+relationships between results, but it never chooses between meaningful sources
+on the user's behalf. Verified identity clusters, probable relationships, and
+unverified name matches must remain visibly distinct.
+
 ## Runtime Flow
 
 ```text
@@ -49,6 +54,7 @@ Pure shared models:
 - `PackageDomain`
 - `MatchKind`
 - `PackageCandidate`
+- `CandidateGroup`
 - `InstalledPackage`
 - `PackageInfo`
 - `NativeCommand`
@@ -181,7 +187,11 @@ classic-stream fallback for JSON, non-TTY, non-interactive, `TERM=dumb`, or
 
 ## Search Ranking
 
-Backends normalize raw native results into `PackageCandidate`. Generic search then assigns:
+Backends return `BackendSearchReport`, containing parsed candidates plus any
+structured parser issues. Empty recognized output means `NoMatches`; non-empty
+unknown output means `UnrecognizedOutput`; valid candidates accompanied by an
+issue mean `PartialResults` and make the overall report incomplete. Generic
+search then normalizes candidates and assigns:
 
 - `Exact`
 - `Related`

@@ -12,10 +12,10 @@ use crate::{
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
-        AllpError, AllpResult, BackendCategory, BackendOperationRecord, Capability,
-        DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan, NativeCommand,
-        OperationKind, OperationStatus, PackageCandidate, PackageDomain, PackageInfo,
-        PrivilegeRequirement,
+        AllpError, AllpResult, BackendCategory, BackendOperationRecord, BackendSearchReport,
+        Capability, DeveloperTarget, ExecutionPlan, InstalledPackage, MaintenancePlan,
+        NativeCommand, OperationKind, OperationStatus, PackageCandidate, PackageDomain,
+        PackageInfo, PrivilegeRequirement,
     },
     execution::{CommandOutput, ProcessRunner, ProcessStatus},
     platform::PlatformContext,
@@ -203,12 +203,14 @@ impl Backend for SnapBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
         query: &str,
-    ) -> AllpResult<Vec<PackageCandidate>> {
-        Ok(search_snap_candidates(self, commands, runner, query)?
-            .candidates
-            .into_iter()
-            .map(|candidate| candidate.into_package_candidate(self, query))
-            .collect())
+    ) -> AllpResult<BackendSearchReport> {
+        Ok(BackendSearchReport::complete(
+            search_snap_candidates(self, commands, runner, query)?
+                .candidates
+                .into_iter()
+                .map(|candidate| candidate.into_package_candidate(self, query))
+                .collect(),
+        ))
     }
 
     fn list_installed(
