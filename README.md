@@ -1,16 +1,48 @@
 
-[telegram](https://t.me/im_wrench)
-
 # Allp
 
-[English](README.md) | [فارسی](README.fa.md)
+<p align="center">
+  <strong>One transparent CLI for every package manager already on your machine.</strong>
+</p>
 
-> One CLI for the package managers already on your machine.
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.fa.md">فارسی</a> ·
+  <a href="wiki/Home.md">Wiki</a> ·
+  <a href="wiki/Home.fa.md">ویکی فارسی</a>
+</p>
+
+<p align="center">
+  <img alt="Version 0.6.2" src="https://img.shields.io/badge/version-0.6.2-7c3aed">
+  <img alt="Public alpha" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
+  <img alt="Rust 1.74+" src="https://img.shields.io/badge/rust-1.74%2B-dea584">
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
+</p>
+
+> Allp unifies discovery, search, installation, removal, maintenance, diagnostics,
+> and reproducible package profiles while keeping native commands visible and
+> native package managers authoritative.
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, rpm-ostree on Bazzite/Atomic hosts, Flatpak, Snap, Homebrew/Linuxbrew, Python and Node installers, and Rust/Cargo, then shows the exact native command or local API request before anything mutates the system.
 
 Current build version: **0.6.2.1** (Cargo base version **0.6.2**)
 Maturity: **public alpha**
+
+## Start Here
+
+| I want to… | Go to |
+|---|---|
+| Install Allp and run the first commands | [Quick start](#installation) |
+| Learn every CLI command with examples | [Command reference](wiki/Command-Reference.md) |
+| Understand supported package managers | [Backend guide](wiki/Backends.md) |
+| Automate Allp safely with JSON | [Automation and JSON](wiki/Automation-and-JSON.md) |
+| Understand architecture and safety boundaries | [Architecture](wiki/Architecture.md) · [Security](wiki/Security.md) |
+| Develop or contribute | [Development](wiki/Development.md) · [Contributing](CONTRIBUTING.md) |
+| Diagnose a problem | [Troubleshooting](wiki/Troubleshooting.md) |
+
+The [English wiki](wiki/Home.md) and [Persian wiki](wiki/Home.fa.md) are the
+long-form documentation hubs. Files under `docs/` remain the canonical
+engineering contracts for contributors.
 
 ## Why Allp Exists
 
@@ -578,7 +610,7 @@ Keep backend-specific parsing and flags inside backend modules. Add fixtures for
 
 Near-term work is broader real-distro validation, richer parser fixtures, an
 interactive Snap channel chooser, deeper signal/trusted-path testing, and
-real-host Homebrew, Cargo, and Bazzite validation. Version 0.5.0 adds Rust/Cargo
+real-host Homebrew, Cargo, and Bazzite validation. Version 0.6.2 includes Rust/Cargo
 binary-tool management and transactional rpm-ostree support for Bazzite; a
 broader full-screen TUI and GUI remain later work, alongside future ecosystems
 such as Composer, Go, RubyGems, and Maven/Gradle.
@@ -587,8 +619,9 @@ See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-Version `0.5.0` adds Rust/Cargo binary-tool management and Bazzite/rpm-ostree
-support while retaining the Homebrew, Node, and Python user-scope boundaries.
+Version `0.6.2` is the current published release. It includes Rust/Cargo
+binary-tool management and Bazzite/rpm-ostree support while retaining the
+Homebrew, Node, and Python user-scope boundaries.
 See [CHANGELOG.md](CHANGELOG.md).
 
 ## Known Limitations
@@ -606,6 +639,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 MIT. See [LICENSE](LICENSE).
 
 
-### 💚 Donate
+## Community
 
-https://daramet.com/wrench
+- [Telegram](https://t.me/im_wrench)
+- [Support the maintainer](https://daramet.com/wrench)

@@ -55,6 +55,102 @@ Implementation tasks live here. Product direction and larger milestones live in 
 
 ## Remaining Implementation Work
 
+- [ ] Keep native package-manager prompts visible and interactive inside the maintenance TUI
+  - Priority: P1
+  - Reason: After the user confirms `allp upgrade`, an interactive APT plan can
+    wait for its own confirmation while the live footer hides that prompt and
+    makes the command appear stuck.
+  - Module: `src/cli/tui.rs`, `src/execution/runner.rs`,
+    `src/operations/maintenance.rs`, `src/backends/system/apt.rs`
+  - Target: next 0.6.x maintenance release
+  - Acceptance:
+    - `allp upgrade` followed by `y` keeps APT's native confirmation visible
+      and accepts terminal input without disabling the TUI globally.
+    - `--no-tui` retains the classic native stream and visible prompt.
+    - PTY coverage proves that prompt input and Ctrl+C cannot be consumed or
+      obscured by the live renderer.
+
+- [ ] Stabilize `-y` as the documented short alias for `--yes`
+  - Priority: P1
+  - Reason: The alias already works, but it needs an explicit compatibility
+    contract so later CLI refactors cannot remove it accidentally.
+  - Module: `src/cli/args.rs`, `docs/CLI_CONTRACT.md`, README command examples,
+    `tests/cli_fake_path.rs`
+  - Target: next 0.6.x maintenance release
+  - Acceptance:
+    - `allp upgrade -y` and `allp upgrade --yes` produce equivalent plans and
+      confirmation behavior.
+    - Both forms add APT's native `-y` only after explicit user authorization.
+    - CLI help and English/Persian documentation show the short and long forms.
+
+- [ ] Make profile installation transactional at the planning boundary and complete at the reporting boundary
+  - Priority: P1
+  - Reason: The current package loop can install several entries, stop on the
+    first failure, skip the remaining entries, and return without a useful
+    per-package summary.
+  - Module: `src/profiles.rs`, `src/operations/install.rs`, profile domain
+    types, CLI output, `tests/cli_fake_path.rs`
+  - Target: next 0.6.x maintenance release
+  - Acceptance:
+    - Resolve and preflight every profile entry before the first mutation.
+    - Render the complete set of exact native commands and request one aggregate
+      confirmation instead of prompting once per package.
+    - `--yes` skips only that aggregate Allp confirmation, while `--dry-run`
+      renders the same plan and executes nothing.
+    - After execution starts, an independent package failure does not hide or
+      silently skip later entries; every entry receives an explicit outcome.
+    - Always print a final profile summary containing installed,
+      already-installed, failed, skipped, cancelled, and dry-run counts, then
+      return a partial-failure exit code when appropriate.
+
+- [ ] Make saved profile versions explicitly informational rather than pins
+  - Priority: P1
+  - Reason: `ProfilePackage.version` records the captured version but install
+    currently requests only the package ID, so the latest backend-selected
+    version can be installed even though the old version is displayed.
+  - Module: `src/profiles.rs`, profile JSON/TOML documentation, README files
+  - Target: next 0.6.x maintenance release
+  - Acceptance:
+    - Human output labels the value as `captured version` and states that it is
+      not enforced during installation.
+    - TOML schema v1 remains readable and existing exported profiles remain
+      compatible.
+    - Documentation distinguishes inventory snapshots from reproducible
+      version-lock or pin files.
+    - Tests prove that displaying a captured version cannot be mistaken for a
+      versioned native install request.
+
+- [ ] Rewrite the README around user-visible product value
+  - Priority: P1
+  - Reason: The README grew while important behavior remains hard to discover;
+    development and release-maintainer detail currently competes with the
+    install, search, safety, and decision flow a new user needs first.
+  - Module: `README.md`, `README.fa.md`, maintainer documentation, `Makefile`
+    documentation checks
+  - Target: next 0.6.x maintenance release
+  - Acceptance:
+    - Lead with install, search, selection, upgrade, profile, and safety flows.
+    - Explain parallel search, scope pruning, JSON `schema_version: 2`, and how
+      Allp differs from or complements tools such as topgrade.
+    - Correct the no-shell-execution claim by documenting the narrow reviewed
+      Homebrew installer-script exception.
+    - Move Makefile, local release, and contributor detail into dedicated docs
+      and materially shorten both README files without losing Persian parity.
+    - Keep installation limitations and the status of `.deb`, `.rpm`, and AUR
+      distribution explicit.
+
+- [ ] Replace debug-formatted identity confidence with stable user-facing labels
+  - Priority: P2
+  - Reason: Rendering `IdentityConfidence` with `{:?}` exposes Rust enum names as
+    accidental CLI UX and makes harmless internal renames user-visible changes.
+  - Module: `src/domain/software_identity.rs`, `src/cli/output.rs`
+  - Target: next 0.6.x maintenance release
+  - Acceptance:
+    - Add an explicit `Display` or presentation mapping for every confidence
+      state.
+    - Human-output tests lock the intended labels without changing JSON enum
+      compatibility unexpectedly.
+
 - [ ] Broaden backend parser fixture coverage
   - Priority: P1
   - Reason: Real distro output varies more than fake-path fixtures can cover.

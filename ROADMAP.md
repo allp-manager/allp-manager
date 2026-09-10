@@ -2,16 +2,16 @@
 
 This roadmap describes direction, not a promise. Allp keeps native package managers as the source of truth.
 
-## Current Development: v0.6.0
+## Current Development: post-v0.6.2
 
-v0.6.0 focuses on parser reliability, decision-oriented search output,
-cross-backend identity grouping, safe stable-by-default updates, and a public
-prebuilt installation path. The complete pending change set is tracked under
-`[Unreleased]` in `CHANGELOG.md` until the release tag is prepared.
+Development after v0.6.2 focuses on parser reliability, real-host validation,
+decision-oriented search output, cross-backend identity grouping, and continued
+hardening of safe stable-by-default updates. The complete pending change set is
+tracked under `[Unreleased]` in `CHANGELOG.md` until the next release tag is prepared.
 
-## Current Published Release: v0.5.0
+## Current Published Release: v0.6.2
 
-v0.5.0 is a public-alpha developer-ecosystem and image-based Linux release
+v0.6.2 is the current public-alpha developer-ecosystem and image-based Linux release
 with:
 
 - command-first CLI for `detect`, `search`, `install`, `remove`, `update`, `upgrade`, `list`, and `info`;

@@ -1,13 +1,47 @@
 # Allp
 
-[English](README.md) | [فارسی](README.fa.md)
+<p align="center">
+  <strong>یک CLI شفاف برای تمام Package Managerهایی که همین حالا روی سیستم شما هستند.</strong>
+</p>
 
-> یک CLI شفاف برای Package Managerهایی که همین حالا روی سیستم شما نصب هستند.
+<p align="center">
+  <a href="README.fa.md">فارسی</a> ·
+  <a href="README.md">English</a> ·
+  <a href="wiki/Home.fa.md">ویکی فارسی</a> ·
+  <a href="wiki/Home.md">English Wiki</a>
+</p>
+
+<p align="center">
+  <img alt="نسخه 0.6.2" src="https://img.shields.io/badge/version-0.6.2-7c3aed">
+  <img alt="آلفای عمومی" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
+  <img alt="Rust 1.74+" src="https://img.shields.io/badge/rust-1.74%2B-dea584">
+  <a href="LICENSE"><img alt="مجوز MIT" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
+</p>
+
+> Allp کشف، جست‌وجو، نصب، حذف، نگهداری، عیب‌یابی و پروفایل‌های قابل‌انتقال را
+> یکپارچه می‌کند؛ در عین حال دستور Native را شفاف نگه می‌دارد و Package Manager
+> اصلی را منبع حقیقت می‌داند.
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
 نسخه Build فعلی: **0.6.2.1** (نسخه پایه Cargo: **0.6.2**)
 سطح بلوغ: **Public Alpha**
+
+## از اینجا شروع کنید
+
+| هدف شما | مسیر پیشنهادی |
+|---|---|
+| نصب Allp و اجرای اولین فرمان‌ها | [نصب و شروع سریع](#نصب-و-ساخت) |
+| یادگیری تمام فرمان‌ها همراه مثال | [مرجع فرمان‌ها](wiki/Command-Reference.fa.md) |
+| شناخت Package Managerهای پشتیبانی‌شده | [راهنمای Backendها](wiki/Backends.fa.md) |
+| اتوماسیون امن با JSON | [اتوماسیون و JSON](wiki/Automation-and-JSON.fa.md) |
+| درک معماری و مرزهای امنیتی | [معماری](wiki/Architecture.fa.md) · [امنیت](wiki/Security.fa.md) |
+| توسعه یا مشارکت | [راهنمای توسعه](wiki/Development.fa.md) · [مشارکت](CONTRIBUTING.md) |
+| حل یک مشکل | [عیب‌یابی](wiki/Troubleshooting.fa.md) |
+
+[ویکی فارسی](wiki/Home.fa.md) و [ویکی انگلیسی](wiki/Home.md) مرکز مستندات
+کاربردی و بلند پروژه هستند. فایل‌های `docs/` قراردادهای فنی مرجع برای توسعه‌دهندگان
+باقی می‌مانند.
 
 ## چرا Allp وجود دارد
 
@@ -577,7 +611,7 @@ RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 
 ## Changelog
 
-نسخهٔ `0.5.0` مدیریت ابزارهای binary در Rust/Cargo و پشتیبانی
+نسخهٔ `0.6.2` نسخه منتشرشده فعلی است و مدیریت ابزارهای binary در Rust/Cargo و پشتیبانی
 Bazzite/rpm-ostree را با حفظ مرزهای user-scope مربوط به Homebrew، Node و Python
 اضافه می‌کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 
@@ -596,6 +630,7 @@ Bazzite/rpm-ostree را با حفظ مرزهای user-scope مربوط به Home
 MIT. فایل [LICENSE](LICENSE) را ببینید.
 
 
-### 💚 Donate
+## جامعه و حمایت
 
-https://daramet.com/wrench
+- [تلگرام](https://t.me/im_wrench)
+- [حمایت از نگه‌دارنده پروژه](https://daramet.com/wrench)

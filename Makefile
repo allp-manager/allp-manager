@@ -114,6 +114,27 @@ docs-check:
 	test -f docs/BACKEND_CONTRACT.md
 	test -f docs/JSON_SCHEMA.md
 	test -f docs/RELEASE_MANIFEST.md
+	test -f docs/WIKI_PUBLISHING.md
+	test -f wiki/Home.md
+	test -f wiki/Home.fa.md
+	test -f wiki/Getting-Started.md
+	test -f wiki/Getting-Started.fa.md
+	test -f wiki/Command-Reference.md
+	test -f wiki/Command-Reference.fa.md
+	test -f wiki/Backends.md
+	test -f wiki/Backends.fa.md
+	test -f wiki/Architecture.md
+	test -f wiki/Architecture.fa.md
+	test -f wiki/Security.md
+	test -f wiki/Security.fa.md
+	test -f wiki/Automation-and-JSON.md
+	test -f wiki/Automation-and-JSON.fa.md
+	test -f wiki/Package-Profiles.md
+	test -f wiki/Package-Profiles.fa.md
+	test -f wiki/Development.md
+	test -f wiki/Development.fa.md
+	test -f wiki/Troubleshooting.md
+	test -f wiki/Troubleshooting.fa.md
 	test -x scripts/install-release.sh
 	test -n '$(CURRENT_VERSION)'
 	grep -q '$(CURRENT_VERSION)' README.md
