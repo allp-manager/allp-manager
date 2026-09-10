@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # مدل امنیت
 
 [← خانه ویکی](Home.fa.md) · [English](Security.md)
@@ -47,5 +49,8 @@ Allp Telemetry، Daemon، ذخیره رمز sudo یا Credential Store ندار�
 Privilege Escalation، Resolve ناامن، افشای Credential یا JSON گمراه‌کننده را از
 Private Security Advisory گزارش کنید، نه Issue عمومی.
 
-نسخه Alpha ممیزی امنیتی نشده است. [SECURITY.md](../SECURITY.md) و
-[مدل مرجع امنیت](../docs/SECURITY_MODEL.md) را بخوانید.
+نسخه Alpha ممیزی امنیتی نشده است. [SECURITY.md](https://github.com/allp-manager/allp-manager/blob/main/SECURITY.md) و
+[مدل مرجع امنیت](https://github.com/allp-manager/allp-manager/blob/main/docs/SECURITY_MODEL.md) را بخوانید.
+
+
+</div>

@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # توسعه و انتشار
 
 [← خانه ویکی](Home.fa.md) · [English](Development.md)
@@ -59,6 +61,9 @@ Prepare فایل‌های نسخه را تغییر می‌دهد و Quality Gate
 Tag محلی Annotated و فایل Ignored در `dist/` می‌سازد؛ تا `make release-push`
 چیزی Push یا Publish نمی‌شود.
 
-پیش از مشارکت [CONTRIBUTING.md](../CONTRIBUTING.md)،
-[Regression Guardrails](../docs/REGRESSION_GUARDRAILS.md) و
-[راهنمای Release](../release/README.md) را بخوانید.
+پیش از مشارکت [CONTRIBUTING.md](https://github.com/allp-manager/allp-manager/blob/main/CONTRIBUTING.md)،
+[Regression Guardrails](https://github.com/allp-manager/allp-manager/blob/main/docs/REGRESSION_GUARDRAILS.md) و
+[راهنمای Release](https://github.com/allp-manager/allp-manager/blob/main/release/README.md) را بخوانید.
+
+
+</div>

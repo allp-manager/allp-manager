@@ -32,6 +32,7 @@ Maturity: **public alpha**
 
 | I want to… | Go to |
 |---|---|
+| Follow a complete everyday workflow | [Practical usage guide](wiki/Usage-Guide.md) |
 | Install Allp and run the first commands | [Quick start](#installation) |
 | Learn every CLI command with examples | [Command reference](wiki/Command-Reference.md) |
 | Understand supported package managers | [Backend guide](wiki/Backends.md) |

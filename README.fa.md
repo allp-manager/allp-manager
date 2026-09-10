@@ -31,6 +31,7 @@ Allp Package Manager تازه ای نیست. هسته runtime آن cross-platfor
 
 | هدف شما | مسیر پیشنهادی |
 |---|---|
+| دنبال‌کردن جریان کامل استفاده روزمره | [راهنمای عملی استفاده](wiki/Usage-Guide.fa.md) |
 | نصب Allp و اجرای اولین فرمان‌ها | [نصب و شروع سریع](#نصب-و-ساخت) |
 | یادگیری تمام فرمان‌ها همراه مثال | [مرجع فرمان‌ها](wiki/Command-Reference.fa.md) |
 | شناخت Package Managerهای پشتیبانی‌شده | [راهنمای Backendها](wiki/Backends.fa.md) |

@@ -63,5 +63,5 @@ make quality
 bash scripts/check-architecture.sh
 ```
 
-See [ARCHITECTURE.md](../ARCHITECTURE.md) and
-[ADDING_BACKEND.md](../docs/ADDING_BACKEND.md) for the normative rules.
+See [ARCHITECTURE.md](https://github.com/allp-manager/allp-manager/blob/main/ARCHITECTURE.md) and
+[ADDING_BACKEND.md](https://github.com/allp-manager/allp-manager/blob/main/docs/ADDING_BACKEND.md) for the normative rules.

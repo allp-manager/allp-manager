@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # عیب‌یابی
 
 [← خانه ویکی](Home.fa.md) · [English](Troubleshooting.md)
@@ -31,3 +33,6 @@ allp detect --json >allp-detect.json
 
 در Bug Report فرمان دقیق، نسخه توزیع و ابزار، انتظار، خروجی Native و نسخه پاک‌شده
 `allp detect --json` را بفرستید. Credential یا جزئیات آسیب‌پذیری را عمومی نکنید.
+
+
+</div>

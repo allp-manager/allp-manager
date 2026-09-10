@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # راهنمای Backendها
 
 [← خانه ویکی](Home.fa.md) · [English](Backends.md)
@@ -76,4 +78,7 @@ allp install ripgrep --from cargo --dry-run
 
 نگهداری Cargo هیچ‌وقت `cargo add` یا `cargo update` پروژه را اجرا نمی‌کند.
 ارتقای Binaryهای Global به ابزار اختیاری `cargo-update` نیاز دارد. جدول دقیق
-در [Capability Matrix](../docs/CAPABILITY_MATRIX.md) نگه‌داری می‌شود.
+در [Capability Matrix](https://github.com/allp-manager/allp-manager/blob/main/docs/CAPABILITY_MATRIX.md) نگه‌داری می‌شود.
+
+
+</div>

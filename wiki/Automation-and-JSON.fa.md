@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # اتوماسیون و JSON
 
 [← خانه ویکی](Home.fa.md) · [English](Automation-and-JSON.md)
@@ -45,4 +47,7 @@ rm -f "$report"
 نمی‌کند؛ Bootstrap به `--allow-bootstrap` هم نیاز دارد. Exit Code شماره 8 یعنی
 بخشی از Batch شکست خورده و موفقیت کامل نیست.
 
-تمام فیلدها در [JSON_SCHEMA.md](../docs/JSON_SCHEMA.md) تعریف شده‌اند.
+تمام فیلدها در [JSON_SCHEMA.md](https://github.com/allp-manager/allp-manager/blob/main/docs/JSON_SCHEMA.md) تعریف شده‌اند.
+
+
+</div>

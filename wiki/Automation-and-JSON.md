@@ -60,4 +60,4 @@ allp install git --from apt --no-interactive --yes
 Bootstrap additionally requires `--allow-bootstrap`. Exit code `8` means a
 multi-backend batch partially failed; do not treat it as total success.
 
-See [JSON_SCHEMA.md](../docs/JSON_SCHEMA.md) for every field.
+See [JSON_SCHEMA.md](https://github.com/allp-manager/allp-manager/blob/main/docs/JSON_SCHEMA.md) for every field.

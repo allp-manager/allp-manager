@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # پروفایل پکیج‌ها
 
 [← خانه ویکی](Home.fa.md) · [English](Package-Profiles.md)
@@ -40,3 +42,6 @@ Inventory سیستمی ممکن است Dependencyها را هم داشته با�
 
 در Linux معمولاً فایل‌ها در `~/.config/allp/profiles/` هستند؛ مسیر واقعی را با
 `allp doctor` ببینید.
+
+
+</div>

@@ -90,5 +90,5 @@ allp info git --from apt --raw
 | 10 | Internal/parse/I/O error |
 | 11 | Backend busy or native lock held |
 
-See the [canonical command contract](../docs/COMMANDS.md) for backend-specific
+See the [canonical command contract](https://github.com/allp-manager/allp-manager/blob/main/docs/COMMANDS.md) for backend-specific
 maintenance semantics.

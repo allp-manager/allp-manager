@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # معماری
 
 [← خانه ویکی](Home.fa.md) · [English](Architecture.md)
@@ -62,5 +64,8 @@ make quality
 bash scripts/check-architecture.sh
 ```
 
-قواعد مرجع در [ARCHITECTURE.md](../ARCHITECTURE.md) و
-[ADDING_BACKEND.md](../docs/ADDING_BACKEND.md) هستند.
+قواعد مرجع در [ARCHITECTURE.md](https://github.com/allp-manager/allp-manager/blob/main/ARCHITECTURE.md) و
+[ADDING_BACKEND.md](https://github.com/allp-manager/allp-manager/blob/main/docs/ADDING_BACKEND.md) هستند.
+
+
+</div>

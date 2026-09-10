@@ -10,15 +10,22 @@ which native command will run, or which privilege boundary is required.
 
 | Area | Guide |
 |---|---|
+| Everyday workflows from first check to automation | [Practical usage guide](Usage-Guide.md) |
 | First install and safe first run | [Getting started](Getting-Started.md) |
+| Supported operating systems and install methods | [Platforms and installation](Platforms-and-Installation.md) |
 | Every public command and useful flag | [Command reference](Command-Reference.md) |
+| Ranking, identity and interactive choice | [Search and selection](Search-and-Selection.md) |
 | APT, Pacman, DNF, Bazzite, Flatpak, Snap, Homebrew, Python, Node and Cargo | [Backends](Backends.md) |
+| Metadata refresh, upgrades and verified Allp updates | [Maintenance and self-update](Maintenance-and-Self-Update.md) |
 | Portable TOML inventories | [Package profiles](Package-Profiles.md) |
 | Scripts, CI and structured output | [Automation and JSON](Automation-and-JSON.md) |
+| Config, state, cache and effective paths | [Configuration and data](Configuration-and-Data.md) |
+| Live progress and interactive fallback rules | [Terminal UI](Terminal-UI.md) |
 | Runtime layers and extension points | [Architecture](Architecture.md) |
 | Trust, sudo and self-update boundaries | [Security](Security.md) |
 | Build, test, release and contribution workflow | [Development](Development.md) |
 | Symptoms, diagnostics and recovery | [Troubleshooting](Troubleshooting.md) |
+| Short answers to common questions | [FAQ](FAQ.md) |
 
 ## The mental model
 
@@ -45,6 +52,6 @@ DNF, Flatpak, Snap and the other native tools remain authoritative.
 ## Canonical engineering references
 
 This wiki explains the product. The repository's detailed contracts remain
-authoritative: [architecture](../ARCHITECTURE.md), [command semantics](../docs/COMMANDS.md),
-[backend contract](../docs/BACKEND_CONTRACT.md), [JSON schema](../docs/JSON_SCHEMA.md),
-and [security model](../docs/SECURITY_MODEL.md).
+authoritative: [architecture](https://github.com/allp-manager/allp-manager/blob/main/ARCHITECTURE.md), [command semantics](https://github.com/allp-manager/allp-manager/blob/main/docs/COMMANDS.md),
+[backend contract](https://github.com/allp-manager/allp-manager/blob/main/docs/BACKEND_CONTRACT.md), [JSON schema](https://github.com/allp-manager/allp-manager/blob/main/docs/JSON_SCHEMA.md),
+and [security model](https://github.com/allp-manager/allp-manager/blob/main/docs/SECURITY_MODEL.md).

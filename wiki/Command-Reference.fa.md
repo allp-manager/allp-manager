@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # مرجع فرمان‌ها
 
 [← خانه ویکی](Home.fa.md) · [English](Command-Reference.md)
@@ -87,4 +89,7 @@ allp info git --from apt --raw
 | 10 | خطای داخلی، Parse یا I/O |
 | 11 | Backend مشغول یا Lock در اختیار Process دیگر |
 
-جزئیات دقیق در [قرارداد فرمان‌ها](../docs/COMMANDS.md) قرار دارد.
+جزئیات دقیق در [قرارداد فرمان‌ها](https://github.com/allp-manager/allp-manager/blob/main/docs/COMMANDS.md) قرار دارد.
+
+
+</div>

@@ -1,3 +1,5 @@
+<div dir="rtl" align="right">
+
 # شروع کار
 
 [← خانه ویکی](Home.fa.md) · [English](Getting-Started.md)
@@ -71,3 +73,6 @@ allp upgrade
 
 در خطای Lock هیچ‌وقت فایل Lock مدیر Native را حذف نکنید؛ منتظر Process مالک
 بمانید یا آن را به شکل امن بررسی کنید.
+
+
+</div>

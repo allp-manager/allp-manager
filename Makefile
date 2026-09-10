@@ -15,7 +15,7 @@ CURRENT_GIT_SHA := $(shell git rev-parse --verify HEAD 2>/dev/null || printf unk
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt fmt-check check clippy test architecture build release quality clean run doctor version git-status docs-check install uninstall reinstall install-user install-check install-resolution-warning release-prepare release-status release-notes release-archive release-checksum release-finalize release-push release-clean hooks-install hooks-status release-workflow-test release-assets-test
+.PHONY: help fmt fmt-check check clippy test architecture build release quality clean run doctor version git-status docs-check wiki-check wiki-publish install uninstall reinstall install-user install-check install-resolution-warning release-prepare release-status release-notes release-archive release-checksum release-finalize release-push release-clean hooks-install hooks-status release-workflow-test release-assets-test
 
 help:
 	@printf '%s\n' 'Allp development targets:'
@@ -34,6 +34,8 @@ help:
 	@printf '%s\n' '  make version          Print Allp version'
 	@printf '%s\n' '  make git-status       Show short Git status'
 	@printf '%s\n' '  make docs-check       Validate required documentation anchors'
+	@printf '%s\n' '  make wiki-check       Preview Wiki synchronization'
+	@printf '%s\n' '  make wiki-publish     Publish every Wiki page in one operation'
 	@printf '%s\n' ''
 	@printf '%s\n' 'Install targets:'
 	@printf '%s\n' '  make install          Build and install /usr/local/bin/allp'
@@ -135,6 +137,20 @@ docs-check:
 	test -f wiki/Development.fa.md
 	test -f wiki/Troubleshooting.md
 	test -f wiki/Troubleshooting.fa.md
+	test -f wiki/Usage-Guide.md
+	test -f wiki/Usage-Guide.fa.md
+	test -f wiki/Platforms-and-Installation.md
+	test -f wiki/Platforms-and-Installation.fa.md
+	test -f wiki/Search-and-Selection.md
+	test -f wiki/Search-and-Selection.fa.md
+	test -f wiki/Maintenance-and-Self-Update.md
+	test -f wiki/Maintenance-and-Self-Update.fa.md
+	test -f wiki/Configuration-and-Data.md
+	test -f wiki/Configuration-and-Data.fa.md
+	test -f wiki/Terminal-UI.md
+	test -f wiki/Terminal-UI.fa.md
+	test -f wiki/FAQ.md
+	test -f wiki/FAQ.fa.md
 	test -x scripts/install-release.sh
 	test -n '$(CURRENT_VERSION)'
 	grep -q '$(CURRENT_VERSION)' README.md
@@ -157,6 +173,15 @@ docs-check:
 	grep -q 'Live Maintenance Dashboard' docs/TERMINAL_UI.md
 	grep -q 'tui-maintenance.svg' README.md
 	grep -q 'tui-maintenance.svg' README.fa.md
+	test -x scripts/publish-wiki.sh
+	grep -q 'dir="rtl"' wiki/Home.fa.md
+	grep -q 'Usage-Guide.fa.md' wiki/Home.fa.md
+
+wiki-check: docs-check
+	$(BASH) scripts/publish-wiki.sh --dry-run
+
+wiki-publish: docs-check
+	$(BASH) scripts/publish-wiki.sh publish
 
 install: release
 	sudo install -Dm755 "$(RELEASE_BINARY)" "$(BINDIR)/$(BINARY)"

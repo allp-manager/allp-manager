@@ -53,5 +53,5 @@ command injection, privilege escalation, unsafe resolution, credential leakage
 or misleading JSON through the repository's private security advisory channel,
 not a public issue.
 
-The alpha is not security-audited. Read [SECURITY.md](../SECURITY.md) and the
-[normative security model](../docs/SECURITY_MODEL.md) before production use.
+The alpha is not security-audited. Read [SECURITY.md](https://github.com/allp-manager/allp-manager/blob/main/SECURITY.md) and the
+[normative security model](https://github.com/allp-manager/allp-manager/blob/main/docs/SECURITY_MODEL.md) before production use.

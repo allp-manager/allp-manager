@@ -82,4 +82,4 @@ Cargo host maintenance never calls `cargo add` or project `cargo update`.
 Global binary upgrades require the optional community `cargo-update` command.
 
 The exact operation matrix is maintained in
-[CAPABILITY_MATRIX.md](../docs/CAPABILITY_MATRIX.md).
+[CAPABILITY_MATRIX.md](https://github.com/allp-manager/allp-manager/blob/main/docs/CAPABILITY_MATRIX.md).

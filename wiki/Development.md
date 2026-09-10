@@ -64,6 +64,6 @@ Preparation updates versioned files and runs the quality gate. The guarded
 post-commit hook creates only an annotated local tag and ignored `dist/`
 artifacts. Nothing is pushed or published until `make release-push` is called.
 
-Read [CONTRIBUTING.md](../CONTRIBUTING.md),
-[REGRESSION_GUARDRAILS.md](../docs/REGRESSION_GUARDRAILS.md), and the
-[release documentation](../release/README.md) before submitting changes.
+Read [CONTRIBUTING.md](https://github.com/allp-manager/allp-manager/blob/main/CONTRIBUTING.md),
+[REGRESSION_GUARDRAILS.md](https://github.com/allp-manager/allp-manager/blob/main/docs/REGRESSION_GUARDRAILS.md), and the
+[release documentation](https://github.com/allp-manager/allp-manager/blob/main/release/README.md) before submitting changes.
