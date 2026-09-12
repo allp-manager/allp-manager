@@ -159,7 +159,12 @@ pub fn run(
         }
     }
 
-    if context.yes {
+    // Allp owns the maintenance confirmation. Finalize backend-native
+    // noninteractive flags before rendering so the reviewed command is the
+    // exact command that will run whether approval comes from `--yes` or the
+    // interactive prompt. Without this, answering `y` left APT waiting on a
+    // second, newline-less prompt hidden behind the live progress display.
+    if context.yes || !context.no_interactive {
         for operation in &mut operations {
             if let Ok(runtime) = context.backend(&operation.plan.backend_id) {
                 runtime
@@ -498,7 +503,7 @@ pub fn run(
                         context.target,
                     ) {
                         Ok(mut follow_up) => {
-                            if context.yes {
+                            if context.yes || !context.no_interactive {
                                 for plan in &mut follow_up.plans {
                                     runtime.backend.authorize_noninteractive(plan);
                                 }

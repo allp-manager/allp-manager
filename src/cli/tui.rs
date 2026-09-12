@@ -28,6 +28,7 @@ pub struct MaintenanceTui {
     width: usize,
     stdout_pending: String,
     stderr_pending: String,
+    native_partial_visible: bool,
     footer_visible: bool,
     io_failed: bool,
 }
@@ -50,6 +51,7 @@ impl MaintenanceTui {
             width: terminal_width(),
             stdout_pending: String::new(),
             stderr_pending: String::new(),
+            native_partial_visible: false,
             footer_visible: false,
             io_failed: false,
         };
@@ -66,6 +68,7 @@ impl MaintenanceTui {
     ) {
         self.total = total.max(1);
         self.flush_pending();
+        self.native_partial_visible = false;
         self.active = Some(ActiveOperation {
             backend_name: plan.backend_name.clone(),
             action: plan.action.clone(),
@@ -86,6 +89,7 @@ impl MaintenanceTui {
     ) {
         self.total = total.max(1);
         self.flush_pending();
+        self.native_partial_visible = false;
         self.completed = self.completed.max(index).min(self.total);
         self.active = None;
         self.draw_footer();
@@ -101,6 +105,7 @@ impl MaintenanceTui {
     ) {
         self.total = total.max(1);
         self.flush_pending();
+        self.native_partial_visible = false;
         self.completed = self.completed.max(index).min(self.total);
         self.active = None;
         self.draw_footer();
@@ -114,12 +119,14 @@ impl MaintenanceTui {
     /// Removes the progress line and moves prompts onto an ordinary fresh line.
     pub fn prepare_for_prompt(&mut self) {
         self.flush_pending();
+        self.native_partial_visible = false;
         self.clear_footer();
         self.write_raw("\n");
     }
 
     /// Redraws progress only after the terminal prompt has fully completed.
     pub fn resume_after_prompt(&mut self) {
+        self.native_partial_visible = false;
         self.draw_footer();
     }
 
@@ -131,6 +138,7 @@ impl MaintenanceTui {
     /// summary without the progress renderer changing its contents.
     pub fn finish(&mut self) {
         self.flush_pending();
+        self.native_partial_visible = false;
         self.completed = self.total;
         self.active = None;
         self.draw_footer();
@@ -138,7 +146,7 @@ impl MaintenanceTui {
     }
 
     fn draw_footer(&mut self) {
-        if self.io_failed {
+        if self.io_failed || self.native_partial_visible {
             return;
         }
 
@@ -254,11 +262,39 @@ impl MaintenanceTui {
         self.draw_footer();
     }
 
+    /// Streams a sanitized interactive child immediately, including prompts
+    /// that do not end in a newline. The progress footer stays hidden while a
+    /// partial line is visible so it cannot overwrite the native prompt.
+    fn accept_interactive_output(&mut self, bytes: &[u8]) {
+        if self.io_failed {
+            return;
+        }
+
+        let projected = sanitize_terminal_text(bytes);
+        if let Some(percent) = extract_percentage(projected.as_bytes()) {
+            if let Some(active) = &mut self.active {
+                active.percent = Some(
+                    active
+                        .percent
+                        .map_or(percent, |current| current.max(percent)),
+                );
+            }
+        }
+        if projected.is_empty() {
+            return;
+        }
+
+        self.clear_footer();
+        self.write_raw(&projected);
+        self.native_partial_visible = !projected.ends_with('\n');
+        self.draw_footer();
+    }
+
     fn update_elapsed(&mut self, elapsed: Duration) {
         if let Some(active) = &mut self.active {
             active.elapsed = elapsed;
-            self.draw_footer();
         }
+        self.draw_footer();
     }
 
     fn write_raw(&mut self, value: &str) {
@@ -278,9 +314,15 @@ impl MaintenanceTui {
 }
 
 impl ExecutionObserver for MaintenanceTui {
-    fn observe(&mut self, _plan: &ExecutionPlan, event: ProcessEvent) {
+    fn observe(&mut self, plan: &ExecutionPlan, event: ProcessEvent) {
         match event {
-            ProcessEvent::Output { stream, bytes } => self.accept_output(stream, &bytes),
+            ProcessEvent::Output { stream, bytes } => {
+                if plan.interactive {
+                    self.accept_interactive_output(&bytes);
+                } else {
+                    self.accept_output(stream, &bytes);
+                }
+            }
             ProcessEvent::Tick { elapsed } | ProcessEvent::Heartbeat { elapsed } => {
                 self.update_elapsed(elapsed)
             }

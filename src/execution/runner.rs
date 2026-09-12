@@ -416,8 +416,16 @@ impl StdProcessRunner {
     ) -> AllpResult<ProcessStatus> {
         let mut process = process;
 
+        // An interactive child must stay in Allp's foreground process group so
+        // it can read from the controlling terminal. Moving it into a new
+        // background group without also transferring terminal foreground
+        // ownership makes the kernel stop it with SIGTTIN at the first native
+        // prompt. Noninteractive children remain isolated for tree cleanup.
+        let isolated_process_group = !plan.interactive;
         #[cfg(unix)]
-        process.process_group(0);
+        if isolated_process_group {
+            process.process_group(0);
+        }
 
         let mut child = process
             .stdin(Stdio::inherit())
@@ -465,7 +473,7 @@ impl StdProcessRunner {
             }
 
             if execution_timed_out(timeout, started.elapsed()) {
-                terminate_process_tree(&mut child)?;
+                terminate_process_tree(&mut child, isolated_process_group)?;
 
                 let timeout = timeout.expect("a timed-out execution has an explicit deadline");
                 return Err(AllpError::Timeout(format!(
@@ -521,10 +529,16 @@ fn execution_timed_out(timeout: Option<Duration>, elapsed: Duration) -> bool {
     timeout.is_some_and(|timeout| elapsed >= timeout)
 }
 
-fn terminate_process_tree(child: &mut Child) -> AllpResult<()> {
+fn terminate_process_tree(child: &mut Child, isolated_process_group: bool) -> AllpResult<()> {
     #[cfg(unix)]
     {
         use std::io;
+
+        if !isolated_process_group {
+            child.kill()?;
+            child.wait()?;
+            return Ok(());
+        }
 
         let pid = child.id();
 
@@ -573,6 +587,7 @@ fn terminate_process_tree(child: &mut Child) -> AllpResult<()> {
 
     #[cfg(not(unix))]
     {
+        let _ = isolated_process_group;
         child.kill()?;
         child.wait()?;
         Ok(())

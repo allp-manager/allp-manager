@@ -4,6 +4,17 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Interactive maintenance approval now finalizes backend-native
+  noninteractive flags before displaying the plan, so answering `y` runs the
+  same reviewed APT `upgrade -y` command as `--yes` instead of waiting on a
+  second hidden confirmation.
+- Interactive native children remain in Allp's foreground process group and
+  newline-less prompts are streamed through the terminal-safe TUI projection,
+  preventing `SIGTTIN` stops and invisible package-manager prompts without
+  exposing terminal control sequences.
+
 ## [0.6.2] - 2026-09-08
 
 ### Release Title

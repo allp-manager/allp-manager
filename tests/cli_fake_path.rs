@@ -3133,6 +3133,89 @@ fn apt_metadata_refresh_omits_yes_while_follow_up_upgrade_includes_it() {
 }
 
 #[test]
+fn interactive_apt_upgrade_confirmation_adds_native_yes_before_tui_execution() {
+    let dir = temp_dir("apt-interactive-confirmation");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt_phased_upgrade(&dir, &marker);
+
+    // Prime the metadata timestamp so the next invocation matches the direct
+    // APT-upgrade path a user sees after a recent `allp update`.
+    let refresh = run_allp(
+        &dir,
+        &[
+            "update",
+            "--from",
+            "apt",
+            "--yes",
+            "--skip-self-update",
+            "--no-color",
+        ],
+    );
+    assert!(refresh.status.success(), "stderr: {}", stderr(&refresh));
+    fs::remove_file(&marker).expect("refresh marker should be removable");
+
+    let output = run_allp_pty_with_tui(&dir, &["upgrade", "--from", "apt", "--no-color"], "y\n");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let executed = fs::read_to_string(marker).expect("APT upgrade should execute");
+    assert_eq!(executed.trim(), "apt-upgrade args=upgrade -y");
+    let rendered = normalized_stdout(&output);
+    assert!(
+        rendered.contains("upgrade -y"),
+        "the reviewed plan must show the exact noninteractive command: {rendered}"
+    );
+}
+
+#[test]
+fn maintenance_tui_exposes_native_prompt_without_newline_and_keeps_child_foreground() {
+    let dir = temp_dir("native-prompt-visible");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    write_executable(
+        &dir,
+        "snap",
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "version" ]; then
+  printf '%s\n' 'snap 2.0' 'snapd 2.0'
+  exit 0
+fi
+if [ "$1" = "refresh" ]; then
+  printf 'NATIVE_REFRESH_PROMPT [y/N]: '
+  read answer
+  printf '%s\n' "$answer" > '{}'
+  [ "$answer" = "y" ]
+  exit
+fi
+exit 0
+"#,
+            marker.display()
+        ),
+    );
+
+    let output = run_allp_pty_with_tui_after_prompt(
+        &dir,
+        &["upgrade", "--from", "snap", "--yes", "--no-color"],
+        "NATIVE_REFRESH_PROMPT [y/N]:",
+        "y\n",
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        fs::read_to_string(marker)
+            .expect("native prompt answer should be recorded")
+            .trim(),
+        "y"
+    );
+    let rendered = stdout(&output);
+    assert!(
+        rendered.contains("NATIVE_REFRESH_PROMPT [y/N]:"),
+        "a newline-less native prompt must remain visible: {rendered}"
+    );
+}
+
+#[test]
 fn apt_upgrade_is_deferred_when_required_metadata_refresh_fails() {
     let dir = temp_dir("apt-refresh-dependency");
     let marker = dir.join("executed");

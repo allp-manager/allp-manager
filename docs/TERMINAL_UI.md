@@ -40,6 +40,11 @@ Progress: [ 42%] [########............] APT · Upgrade packages · 0/1 · 8s
 Native stdout and stderr continue to scroll without cards or marker prefixes.
 The renderer clears only its own unterminated line before native output, a
 confirmation, or a sudo prompt is written, then redraws it below that content.
+Interactive native output is projected immediately even when it does not end
+in a newline. While such a partial line is visible, the footer stays suspended
+so a package-manager prompt cannot be hidden or overwritten. Interactive
+children remain in Allp's foreground process group and can therefore read the
+controlling terminal without being stopped by `SIGTTIN`.
 It reads the actual terminal width and truncates its own status text before the
 last column so the line cannot wrap and corrupt prompt placement. Percentages
 reported by a native package manager are reflected in the bar; otherwise the
