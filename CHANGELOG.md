@@ -4,6 +4,12 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-12
+
+### Release Title
+
+Allp v0.6.3 — Reliable Interactive Maintenance
+
 ### Fixed
 
 - Interactive maintenance approval now finalizes backend-native
@@ -14,6 +20,12 @@ All notable changes to Allp will be documented in this file.
   newline-less prompts are streamed through the terminal-safe TUI projection,
   preventing `SIGTTIN` stops and invisible package-manager prompts without
   exposing terminal control sequences.
+
+### Validation
+
+- The complete quality gate passes with formatting, all-target checking,
+  Clippy warnings denied, 327 automated tests, architecture checks, an
+  optimized release build, and documentation validation.
 
 ## [0.6.2] - 2026-09-08
 

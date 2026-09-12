@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="نسخه 0.6.2" src="https://img.shields.io/badge/version-0.6.2-7c3aed">
+  <img alt="نسخه 0.6.3" src="https://img.shields.io/badge/version-0.6.3-7c3aed">
   <img alt="آلفای عمومی" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
   <img alt="Rust 1.74+" src="https://img.shields.io/badge/rust-1.74%2B-dea584">
   <a href="LICENSE"><img alt="مجوز MIT" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
@@ -24,7 +24,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه Build فعلی: **0.6.2.1** (نسخه پایه Cargo: **0.6.2**)
+نسخه Build فعلی: **0.6.3.1** (نسخه پایه Cargo: **0.6.3**)
 سطح بلوغ: **Public Alpha**
 
 ## از اینجا شروع کنید
@@ -93,7 +93,7 @@ sh install-allp.sh
 نصاب سیستم‌عامل و معماری Linux/macOS را تشخیص می‌دهد، آرشیو دقیق release و
 فایل SHA-256 کنار آن را دانلود و بررسی می‌کند، مطمئن می‌شود آرشیو فقط باینری
 `allp` را دارد و آن را در `~/.local/bin` می‌گذارد. عمداً روش `curl | sh`
-پیشنهاد نشده است. برای نصب یک نسخهٔ مشخص، شماره‌ای مثل `0.6.2` را آرگومان اول
+پیشنهاد نشده است. برای نصب یک نسخهٔ مشخص، شماره‌ای مثل `0.6.3` را آرگومان اول
 بدهید؛ مسیر نصب را هم می‌توان با `ALLP_INSTALL_DIR` عوض کرد.
 
 اگر باینری در حال اجرا متعلق به یک بستهٔ توزیعی باشد، `allp self-update` هیچ‌وقت
@@ -612,7 +612,7 @@ RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 
 ## Changelog
 
-نسخهٔ `0.6.2` نسخه منتشرشده فعلی است و مدیریت ابزارهای binary در Rust/Cargo و پشتیبانی
+نسخهٔ `0.6.3` نسخه منتشرشده فعلی است و مدیریت ابزارهای binary در Rust/Cargo و پشتیبانی
 Bazzite/rpm-ostree را با حفظ مرزهای user-scope مربوط به Homebrew، Node و Python
 اضافه می‌کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 

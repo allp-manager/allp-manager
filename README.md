@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.6.2" src="https://img.shields.io/badge/version-0.6.2-7c3aed">
+  <img alt="Version 0.6.3" src="https://img.shields.io/badge/version-0.6.3-7c3aed">
   <img alt="Public alpha" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
   <img alt="Rust 1.74+" src="https://img.shields.io/badge/rust-1.74%2B-dea584">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
@@ -25,7 +25,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, rpm-ostree on Bazzite/Atomic hosts, Flatpak, Snap, Homebrew/Linuxbrew, Python and Node installers, and Rust/Cargo, then shows the exact native command or local API request before anything mutates the system.
 
-Current build version: **0.6.2.1** (Cargo base version **0.6.2**)
+Current build version: **0.6.3.1** (Cargo base version **0.6.3**)
 Maturity: **public alpha**
 
 ## Start Here
@@ -96,7 +96,7 @@ sh install-allp.sh
 The installer detects Linux/macOS architecture, downloads the exact release
 archive and adjacent SHA-256 file, verifies it, checks the archive contains only
 the `allp` binary, and installs to `~/.local/bin`. It is deliberately not
-documented as a `curl | sh` pipeline. Pass an exact version such as `0.6.2` as
+documented as a `curl | sh` pipeline. Pass an exact version such as `0.6.3` as
 the first argument, or set `ALLP_INSTALL_DIR` to choose another user-writable
 directory.
 
@@ -611,7 +611,7 @@ Keep backend-specific parsing and flags inside backend modules. Add fixtures for
 
 Near-term work is broader real-distro validation, richer parser fixtures, an
 interactive Snap channel chooser, deeper signal/trusted-path testing, and
-real-host Homebrew, Cargo, and Bazzite validation. Version 0.6.2 includes Rust/Cargo
+real-host Homebrew, Cargo, and Bazzite validation. Version 0.6.3 includes Rust/Cargo
 binary-tool management and transactional rpm-ostree support for Bazzite; a
 broader full-screen TUI and GUI remain later work, alongside future ecosystems
 such as Composer, Go, RubyGems, and Maven/Gradle.
@@ -620,7 +620,7 @@ See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-Version `0.6.2` is the current published release. It includes Rust/Cargo
+Version `0.6.3` is the current published release. It includes Rust/Cargo
 binary-tool management and Bazzite/rpm-ostree support while retaining the
 Homebrew, Node, and Python user-scope boundaries.
 See [CHANGELOG.md](CHANGELOG.md).
