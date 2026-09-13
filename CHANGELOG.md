@@ -4,6 +4,12 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-09-13
+
+### Release Title
+
+Allp v0.6.4 — Correct Native Command Identity
+
 ### Fixed
 
 - Preserve validated root-required invocation paths instead of executing their
@@ -15,6 +21,12 @@ All notable changes to Allp will be documented in this file.
 - Report Snap state-lock timeouts as busy and require actual daemon transport
   evidence before claiming daemon unavailability; package names and generic
   daemon diagnostics no longer hide the native failure.
+
+### Validation
+
+- 332 automated tests cover repeated multicall symlink execution, sudo/direct
+  command preparation, TUI/classic parity, untrusted alias rejection, APT new
+  dependencies, and native Snap state-lock diagnostics.
 
 ## [0.6.3] - 2026-09-12
 
