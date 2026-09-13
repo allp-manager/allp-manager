@@ -3108,6 +3108,43 @@ fn apt_upgrade_parses_updated_and_phased_deferred_results() {
 }
 
 #[test]
+fn apt_upgrade_installs_required_new_dependencies_without_full_upgrade() {
+    let dir = temp_dir("apt-required-new-dependencies");
+    let marker = dir.join("executed");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt(&dir, &marker, 0, 0);
+    write_executable(
+        &dir,
+        "apt-get",
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "-o" ]; then shift 2; fi
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$*" != "upgrade --with-new-pkgs -y" ]; then
+  printf '%s\n' "unexpected or unsafe upgrade args: $*" >&2
+  exit 100
+fi
+printf '%s\n' "$*" >> '{}'
+printf '%s\n' '1 upgraded, 3 newly installed, 0 to remove and 0 not upgraded.'
+"#,
+            marker.display()
+        ),
+    );
+    let output = run_allp(&dir, &["upgrade", "--from", "apt", "--yes", "--no-color"]);
+    assert!(
+        output.status.success(),
+        "{} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(stdout(&output).contains("Updated · 4 packages"));
+    assert!(!stdout(&output).contains("Deferred"));
+    assert!(fs::read_to_string(marker)
+        .expect("native invocation")
+        .contains("upgrade --with-new-pkgs -y"));
+}
+
+#[test]
 fn apt_metadata_refresh_omits_yes_while_follow_up_upgrade_includes_it() {
     let dir = temp_dir("apt-update-without-yes");
     let marker = dir.join("executed");
@@ -3127,7 +3164,7 @@ fn apt_metadata_refresh_omits_yes_while_follow_up_upgrade_includes_it() {
     assert!(
         executed
             .lines()
-            .any(|line| line == "apt-upgrade args=upgrade -y"),
+            .any(|line| line == "apt-upgrade args=upgrade --with-new-pkgs -y"),
         "the actual apt-get upgrade should receive -y after ALLP confirmation: {executed}"
     );
 }
@@ -3159,10 +3196,13 @@ fn interactive_apt_upgrade_confirmation_adds_native_yes_before_tui_execution() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let executed = fs::read_to_string(marker).expect("APT upgrade should execute");
-    assert_eq!(executed.trim(), "apt-upgrade args=upgrade -y");
+    assert_eq!(
+        executed.trim(),
+        "apt-upgrade args=upgrade --with-new-pkgs -y"
+    );
     let rendered = normalized_stdout(&output);
     assert!(
-        rendered.contains("upgrade -y"),
+        rendered.contains("upgrade --with-new-pkgs -y"),
         "the reviewed plan must show the exact noninteractive command: {rendered}"
     );
 }
@@ -3254,7 +3294,7 @@ fn apt_stale_metadata_override_runs_upgrade_with_native_yes_flag() {
     assert_eq!(output.status.code(), Some(8));
     let executed = fs::read_to_string(marker).expect("refresh and upgrade should execute");
     assert!(executed.contains("apt-update"));
-    assert!(executed.contains("apt-upgrade upgrade -y"));
+    assert!(executed.contains("apt-upgrade upgrade --with-new-pkgs -y"));
 }
 
 #[test]
@@ -4083,6 +4123,95 @@ fn snap_and_flatpak_update_do_not_run_combined_upgrade_operations() {
     assert!(flatpak_out.contains("Not applicable"));
     assert!(flatpak_out.contains("installed Flatpak updates are handled by `allp upgrade`"));
     assert!(!flatpak_out.contains("Nothing to do."));
+}
+
+#[test]
+fn snap_multicall_symlink_keeps_cli_identity_across_repeated_maintenance() {
+    let dir = temp_dir("snap-multicall-identity");
+    let marker = dir.join("executed");
+    install_fake_sudo_trace(&dir, &dir.join("sudo-trace"), 0);
+    write_executable(
+        &dir,
+        "snapd",
+        &format!(
+            r#"#!/bin/sh
+case "$0" in
+  */snap) ;;
+  *) printf '%s\n' 'cannot run daemon: fatal: could not lock state file: timeout for state lock file expired' >&2; exit 1 ;;
+esac
+if [ "$1" = "version" ]; then
+  printf '%s\n' 'snap 2.77' 'snapd 2.77'
+elif [ "$1" = "refresh" ]; then
+  printf '%s\n' "$0 refresh" >> '{}'
+  printf '%s\n' 'All snaps up to date.'
+fi
+"#,
+            marker.display()
+        ),
+    );
+    std::os::unix::fs::symlink("snapd", dir.join("snap")).expect("multicall symlink");
+    for _ in 0..3 {
+        let output = run_allp(
+            &dir,
+            &[
+                "upgrade",
+                "--from",
+                "snap",
+                "--yes",
+                "--no-tui",
+                "--no-color",
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "{} {}",
+            stdout(&output),
+            stderr(&output)
+        );
+        assert!(stdout(&output).contains("Up to date · all snaps up to date"));
+    }
+    let output = run_allp_pty_with_tui(
+        &dir,
+        &["upgrade", "--from", "snap", "--yes", "--no-color"],
+        "",
+    );
+    assert!(
+        output.status.success(),
+        "{} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let executions = fs::read_to_string(marker).expect("native CLI invocations");
+    assert_eq!(executions.lines().count(), 4);
+    assert!(executions
+        .lines()
+        .all(|line| line.ends_with("/snap refresh")));
+    let trace = fs::read_to_string(dir.join("sudo-trace")).expect("sudo trace");
+    assert!(!trace.contains("/snapd refresh"));
+}
+
+#[test]
+fn snap_state_lock_timeout_is_busy_not_daemon_unavailable() {
+    let dir = temp_dir("snap-state-lock-busy");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    write_executable(
+        &dir,
+        "snap",
+        r#"#!/bin/sh
+if [ "$1" = "version" ]; then
+  printf '%s\n' 'snap 2.77' 'snapd 2.77'
+  exit 0
+fi
+printf '%s\n' 'cannot run daemon: fatal: could not lock state file: timeout for state lock file expired' >&2
+exit 1
+"#,
+    );
+    let output = run_allp(&dir, &["upgrade", "--from", "snap", "--yes", "--no-color"]);
+    assert!(!output.status.success());
+    let out = stdout(&output);
+    assert!(out.contains("Snap") && out.contains("Busy"), "{out}");
+    assert!(out.contains("Do not remove the lock file"), "{out}");
+    assert!(!out.contains("Snap daemon is unavailable"), "{out}");
 }
 
 #[test]

@@ -548,7 +548,7 @@ impl Backend for SnapBackend {
         &self,
         plan: &ExecutionPlan,
         status: &ProcessStatus,
-        _command: &str,
+        command: &str,
     ) -> Option<AllpError> {
         let package = plan.package_id.as_deref().unwrap_or("selected snap");
         match classify_snap_error(&status.stderr).or_else(|| classify_snap_error(&status.stdout)) {
@@ -569,6 +569,14 @@ impl Backend for SnapBackend {
             Some(SnapErrorKind::DaemonUnavailable) => Some(AllpError::InvalidInput(
                 "Snap daemon is unavailable. Check snapd status before retrying.".to_owned(),
             )),
+            Some(SnapErrorKind::StateLockTimeout) => Some(AllpError::BackendBusy {
+                backend: self.display_name().to_owned(),
+                command: command.to_owned(),
+                code: status.code,
+                lock_path: Some("/var/lib/snapd/state.lock".to_owned()),
+                holder_pid: None,
+                holder_process: None,
+            }),
             Some(SnapErrorKind::StoreUnavailable) => Some(AllpError::InvalidInput(
                 "Snap Store metadata is unavailable. Check network or Snap Store status before retrying."
                     .to_owned(),
@@ -858,6 +866,7 @@ enum SnapErrorKind {
     DaemonUnavailable,
     PermissionDenied,
     AlreadyInstalled,
+    StateLockTimeout,
 }
 
 trait SnapService {
@@ -2753,6 +2762,11 @@ fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
     if lower.trim().is_empty() {
         return None;
     }
+    if lower.contains("could not lock state file")
+        || lower.contains("timeout for state lock file expired")
+    {
+        return Some(SnapErrorKind::StateLockTimeout);
+    }
     if lower.contains("permission denied") || lower.contains("access denied") {
         return Some(SnapErrorKind::PermissionDenied);
     }
@@ -2783,8 +2797,9 @@ fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
         return Some(SnapErrorKind::PackageNotFound);
     }
     if lower.contains("cannot communicate with server")
-        || lower.contains("snapd")
-        || lower.contains("daemon")
+        || lower.contains("dial unix /run/snapd.socket")
+            && (lower.contains("connection refused") || lower.contains("no such file"))
+        || lower.contains("daemon is unavailable")
     {
         return Some(SnapErrorKind::DaemonUnavailable);
     }
@@ -2947,6 +2962,25 @@ mod tests {
         assert_eq!(
             classify_snap_error(r#"error: snap "pycharm" not found"#),
             Some(SnapErrorKind::PackageNotFound)
+        );
+    }
+
+    #[test]
+    fn daemon_errors_require_transport_evidence_not_a_package_name() {
+        assert_eq!(classify_snap_error("snapd 2.77 refreshed"), None);
+        assert_eq!(
+            classify_snap_error("cannot refresh snapd: store unavailable"),
+            Some(SnapErrorKind::StoreUnavailable)
+        );
+        assert_eq!(
+            classify_snap_error("cannot communicate with server: connection refused"),
+            Some(SnapErrorKind::DaemonUnavailable)
+        );
+        assert_eq!(
+            classify_snap_error(include_str!(
+                "../../../tests/fixtures/snap/state-lock-timeout.txt"
+            )),
+            Some(SnapErrorKind::StateLockTimeout)
         );
     }
 

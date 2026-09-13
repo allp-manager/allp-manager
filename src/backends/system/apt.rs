@@ -326,7 +326,7 @@ impl Backend for AptBackend {
             source: Some("APT repositories".to_owned()),
             scope: Some("system".to_owned()),
             details: Vec::new(),
-            command: apt_mutation_command(apt_get, "upgrade", &[]),
+            command: apt_mutation_command(apt_get, "upgrade", &[]).arg("--with-new-pkgs"),
             privilege: PrivilegeRequirement::RootRequired,
             requires_root: true,
             interactive: true,

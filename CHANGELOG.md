@@ -4,6 +4,18 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve validated root-required invocation paths instead of executing their
+  canonical targets, so multicall symlinks such as `snap -> snapd` retain CLI
+  identity in direct-root and sudo execution. Validate the invocation symlink
+  chain as well as the canonical target to preserve the privilege boundary.
+- APT upgrades use `--with-new-pkgs` to permit required new dependencies without
+  allowing package removals, matching `apt upgrade` behavior.
+- Report Snap state-lock timeouts as busy and require actual daemon transport
+  evidence before claiming daemon unavailability; package names and generic
+  daemon diagnostics no longer hide the native failure.
+
 ## [0.6.3] - 2026-09-12
 
 ### Release Title

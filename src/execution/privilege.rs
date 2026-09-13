@@ -1200,7 +1200,7 @@ fn resolve_root_required_executable(path: &Path) -> AllpResult<PathBuf> {
     #[cfg(debug_assertions)]
     if env::var_os("ALLP_TEST_SUDO_EXECUTABLE").is_some() {
         validate_elevated_executable(path)?;
-        return fs::canonicalize(path).map_err(Into::into);
+        return Ok(path.to_path_buf());
     }
 
     validate_trusted_root_executable(path, "root-required executable")
@@ -1303,7 +1303,46 @@ fn validate_trusted_root_executable(path: &Path, subject: &str) -> AllpResult<Pa
         }
     }
 
-    Ok(resolved)
+    // Validate the invocation chain too, then preserve it: multicall binaries
+    // dispatch on argv[0] (e.g. /usr/bin/snap -> /usr/lib/snapd/snapd).
+    #[cfg(unix)]
+    validate_root_invocation_chain(path, subject, 0)?;
+
+    Ok(path.to_path_buf())
+}
+
+#[cfg(unix)]
+fn validate_root_invocation_chain(path: &Path, subject: &str, depth: usize) -> AllpResult<()> {
+    if depth > 40 {
+        return Err(AllpError::InvalidInput(format!(
+            "{subject} has too many symlinks: {}",
+            path.display()
+        )));
+    }
+    for component in path.ancestors() {
+        let metadata = fs::symlink_metadata(component)?;
+        if metadata.uid() != 0 {
+            return Err(AllpError::InvalidInput(format!(
+                "{subject} invocation path is not owned by root: {}",
+                component.display()
+            )));
+        }
+        if metadata.file_type().is_symlink() {
+            let target = fs::read_link(component)?;
+            let target = if target.is_absolute() {
+                target
+            } else {
+                component.parent().unwrap_or(Path::new("/")).join(target)
+            };
+            validate_root_invocation_chain(&target, subject, depth + 1)?;
+        } else if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(AllpError::InvalidInput(format!(
+                "{subject} invocation path is group/world-writable: {}",
+                component.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_elevated_executable(path: &Path) -> AllpResult<()> {
@@ -1710,10 +1749,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn root_required_preparation_executes_the_validated_canonical_path() {
+    fn root_required_preparation_preserves_the_validated_invocation_path() {
         use std::os::unix::fs::MetadataExt;
 
-        let candidates = ["/usr/bin/true", "/bin/true", "/usr/bin/env"];
+        let candidates = ["/bin/true", "/usr/bin/true", "/usr/bin/env"];
         let Some(source) = candidates.iter().map(std::path::Path::new).find(|path| {
             std::fs::metadata(path)
                 .map(|metadata| metadata.uid() == 0)
@@ -1723,7 +1762,6 @@ mod tests {
             // unprivileged overflow UID. The rejection test above remains effective there.
             return;
         };
-        let expected = std::fs::canonicalize(source).expect("system true executable");
         let native = crate::domain::NativeCommand::new(source);
 
         let command = super::prepare_command_with_context_for_effective_uid(
@@ -1735,6 +1773,33 @@ mod tests {
         )
         .expect("root-owned executable should pass the root boundary");
 
-        assert_eq!(command.get_program(), expected.as_os_str());
+        assert_eq!(command.get_program(), source.as_os_str());
+
+        let elevated = super::prepare_command_with_context_for_effective_uid(
+            &native,
+            crate::domain::PrivilegeRequirement::RootRequired,
+            &crate::domain::RuntimePrivilegeContext::NormalUser,
+            Some(1000),
+            Some(std::path::Path::new("/usr/bin/sudo")),
+        )
+        .expect("sudo command preparation");
+        assert_eq!(
+            elevated.get_args().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new("--"), source.as_os_str()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invocation_chain_rejects_user_alias_even_when_target_is_trusted() {
+        let root =
+            std::env::temp_dir().join(format!("allp-alias-validation-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("test directory");
+        let alias = root.join("snap");
+        std::os::unix::fs::symlink("/usr/bin/true", &alias).expect("alias symlink");
+        assert!(
+            super::validate_root_invocation_chain(&alias, "root-required executable", 0).is_err()
+        );
+        std::fs::remove_dir_all(root).expect("test cleanup");
     }
 }

@@ -1,0 +1,4 @@
+2026/09/13 11:51:56.960915 seclog.go:107: security logger enabled
+2026/09/13 11:51:57.001249 overlord.go:316: Acquiring state lock file
+2026/09/13 11:52:57.055390 overlord.go:318: Failed to lock state file
+cannot run daemon: fatal: could not lock state file: timeout for state lock file expired

@@ -22,6 +22,8 @@ For every behavior-changing pull request:
 
 | Area | Invariant | Owner and automated proof | Required focused check |
 | --- | --- | --- | --- |
+| Root multicall identity | Validate both canonical target and original invocation symlink chain, but preserve the original invocation path through root-direct and sudo execution. A trusted target must not legitimize a user-controlled alias. | `src/execution/privilege.rs`; `root_required_preparation_preserves_the_validated_invocation_path`, `invocation_chain_rejects_user_alias_even_when_target_is_trusted`, and `snap_multicall_symlink_keeps_cli_identity_across_repeated_maintenance`. | `cargo test --lib execution::privilege` and `cargo test --test cli_fake_path snap_multicall`; `make quality`. |
+| APT new dependencies and Snap failure evidence | APT upgrade permits new dependencies with `--with-new-pkgs` but never uses dist/full-upgrade automatically. Snap state-lock timeouts are busy, not daemon-unavailable; a package name alone is not transport evidence. | Backend modules; `apt_upgrade_installs_required_new_dependencies_without_full_upgrade`, `daemon_errors_require_transport_evidence_not_a_package_name`, and `snap_state_lock_timeout_is_busy_not_daemon_unavailable`. | Focused APT/Snap CLI tests and `make quality`. |
 | Unix process execution | A captured or noninteractive Unix child has its own process group so timeout/cancellation can clean up descendants. An interactive executed child remains in Allp's foreground process group so terminal reads cannot stop it with `SIGTTIN`. The trait providing `process_group` must remain imported on Unix. | `src/execution/runner.rs`; runner timeout/descendant tests and `maintenance_tui_exposes_native_prompt_without_newline_and_keeps_child_foreground`. | `make release`, the runner tests, and the focused PTY test through `make quality`. |
 | Local reinstall and self-update | `make reinstall` creates a non-official development identity with local revision `1`. It must not be classified as newer than a verified official continuous build merely because that local marker collides with a CI revision. The install target must print the full identity so a short version cannot hide a changed commit. | `src/build_identity.rs`; `verified_continuous_build_replaces_local_reinstall_on_revision_collision`, `unverified_revision_collision_cannot_replace_local_development_build`, and `self_update::tests::local_reinstall_detects_verified_continuous_main_build`. | Build/install a local binary, compare the printed commit with `git rev-parse HEAD`, then run `allp self-update --check-only` after a successful continuous publication. |
 | Installed-binary resolution | A system reinstall must not imply that a PATH-shadowing user-local binary was updated. `make install` and `make reinstall` print the installed identity and warn when `command -v allp` resolves outside the selected system target. | `Makefile`; `install-resolution-warning` and `install-check`. | Run `make install-resolution-warning` and `make install-check` after every reinstall; deliberately use `make install-user` when the user-local binary is the intended executable. |
@@ -32,6 +34,15 @@ For every behavior-changing pull request:
 | Live maintenance dashboard | The dashboard is presentation-only: it must not change native argv, plan privilege, confirmation, exit classification, inherited stdin, or JSON/classic output behavior. In an eligible interactive terminal, native logs and newline-less prompts remain visible through a terminal-safe projection while the footer never overwrites a partial prompt. On UI I/O failure, normal stream forwarding resumes. | `src/execution/runner.rs`, `src/cli/tui.rs`, `src/operations/maintenance.rs`; `execution_observer_receives_both_streams_without_changing_final_status`, TUI unit tests, `interactive_apt_upgrade_confirmation_adds_native_yes_before_tui_execution`, and `maintenance_tui_exposes_native_prompt_without_newline_and_keeps_child_foreground`. | `cargo test --lib tui` and `cargo test --test cli_fake_path maintenance_tui -- --nocapture`. |
 
 ## Change record
+
+### 2026-09-13 — root multicall execution and native upgrade outcomes
+
+- Preserved validated invocation paths for both root-direct and sudo commands,
+  including repeated Snap symlink execution with classic and live TUI output.
+- Extended trust checks to the invocation symlink chain rather than weakening
+  canonical target ownership and directory-permission validation.
+- Added APT new-dependency upgrade coverage without automatic removals, and a
+  real Snap state-lock-timeout fixture with truthful busy classification.
 
 ### 2026-09-12 — interactive maintenance confirmation and native prompts
 
