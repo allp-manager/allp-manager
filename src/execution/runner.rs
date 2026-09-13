@@ -24,6 +24,7 @@ const REPEAT_HEARTBEAT_AFTER: Duration = Duration::from_secs(15);
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(750);
 const MAX_CAPTURE_BYTES_PER_STREAM: usize = 1024 * 1024;
 const TUI_TICK_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(unix)]
 const PROCESS_TERMINATION_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]

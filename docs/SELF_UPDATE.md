@@ -41,3 +41,21 @@ After a successful `allp update` self-replacement, the new binary receives `ALLP
 For `allp update`, phase 1 runs before capability probing or backend discovery. `--self-only` and standalone `allp self-update` therefore finish without invoking package-manager detectors. A no-change result proceeds to platform/capability refresh; a guarded re-execution skips only the repeated self-check and then continues discovery.
 
 `--skip-self-update`, `--self-only`, `--check-only`, and `--offline` have independent meanings. A normal update may continue after a reported self-update/network failure; `--self-only` returns the failure without backend mutation.
+
+## Parallel standalone installations
+
+Built-in self-update replaces only the running executable; it does not remove
+or synchronize other installations. On Linux/macOS, before replacement or an
+elevation request it checks PATH, known system/user locations, and the validated
+original sudo user's local installation. A separate copy must already match
+the verified new binary's size and SHA-256; otherwise replacement stops with an
+actionable installer hint. A symlink alias to the same executable is not a
+separate copy. No old binary is executed for this check. Windows replacement
+behavior is unchanged. When user and system standalone copies
+both exist, use the verified release installer with `--sync-existing` to
+reconcile them to the same exact release. The installer stops before binary
+replacement if a differing copy is unselected, package-owned, linked, owned by
+another user, or not writable. `--replace-existing /absolute/path/allp` explicitly
+includes custom standalone copies. Reconciliation keeps private backups and
+rolls back replacements if committing or verifying any selected copy fails.
+It never cleans package-manager state, configuration, caches, or lock files.

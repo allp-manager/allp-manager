@@ -230,11 +230,89 @@ pub fn apply_replacement(
     staged: &StagedRelease,
     platform: &PlatformContext,
 ) -> AllpResult<ReplacementOutcome> {
+    apply_replacement_with_candidates(staged, platform, &parallel_installation_paths(platform))
+}
+
+fn parallel_installation_paths(platform: &PlatformContext) -> Vec<PathBuf> {
+    let mut paths = vec![
+        platform.home_dir.join(".local/bin/allp"),
+        PathBuf::from("/usr/local/bin/allp"),
+        PathBuf::from("/usr/bin/allp"),
+    ];
+    if let Some(original) = &platform.original_user {
+        if let Some(account) = crate::execution::privilege::user_account_by_name(&original.name) {
+            if original.uid == Some(account.uid) && original.gid == Some(account.gid) {
+                paths.push(account.home.join(".local/bin/allp"));
+            }
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path).map(|directory| directory.join("allp")));
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn ensure_no_conflicting_installations(
+    destination: &Path,
+    candidates: &[PathBuf],
+    expected: &ExpectedBinary,
+) -> AllpResult<()> {
+    let canonical_destination = fs::canonicalize(destination).ok();
+    for candidate in candidates {
+        if candidate == destination {
+            continue;
+        }
+        match fs::symlink_metadata(candidate) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(AllpError::InvalidInput(format!(
+                    "cannot inspect another Allp installation at {}: {error}; no binary was replaced",
+                    candidate.display()
+                )));
+            }
+            Ok(_) => {}
+        }
+        // An alias to the same file is not an independent installation.
+        if canonical_destination.is_some()
+            && fs::canonicalize(candidate).ok() == canonical_destination
+        {
+            continue;
+        }
+        let matches_new_release = fs::metadata(candidate)
+            .ok()
+            .filter(|metadata| metadata.is_file() && metadata.len() == expected.size)
+            .and_then(|_| sha256_file(candidate).ok())
+            .is_some_and(|hash| hash.eq_ignore_ascii_case(&expected.sha256));
+        if !matches_new_release {
+            return Err(AllpError::InvalidInput(format!(
+                "self-update would leave a different Allp installation at {}; no binary was replaced. \
+                 Use the verified release installer with --sync-existing for the same exact release; \
+                 custom standalone copies require --replace-existing /absolute/path/allp. \
+                 Update package-managed copies through their package manager",
+                candidate.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn apply_replacement_with_candidates(
+    staged: &StagedRelease,
+    platform: &PlatformContext,
+    candidates: &[PathBuf],
+) -> AllpResult<ReplacementOutcome> {
     if platform.os == OperatingSystem::Windows {
         return Ok(ReplacementOutcome::DeferredForWindows {
             staged_binary: staged.binary_path.clone(),
         });
     }
+    ensure_no_conflicting_installations(
+        &platform.current_executable,
+        candidates,
+        &staged.expected_binary,
+    )?;
     if !platform.executable_writable {
         let mut helper = NativeCommand::new(&platform.current_executable).args([
             "internal-replace",
@@ -1162,7 +1240,8 @@ mod tests {
             binary_path: PathBuf::from("/tmp/allp-staged"),
             staging_dir: PathBuf::from("/tmp/allp-staging"),
         };
-        let outcome = apply_replacement(&staged, &platform).expect("plan should be created");
+        let outcome = apply_replacement_with_candidates(&staged, &platform, &[])
+            .expect("plan should be created");
         let ReplacementOutcome::RequiresElevation { command } = outcome else {
             panic!("non-writable path should require elevation");
         };
@@ -1190,6 +1269,109 @@ mod tests {
     }
 
     #[test]
+    fn parallel_old_installation_blocks_before_replacement_or_elevation() {
+        let root = replacement_fixture("parallel-old");
+        let destination = root.join("allp");
+        let peer = root.join("other-allp");
+        let binary = root.join("new-allp");
+        fs::write(&destination, b"old primary").unwrap();
+        fs::write(&peer, b"old parallel").unwrap();
+        fs::write(&binary, b"new verified binary").unwrap();
+        let staged = StagedRelease {
+            version: Version::new(0, 6, 5),
+            display_version: "0.6.5".to_owned(),
+            expected_binary: ExpectedBinary::from_path(&binary).unwrap(),
+            expected_identity: None,
+            binary_path: binary,
+            staging_dir: root.clone(),
+        };
+        let mut platform = PlatformContext::detect(&RuntimePrivilegeContext::NormalUser);
+        platform.os = OperatingSystem::Linux;
+        platform.current_executable = destination.clone();
+        for writable in [true, false] {
+            platform.executable_writable = writable;
+            let error =
+                apply_replacement_with_candidates(&staged, &platform, std::slice::from_ref(&peer))
+                    .expect_err("must not split installation identity or request elevation");
+            assert!(error.to_string().contains("--sync-existing"));
+            assert!(error.to_string().contains("no binary was replaced"));
+            assert_eq!(fs::read(&destination).unwrap(), b"old primary");
+            assert_eq!(fs::read(&peer).unwrap(), b"old parallel");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parallel_release_match_requires_bytes_not_only_size() {
+        let root = replacement_fixture("parallel-bytes");
+        let destination = root.join("allp");
+        let peer = root.join("other-allp");
+        let binary = root.join("new-allp");
+        fs::write(&destination, b"old primary").unwrap();
+        fs::write(&binary, b"new contents").unwrap();
+        fs::write(&peer, b"bad contents").unwrap();
+        let expected = ExpectedBinary::from_path(&binary).unwrap();
+        assert!(ensure_no_conflicting_installations(
+            &destination,
+            std::slice::from_ref(&peer),
+            &expected,
+        )
+        .is_err());
+        fs::copy(&binary, &peer).unwrap();
+        ensure_no_conflicting_installations(&destination, &[peer], &expected)
+            .expect("a peer already updated to the exact verified release is safe");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn absent_parallel_installations_do_not_block_self_update() {
+        let root = replacement_fixture("parallel-absent");
+        let destination = root.join("allp");
+        fs::write(&destination, b"current").unwrap();
+        ensure_no_conflicting_installations(
+            &destination,
+            &[destination.clone(), root.join("absent/allp")],
+            &expected_binary_fixture(),
+        )
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_file_symlink_alias_is_not_a_parallel_installation() {
+        let root = replacement_fixture("parallel-alias");
+        let destination = root.join("allp");
+        let alias = root.join("alias-allp");
+        fs::write(&destination, b"current").unwrap();
+        std::os::unix::fs::symlink(&destination, &alias).unwrap();
+        ensure_no_conflicting_installations(&destination, &[alias], &expected_binary_fixture())
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_parallel_alias_blocks_without_removing_the_link() {
+        let root = replacement_fixture("parallel-broken-alias");
+        let destination = root.join("allp");
+        let alias = root.join("broken-allp");
+        fs::write(&destination, b"current").unwrap();
+        std::os::unix::fs::symlink(root.join("missing"), &alias).unwrap();
+        assert!(ensure_no_conflicting_installations(
+            &destination,
+            std::slice::from_ref(&alias),
+            &expected_binary_fixture(),
+        )
+        .is_err());
+        assert!(fs::symlink_metadata(alias)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn elevated_continuous_replacement_preserves_identity_expectations() {
         let mut platform = PlatformContext::detect(&RuntimePrivilegeContext::NormalUser);
         platform.os = OperatingSystem::Linux;
@@ -1208,7 +1390,8 @@ mod tests {
             staging_dir: PathBuf::from("/tmp/allp-staging"),
         };
         let ReplacementOutcome::RequiresElevation { command } =
-            apply_replacement(&staged, &platform).expect("plan should be created")
+            apply_replacement_with_candidates(&staged, &platform, &[])
+                .expect("plan should be created")
         else {
             panic!("non-writable path should require elevation");
         };
@@ -1290,7 +1473,6 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     fn replacement_fixture(label: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

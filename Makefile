@@ -78,7 +78,7 @@ build:
 release:
 	ALLP_GIT_SHA="$(CURRENT_GIT_SHA)" $(CARGO) build --release
 
-quality: fmt-check check clippy test architecture release docs-check
+quality: fmt-check check clippy test architecture release docs-check installer-test
 
 clean:
 	$(CARGO) clean
@@ -269,6 +269,12 @@ hooks-status:
 release-workflow-test:
 	$(BASH) scripts/test-release-workflow.sh
 	$(BASH) scripts/test-release-assets.sh
+	$(BASH) scripts/test-install-release.sh
+
+.PHONY: installer-test
+installer-test:
+	sh -n scripts/install-release.sh
+	$(BASH) scripts/test-install-release.sh
 
 release-assets-test:
 	$(BASH) scripts/test-release-assets.sh

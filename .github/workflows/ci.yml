@@ -22,6 +22,7 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-targets
       - run: bash scripts/check-architecture.sh
+      - run: make installer-test
       - run: cargo build --release
 
   native-platform:
@@ -46,6 +47,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --all-targets
       - run: cargo test --all-targets
+      - name: Verify native release installer
+        if: runner.os != 'Windows'
+        shell: bash
+        run: make installer-test
       - name: Explain platform-specific integration coverage
         if: runner.os != 'Linux'
         shell: bash

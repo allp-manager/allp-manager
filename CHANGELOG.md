@@ -4,6 +4,19 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Release installer `--sync-existing` and repeatable `--replace-existing`
+  reconcile explicitly scoped standalone Allp copies with private backups,
+  all-target preflight, same-directory atomic replacement, and failure rollback.
+  Conflicting PATH copies now stop installation rather than silently shadowing
+  the new binary. Package-owned files, symlinks, configuration, package-manager
+  caches, and locks are not changed; privilege escalation is never automatic.
+- Linux/macOS self-update refuses replacement or elevation when another PATH,
+  system, or user installation would remain different from the verified new
+  binary. Same-file aliases and copies already matching the new release are
+  allowed; diagnostics direct users to the scoped release installer.
+
 ## [0.6.4] - 2026-09-13
 
 ### Release Title

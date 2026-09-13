@@ -100,6 +100,33 @@ documented as a `curl | sh` pipeline. Pass an exact version such as `0.6.4` as
 the first argument, or set `ALLP_INSTALL_DIR` to choose another user-writable
 directory.
 
+To reconcile existing standalone copies without deleting configuration or caches:
+
+```bash
+sh install-allp.sh --sync-existing
+# Custom standalone copies require explicit selection (repeatable):
+sh install-allp.sh --sync-existing --replace-existing /absolute/custom/bin/allp
+```
+
+The installer checks PATH and `/usr/local/bin/allp` before replacing anything.
+Different copies stop a default install instead of reporting a misleading
+success. `--sync-existing` includes existing `~/.local/bin/allp` and
+`/usr/local/bin/allp`; custom copies require `--replace-existing`. Only copies
+owned by the installing user in writable, non-symlink directories are replaced.
+Each replaced binary has a private `allp.backup.XXXXXX/previous` backup beside it.
+All copies are staged first; a commit or verification failure restores earlier
+replacements. Native-package-owned binaries and other unselected PATH copies
+are never overwritten. No sudo command runs automatically.
+
+If `/usr/local/bin/allp` belongs to root, first install the **same exact version**
+as administrator with `sudo sh install-allp.sh 0.6.4` (root defaults to
+`/usr/local/bin`), then run `sh install-allp.sh 0.6.4 --sync-existing` as your
+normal user. The second install verifies that the system copy already matches
+and leaves it untouched. Run `hash -r` (or `rehash` in zsh) afterwards. Downloading
+an archive alone does not run this reconciliation. Built-in self-update updates
+only the running installation; on Linux/macOS it stops before replacement if
+that would leave a differing parallel copy, and points to this installer.
+
 If a distribution package owns the running binary, `allp self-update` never
 overwrites `/usr/bin/allp`; it reports the owning dpkg/rpm/Pacman package and
 hands updates back to that package source. Native `.deb`, `.rpm`, and AUR
