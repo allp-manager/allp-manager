@@ -11,39 +11,38 @@
 - Rust 1.74 یا جدیدتر، فقط برای Build از سورس.
 - `sudo` فقط وقتی Child Process انتخاب‌شده واقعاً Root می‌خواهد.
 
-## نصب Release تأییدشده
+**⚠️ اگر Rust و Cargo ندارید، ابتدا آن‌ها را نصب کنید.** Git، Make و کامپایلر و لینکِر C هم لازم‌اند. از [راهنمای رسمی نصب Rust](https://www.rust-lang.org/tools/install) استفاده کنید، ترمینال را دوباره باز کنید و سپس بررسی کنید:
 
 ```bash
-curl --fail --location --output install-allp.sh \
-  https://github.com/allp-manager/allp-manager/releases/latest/download/install-allp.sh
-less install-allp.sh
-sh install-allp.sh
+rustc --version
+cargo --version
 ```
 
-نصاب SHA-256 و محتوای آرشیو را بررسی می‌کند و برنامه را در `~/.local/bin`
-می‌گذارد. برای نسخه یا مقصد دلخواه:
-
-```bash
-ALLP_INSTALL_DIR="$HOME/bin" sh install-allp.sh 0.6.2
-```
-
-سپس هویت Build را بررسی کنید:
-
-```bash
-allp --version
-allp --version --verbose
-```
-
-## ساخت از سورس
+## نصب از سورس
 
 ```bash
 git clone https://github.com/allp-manager/allp-manager.git
 cd allp-manager
-cargo build --release
-./target/release/allp --version --verbose
+make install
 ```
 
-برای نصب کاربری `make install-user` و برای `/usr/local/bin` فرمان `make install` را اجرا کنید.
+دستور `make install` برنامه را می‌سازد و با `sudo` در `/usr/local/bin/allp` نصب می‌کند.
+
+## نصب کاربری بدون sudo
+
+برای نصب فقط برای کاربر خودتان، در همان پوشهٔ مخزن به‌جای `make install` این دستورها را اجرا کنید:
+
+```bash
+make install-user
+export PATH="$HOME/.local/bin:$PATH"
+allp --version
+```
+
+مقصد نصب `~/.local/bin/allp` است. دستور PATH بالا برای ترمینال فعلی است؛ برای ترمینال‌های بعدی هم این خط را در فایل تنظیمات Shell خود اضافه کنید.
+
+## Termux در اندروید
+
+Termux فعلاً محیط پشتیبانی‌شدهٔ ALLP Manager نیست. دستور `make install` از `sudo` استفاده می‌کند و در `/usr/local/bin` نصب می‌کند؛ این روش با Termux معمولی سازگار نیست. دستور `make install-user` در مرحلهٔ نصب به sudo نیاز ندارد، اما عملیات مدیریت پکیج را با Termux سازگار نمی‌کند: عملیات تغییردهندهٔ APT در ALLP Manager همچنان دسترسی روت می‌خواهند. پشتیبانی بومی Termux به سازگاری جداگانهٔ اجرا، مسیرها و سطح دسترسی نیاز دارد. تا پیاده‌سازی و آزمایش این پشتیبانی، پکیج‌های Termux را با دستور بومی `pkg` مدیریت کنید.
 
 ## اولین اجرای امن
 

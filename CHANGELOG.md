@@ -4,6 +4,13 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- Replace unavailable release-installer download instructions in both READMEs
+  and installation wiki pages with source installation using `make install`.
+  Document Rust/Cargo prerequisites, `make install-user`, PATH setup and current
+  Termux limitations; align the documentation gate with the source workflow.
+
 ### Added
 
 - Release installer `--sync-existing` and repeatable `--replace-existing`

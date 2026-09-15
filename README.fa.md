@@ -81,93 +81,48 @@ Allp Package Manager تازه ای نیست. هسته runtime آن cross-platfor
 
 ## نصب و ساخت
 
-نصب باینری منتشرشده و بررسی‌شده بدون نیاز به Rust:
+**⚠️ اگر Rust و Cargo ندارید، ابتدا آن‌ها را نصب کنید.** Git، Make و کامپایلر و لینکِر C هم لازم‌اند. از [راهنمای رسمی نصب Rust](https://www.rust-lang.org/tools/install) استفاده کنید، ترمینال را دوباره باز کنید و سپس بررسی کنید:
 
 ```bash
-curl --fail --location --output install-allp.sh \
-  https://github.com/allp-manager/allp-manager/releases/latest/download/install-allp.sh
-less install-allp.sh
-sh install-allp.sh
+rustc --version
+cargo --version
 ```
 
-نصاب سیستم‌عامل و معماری Linux/macOS را تشخیص می‌دهد، آرشیو دقیق release و
-فایل SHA-256 کنار آن را دانلود و بررسی می‌کند، مطمئن می‌شود آرشیو فقط باینری
-`allp` را دارد و آن را در `~/.local/bin` می‌گذارد. عمداً روش `curl | sh`
-پیشنهاد نشده است. برای نصب یک نسخهٔ مشخص، شماره‌ای مثل `0.6.4` را آرگومان اول
-بدهید؛ مسیر نصب را هم می‌توان با `ALLP_INSTALL_DIR` عوض کرد.
-
-برای یک‌دست‌کردن کپی‌های مستقل Allp، بدون حذف تنظیمات یا کش:
-
-```bash
-sh install-allp.sh --sync-existing
-# انتخاب صریح یک کپی در مسیر سفارشی؛ این گزینه تکرارپذیر است:
-sh install-allp.sh --sync-existing --replace-existing /absolute/custom/bin/allp
-```
-
-نصاب پیش از جایگزینی، PATH و `/usr/local/bin/allp` را بررسی می‌کند. وجود کپی
-متفاوت، نصب پیش‌فرض را متوقف می‌کند تا موفقیت گمراه‌کننده گزارش نشود.
-`--sync-existing` کپی‌های موجود در `~/.local/bin/allp` و `/usr/local/bin/allp`
-را شامل می‌شود؛ مسیر سفارشی باید صریحاً با `--replace-existing` انتخاب شود.
-فقط فایل‌های متعلق به کاربر اجراکننده در مسیر قابل‌نوشتن و بدون symlink
-جایگزین می‌شوند. نسخهٔ قبلی در پوشهٔ خصوصی `allp.backup.XXXXXX/previous` کنار
-باینری نگه داشته می‌شود. ابتدا همهٔ کپی‌ها آماده می‌شوند و شکست در جایگزینی یا
-بررسی نهایی، جایگزینی‌های قبلی را برمی‌گرداند. فایل‌های متعلق به پکیج‌منیجر و
-مسیرهای انتخاب‌نشده تغییر نمی‌کنند؛ نصاب خودش `sudo` اجرا نمی‌کند.
-
-اگر `/usr/local/bin/allp` متعلق به root است، ابتدا **همان نسخهٔ دقیق** را با
-`sudo sh install-allp.sh 0.6.4` نصب کنید؛ مسیر پیش‌فرض اجرای root،
-`/usr/local/bin` است. سپس با کاربر معمولی،
-`sh install-allp.sh 0.6.4 --sync-existing` را اجرا کنید؛ کپی سیستمیِ یکسان
-فقط بررسی می‌شود و تغییر نمی‌کند. در پایان `hash -r` یا در zsh فرمان `rehash`
-را بزنید. دانلودِ تنها، این فرایند را اجرا نمی‌کند. self-update داخلی فقط نصبِ
-در حال اجرا را به‌روز می‌کند؛ در Linux/macOS اگر کپی موازی متفاوت باقی بماند،
-پیش از جایگزینی متوقف می‌شود و مسیر استفاده از همین نصاب را نشان می‌دهد.
-
-اگر باینری در حال اجرا متعلق به یک بستهٔ توزیعی باشد، `allp self-update` هیچ‌وقت
-`/usr/bin/allp` را بازنویسی نمی‌کند؛ مالک dpkg/rpm/Pacman را گزارش می‌دهد و
-به‌روزرسانی را به همان منبع بسته برمی‌گرداند. انتشار `.deb`، `.rpm` و AUR تا
-زمان آماده‌شدن مخزن امضاشده و مسیر update آن عمداً عقب افتاده است.
-
-ساخت از سورس برای توسعه:
+### نصب از سورس
 
 ```bash
 git clone https://github.com/allp-manager/allp-manager.git
 cd allp-manager
-cargo build --release
-./target/release/allp --version
-```
-
-نصب global باینری release:
-
-```bash
 make install
-allp --version
-allp update && allp upgrade
 ```
 
-`allp --version` نسخه نمایشی Build را نشان می دهد و `allp --version --verbose` نسخه پایه، revision، channel، commit، Build ID، target و رسمی بودن Build را نیز گزارش می کند. نصب تازه به‌صورت پیش‌فرض روی کانال tag شده و اعتبارسنجی‌شدهٔ `stable` است. state آلفای قبلی که کانال ضمنی قدیمی را داشته روی `continuous` می‌ماند و انتخاب صریح `--update-channel stable|continuous|prerelease` پایدار است.
+دستور `make install` برنامه را می‌سازد و با `sudo` در `/usr/local/bin/allp` نصب می‌کند.
 
-`make install` باینری release را می سازد و آن را به
-`/usr/local/bin/allp` نصب می کند. برای همین کپی فایل از `sudo install` استفاده
-می شود. برای نصب user-local بدون sudo:
+### نصب کاربری بدون sudo
+
+برای نصب فقط برای کاربر خودتان، در همان پوشهٔ مخزن به‌جای `make install` این دستورها را اجرا کنید:
 
 ```bash
 make install-user
+export PATH="$HOME/.local/bin:$PATH"
+allp --version
 ```
 
-نیازمندی‌های ساخت از سورس:
+مقصد نصب `~/.local/bin/allp` است. دستور PATH بالا برای ترمینال فعلی است؛ برای ترمینال‌های بعدی هم این خط را در فایل تنظیمات Shell خود اضافه کنید.
 
-- Rust 1.74 یا جدیدتر
-- Cargo
-- Package Managerهای Native که می خواهید Allp آن ها را پیدا کند
-- `sudo` فقط برای Child Processهایی که واقعا Root لازم دارند
+### Termux در اندروید
 
-استفاده از Binary منتشرشده:
+Termux فعلاً محیط پشتیبانی‌شدهٔ ALLP Manager نیست. دستور `make install` از `sudo` استفاده می‌کند و در `/usr/local/bin` نصب می‌کند؛ این روش با Termux معمولی سازگار نیست. دستور `make install-user` در مرحلهٔ نصب به sudo نیاز ندارد، اما عملیات مدیریت پکیج را با Termux سازگار نمی‌کند: عملیات تغییردهندهٔ APT در ALLP Manager همچنان دسترسی روت می‌خواهند. پشتیبانی بومی Termux به سازگاری جداگانهٔ اجرا، مسیرها و سطح دسترسی نیاز دارد. تا پیاده‌سازی و آزمایش این پشتیبانی، پکیج‌های Termux را با دستور بومی `pkg` مدیریت کنید.
+
+### بررسی نصب
 
 ```bash
-allp detect
-allp search git
+command -v allp
+allp --version --verbose
+make install-check
 ```
+
+اگر کپی مستقل دیگری از PATH اجرا می‌شود، همان کپی موردنظر را صریحاً دوباره بسازید. کش فرمان Shell را در bash با `hash -r` و در zsh با `rehash` تازه کنید. کپی متعلق به پکیج‌منیجر باید از همان منبع به‌روز شود؛ `allp self-update` آن را بازنویسی نمی‌کند.
 
 ## شروع سریع
 

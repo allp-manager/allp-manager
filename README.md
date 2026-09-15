@@ -84,95 +84,48 @@ JSON is available for read-only commands and dry-run maintenance/install plannin
 
 ## Installation
 
-Install the verified prebuilt release without Rust:
+**⚠️ Install Rust and Cargo before running make.** Git, Make and a C compiler/linker are also required. Follow the [official Rust installation guide](https://www.rust-lang.org/tools/install), reopen your terminal, then check:
 
 ```bash
-curl --fail --location --output install-allp.sh \
-  https://github.com/allp-manager/allp-manager/releases/latest/download/install-allp.sh
-less install-allp.sh
-sh install-allp.sh
+rustc --version
+cargo --version
 ```
 
-The installer detects Linux/macOS architecture, downloads the exact release
-archive and adjacent SHA-256 file, verifies it, checks the archive contains only
-the `allp` binary, and installs to `~/.local/bin`. It is deliberately not
-documented as a `curl | sh` pipeline. Pass an exact version such as `0.6.4` as
-the first argument, or set `ALLP_INSTALL_DIR` to choose another user-writable
-directory.
-
-To reconcile existing standalone copies without deleting configuration or caches:
-
-```bash
-sh install-allp.sh --sync-existing
-# Custom standalone copies require explicit selection (repeatable):
-sh install-allp.sh --sync-existing --replace-existing /absolute/custom/bin/allp
-```
-
-The installer checks PATH and `/usr/local/bin/allp` before replacing anything.
-Different copies stop a default install instead of reporting a misleading
-success. `--sync-existing` includes existing `~/.local/bin/allp` and
-`/usr/local/bin/allp`; custom copies require `--replace-existing`. Only copies
-owned by the installing user in writable, non-symlink directories are replaced.
-Each replaced binary has a private `allp.backup.XXXXXX/previous` backup beside it.
-All copies are staged first; a commit or verification failure restores earlier
-replacements. Native-package-owned binaries and other unselected PATH copies
-are never overwritten. No sudo command runs automatically.
-
-If `/usr/local/bin/allp` belongs to root, first install the **same exact version**
-as administrator with `sudo sh install-allp.sh 0.6.4` (root defaults to
-`/usr/local/bin`), then run `sh install-allp.sh 0.6.4 --sync-existing` as your
-normal user. The second install verifies that the system copy already matches
-and leaves it untouched. Run `hash -r` (or `rehash` in zsh) afterwards. Downloading
-an archive alone does not run this reconciliation. Built-in self-update updates
-only the running installation; on Linux/macOS it stops before replacement if
-that would leave a differing parallel copy, and points to this installer.
-
-If a distribution package owns the running binary, `allp self-update` never
-overwrites `/usr/bin/allp`; it reports the owning dpkg/rpm/Pacman package and
-hands updates back to that package source. Native `.deb`, `.rpm`, and AUR
-publication is intentionally deferred until signed repository update delivery
-exists.
-
-Build from source for development:
+### Install from source
 
 ```bash
 git clone https://github.com/allp-manager/allp-manager.git
 cd allp-manager
-cargo build --release
-./target/release/allp --version
-```
-
-Install the release binary globally:
-
-```bash
 make install
-allp --version
-allp update && allp upgrade
 ```
 
-`allp --version` prints the display/build version; `allp --version --verbose` also prints the base version, build revision, channel, commit, build ID, target, timestamp, and whether CI marked the build official. Fresh installs default to the verified tagged `stable` channel. Existing alpha state that used the old implicit channel remains on verified `continuous` builds; any explicit `--update-channel stable|continuous|prerelease` choice is sticky.
+`make install` builds ALLP Manager and uses `sudo` to copy it to `/usr/local/bin/allp`.
 
-`make install` builds the release binary and installs it as
-`/usr/local/bin/allp`. It uses `sudo install` for that one file copy. For a
-user-local install without sudo:
+### User installation without sudo
+
+Choose this instead of `make install` to install only for your user, from the same repository directory:
 
 ```bash
 make install-user
+export PATH="$HOME/.local/bin:$PATH"
+allp --version
 ```
 
-Source-build requirements:
+The destination is `~/.local/bin/allp`. The PATH command above applies to the current terminal; add that line to your shell configuration for future sessions.
 
-- Rust 1.74 or newer
-- Cargo
-- The native package managers you want Allp to detect
-- `sudo` only when a root-required child command actually needs elevation
+### Termux on Android
 
-Release binary usage is simply:
+Termux is not currently a supported ALLP Manager environment. `make install` uses `sudo` and installs to `/usr/local/bin`; this does not fit a standard Termux installation. `make install-user` avoids sudo during installation, but does not make package operations compatible with Termux: ALLP Manager’s APT mutations still require root. Native Termux support needs separate runtime, path and privilege handling. Until that support is implemented and tested, manage Termux packages with its native `pkg` command.
+
+### Verify installation
 
 ```bash
-allp detect
-allp search git
+command -v allp
+allp --version --verbose
+make install-check
 ```
+
+If a different standalone copy resolves on PATH, rebuild that intended copy explicitly. Refresh the shell command cache with `hash -r` in bash or `rehash` in zsh. Native-package-owned copies must be updated through their package source; `allp self-update` does not overwrite them.
 
 ## Quick Start
 

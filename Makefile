@@ -161,8 +161,12 @@ docs-check:
 	grep -q 'make quality' README.fa.md
 	grep -q 'allp self-update' README.md
 	grep -q 'allp self-update' README.fa.md
-	grep -q 'install-allp.sh' README.md
-	grep -q 'install-allp.sh' README.fa.md
+	grep -q 'make install-user' README.md
+	grep -q 'make install' README.md
+	! grep -q 'releases/latest/download/install-allp.sh' README.md
+	grep -q 'make install-user' README.fa.md
+	grep -q 'make install' README.fa.md
+	! grep -q 'releases/latest/download/install-allp.sh' README.fa.md
 	grep -q 'allp install pycharm' README.md
 	grep -q 'allp install pycharm' README.fa.md
 	grep -q 'allp profile save' README.md

@@ -12,24 +12,38 @@ Allp خانواده Debian، Red Hat/Fedora، Arch، SUSE و Alpine و همچن�
 به‌عنوان Host مبتنی بر Image می‌شناسد. معماری، libc، وضعیت WSL/Container و
 مسیرهای داده Platform را نیز ثبت می‌کند.
 
-## روش‌های نصب
-
-| روش | مقصد | مناسب برای |
-|---|---|---|
-| Installer تأییدشده | پیش‌فرض `~/.local/bin/allp` | بیشتر کاربران |
-| `make install-user` | `~/.local/bin/allp` | Build سورس بدون sudo |
-| `make install` | `/usr/local/bin/allp` | Build سراسری سورس |
-| `cargo build --release` | `target/release/allp` | توسعه و تست |
+**⚠️ اگر Rust و Cargo ندارید، ابتدا آن‌ها را نصب کنید.** Git، Make و کامپایلر و لینکِر C هم لازم‌اند. از [راهنمای رسمی نصب Rust](https://www.rust-lang.org/tools/install) استفاده کنید، ترمینال را دوباره باز کنید و سپس بررسی کنید:
 
 ```bash
-curl --fail --location --output install-allp.sh \
-  https://github.com/allp-manager/allp-manager/releases/latest/download/install-allp.sh
-less install-allp.sh
-sh install-allp.sh
+rustc --version
+cargo --version
 ```
 
-نصاب Platform/Architecture، آرشیو دقیق، SHA-256 کنار آن و اعضای آرشیو را بررسی
-می‌کند و عمداً `curl | sh` پیشنهاد نمی‌شود.
+## نصب از سورس
+
+```bash
+git clone https://github.com/allp-manager/allp-manager.git
+cd allp-manager
+make install
+```
+
+دستور `make install` برنامه را می‌سازد و با `sudo` در `/usr/local/bin/allp` نصب می‌کند.
+
+## نصب کاربری بدون sudo
+
+برای نصب فقط برای کاربر خودتان، در همان پوشهٔ مخزن به‌جای `make install` این دستورها را اجرا کنید:
+
+```bash
+make install-user
+export PATH="$HOME/.local/bin:$PATH"
+allp --version
+```
+
+مقصد نصب `~/.local/bin/allp` است. دستور PATH بالا برای ترمینال فعلی است؛ برای ترمینال‌های بعدی هم این خط را در فایل تنظیمات Shell خود اضافه کنید.
+
+## Termux در اندروید
+
+Termux فعلاً محیط پشتیبانی‌شدهٔ ALLP Manager نیست. دستور `make install` از `sudo` استفاده می‌کند و در `/usr/local/bin` نصب می‌کند؛ این روش با Termux معمولی سازگار نیست. دستور `make install-user` در مرحلهٔ نصب به sudo نیاز ندارد، اما عملیات مدیریت پکیج را با Termux سازگار نمی‌کند: عملیات تغییردهندهٔ APT در ALLP Manager همچنان دسترسی روت می‌خواهند. پشتیبانی بومی Termux به سازگاری جداگانهٔ اجرا، مسیرها و سطح دسترسی نیاز دارد. تا پیاده‌سازی و آزمایش این پشتیبانی، پکیج‌های Termux را با دستور بومی `pkg` مدیریت کنید.
 
 ```bash
 command -v allp

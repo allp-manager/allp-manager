@@ -11,24 +11,38 @@ Allp recognizes Debian, Red Hat/Fedora, Arch, SUSE and Alpine families, plus
 Bazzite as an image-based Fedora-family host. It records architecture, libc,
 WSL/container state and platform data directories.
 
-## Install options
-
-| Method | Destination | Best for |
-|---|---|---|
-| Verified release installer | `~/.local/bin/allp` by default | Most users |
-| `make install-user` | `~/.local/bin/allp` | Local source builds without sudo |
-| `make install` | `/usr/local/bin/allp` | System-wide source build |
-| `cargo build --release` | `target/release/allp` | Development/testing |
+**⚠️ Install Rust and Cargo before running make.** Git, Make and a C compiler/linker are also required. Follow the [official Rust installation guide](https://www.rust-lang.org/tools/install), reopen your terminal, then check:
 
 ```bash
-curl --fail --location --output install-allp.sh \
-  https://github.com/allp-manager/allp-manager/releases/latest/download/install-allp.sh
-less install-allp.sh
-sh install-allp.sh
+rustc --version
+cargo --version
 ```
 
-The installer checks platform/architecture, exact archive and adjacent SHA-256,
-and rejects unexpected archive members. It never recommends `curl | sh`.
+## Install from source
+
+```bash
+git clone https://github.com/allp-manager/allp-manager.git
+cd allp-manager
+make install
+```
+
+`make install` builds ALLP Manager and uses `sudo` to copy it to `/usr/local/bin/allp`.
+
+## User installation without sudo
+
+Choose this instead of `make install` to install only for your user, from the same repository directory:
+
+```bash
+make install-user
+export PATH="$HOME/.local/bin:$PATH"
+allp --version
+```
+
+The destination is `~/.local/bin/allp`. The PATH command above applies to the current terminal; add that line to your shell configuration for future sessions.
+
+## Termux on Android
+
+Termux is not currently a supported ALLP Manager environment. `make install` uses `sudo` and installs to `/usr/local/bin`; this does not fit a standard Termux installation. `make install-user` avoids sudo during installation, but does not make package operations compatible with Termux: ALLP Manager’s APT mutations still require root. Native Termux support needs separate runtime, path and privilege handling. Until that support is implemented and tested, manage Termux packages with its native `pkg` command.
 
 ## Verify path and identity
 
