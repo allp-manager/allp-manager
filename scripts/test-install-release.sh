@@ -3,15 +3,31 @@ set -euo pipefail
 
 source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/allp-installer-tests.XXXXXX")"
-trap 'rm -rf -- "$test_root"' EXIT
+test_root="$(cd "$test_root" && pwd -P)"
+cleanup() {
+    local status=$?
+    if [[ "$status" != 0 && -n "${case_dir:-}" && -f "$case_dir/output" ]]; then
+        cat "$case_dir/output" >&2
+    fi
+    rm -rf -- "$test_root"
+    return "$status"
+}
+trap cleanup EXIT
 export ALLP_TEST_ROOT="$test_root"
-host_os="$(/usr/bin/uname -s)"
+host_os="$(uname -s)"
 export ALLP_TEST_OS="$host_os"
+export ALLP_TEST_CP="$(command -v cp)"
+export ALLP_TEST_CMP="$(command -v cmp)"
+export ALLP_TEST_MV="$(command -v mv)"
+export ALLP_TEST_INSTALL="$(command -v install)"
+export ALLP_TEST_STAT="$(command -v stat)"
+export ALLP_TEST_ID="$(command -v id)"
+export ALLP_TEST_SHASUM="$(command -v shasum || true)"
 native_sha256sum="$(command -v sha256sum || true)"
 export ALLP_TEST_SHA256SUM="$native_sha256sum"
 write_checksum() {
     if [ -n "$native_sha256sum" ]; then "$native_sha256sum" "$archive";
-    else /usr/bin/shasum -a 256 "$archive"; fi
+    else "$ALLP_TEST_SHASUM" -a 256 "$archive"; fi
 }
 mkdir -p "$test_root/helpers" "$test_root/assets" "$test_root/payload"
 printf 'new verified Allp fixture\n' > "$test_root/payload/allp"
@@ -43,7 +59,7 @@ case "$url" in
     */releases/tags/v9.9.0) exit 22 ;;
     */releases/tags/v9.8.7)
         printf '%s\n' '{"tag_name":"v9.8.7","prerelease":false,"draft":false,"assets":[{"name":"allp-release-manifest.json"}]}' > "$output" ;;
-    *) /usr/bin/cp "$ALLP_TEST_ROOT/assets/${url##*/}" "$output" ;;
+    *) "$ALLP_TEST_CP" "$ALLP_TEST_ROOT/assets/${url##*/}" "$output" ;;
 esac
 SH
 cat > "$test_root/helpers/uname" <<'SH'
@@ -53,7 +69,7 @@ SH
 cat > "$test_root/helpers/sha256sum" <<'SH'
 #!/bin/sh
 if [ -n "$ALLP_TEST_SHA256SUM" ]; then exec "$ALLP_TEST_SHA256SUM" "$@";
-else exec /usr/bin/shasum -a 256 "$@"; fi
+else exec "$ALLP_TEST_SHASUM" -a 256 "$@"; fi
 SH
 cat > "$test_root/helpers/cmp" <<'SH'
 #!/bin/sh
@@ -61,7 +77,7 @@ for last_argument in "$@"; do :; done
 case "$last_argument" in
     "$ALLP_TEST_ROOT"/*)
         if [ "${ALLP_TEST_FAIL_VERIFY:-}" = "$last_argument" ]; then exit 1; fi
-        exec /usr/bin/cmp "$@"
+        exec "$ALLP_TEST_CMP" "$@"
         ;;
     *) exit 0 ;;
 esac
@@ -74,7 +90,7 @@ case "$*" in
         if [ "${ALLP_TEST_FAIL_RENAME:-}" = "$last_argument" ]; then exit 1; fi
         ;;
 esac
-exec /usr/bin/mv "$@"
+exec "$ALLP_TEST_MV" "$@"
 SH
 cat > "$test_root/helpers/install" <<'SH'
 #!/bin/sh
@@ -83,7 +99,7 @@ case "$last_argument" in
     "$ALLP_TEST_ROOT"/*)
         if [ -n "${ALLP_TEST_FAIL_STAGE:-}" ] &&
             [ "${last_argument#"$ALLP_TEST_FAIL_STAGE"}" != "$last_argument" ]; then exit 1; fi
-        exec /usr/bin/install "$@"
+        exec "$ALLP_TEST_INSTALL" "$@"
         ;;
     *) printf 'test refused a write outside the fixture: %s\n' "$last_argument" >&2; exit 1 ;;
 esac
@@ -108,7 +124,7 @@ for last_argument in "$@"; do :; done
 if [ "$2" = '%u' ]; then
     if [ "${ALLP_TEST_FOREIGN:-}" = "$last_argument" ]; then printf '0\n';
     else printf '1000\n'; fi
-else exec /usr/bin/stat "$@"; fi
+else exec "$ALLP_TEST_STAT" "$@"; fi
 SH
 chmod +x "$test_root/helpers/"*
 export PATH="$test_root/helpers:/usr/bin:/bin"
@@ -140,7 +156,7 @@ pass 'help performs no installation'
 
 fixture legacy
 run_installer 9.8.7
-/usr/bin/cmp "$test_root/payload/allp" "$case_dir/main/allp"
+"$ALLP_TEST_CMP" "$test_root/payload/allp" "$case_dir/main/allp"
 grep -q 'backup:' "$case_dir/output"
 pass 'legacy exact-version argument works and keeps the old binary'
 
@@ -158,8 +174,8 @@ fi
 
 fixture sync
 run_installer --sync-existing 9.8.7 --replace-existing "$case_dir/other/allp"
-/usr/bin/cmp "$test_root/payload/allp" "$case_dir/main/allp"
-/usr/bin/cmp "$case_dir/main/allp" "$case_dir/other/allp"
+"$ALLP_TEST_CMP" "$test_root/payload/allp" "$case_dir/main/allp"
+"$ALLP_TEST_CMP" "$case_dir/main/allp" "$case_dir/other/allp"
 grep -q 'old primary' "$case_dir/main/"allp.backup.*/previous
 grep -q 'old secondary' "$case_dir/other/"allp.backup.*/previous
 run_installer latest --sync-existing --replace-existing "$case_dir/other/allp"
@@ -173,7 +189,7 @@ pass 'unselected PATH shadow stops installation before replacement'
 
 fixture explicit_shadow
 PATH="$case_dir/other:$PATH" run_installer 9.8.7 --replace-existing "$case_dir/other/allp"
-/usr/bin/cmp "$case_dir/main/allp" "$case_dir/other/allp"
+"$ALLP_TEST_CMP" "$case_dir/main/allp" "$case_dir/other/allp"
 pass 'a custom PATH copy requires explicit selection'
 
 fixture symlink
@@ -203,7 +219,7 @@ unwritable_status=0
 run_installer 9.8.7 --replace-existing "$case_dir/other/allp" || unwritable_status=$?
 chmod 700 "$case_dir/other"
 # uid 0 bypasses filesystem write bits; foreign-owner coverage still runs in CI.
-if [ "$(/usr/bin/id -u)" != 0 ]; then
+if [ "$("$ALLP_TEST_ID" -u)" != 0 ]; then
     [ "$unwritable_status" != 0 ] || fail 'unwritable directory accepted'
     unchanged
     pass 'an unwritable second directory leaves the first installation untouched'
@@ -232,8 +248,8 @@ fixture rename_failure
 export ALLP_TEST_FAIL_RENAME="$case_dir/other/allp"
 if run_installer 9.8.7 --replace-existing "$case_dir/other/allp"; then fail 'rename failure ignored'; fi
 unchanged
-if [ "$host_os" = Darwin ]; then original_mode="$(/usr/bin/stat -f '%Lp' "$case_dir/main/allp")";
-else original_mode="$(/usr/bin/stat -c '%a' "$case_dir/main/allp")"; fi
+if [ "$host_os" = Darwin ]; then original_mode="$("$ALLP_TEST_STAT" -f '%Lp' "$case_dir/main/allp")";
+else original_mode="$("$ALLP_TEST_STAT" -c '%a' "$case_dir/main/allp")"; fi
 [ "$original_mode" = 700 ] || fail 'rollback lost original mode'
 pass 'failure on the second replacement rolls back the first and preserves its mode'
 

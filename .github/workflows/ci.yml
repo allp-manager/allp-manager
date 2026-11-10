@@ -65,9 +65,12 @@ jobs:
           set -o pipefail
           cargo test --locked --all-targets 2>&1 | tee native-tests.log
       - name: Verify native release installer
+        id: installer
         if: runner.os != 'Windows'
         shell: bash
-        run: make installer-test
+        run: |
+          set -o pipefail
+          make installer-test 2>&1 | tee native-installer.log
       - name: Explain platform-specific integration coverage
         if: runner.os != 'Linux'
         shell: bash
@@ -78,8 +81,12 @@ jobs:
         env:
           PLATFORM_NAME: ${{ matrix.name }}
           TEST_OUTCOME: ${{ steps.tests.outcome }}
+          INSTALLER_OUTCOME: ${{ steps.installer.outcome }}
         run: |
           printf '### %s\n\nCargo tests completed with outcome %s.\n' "$PLATFORM_NAME" "$TEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$INSTALLER_OUTCOME" ]]; then
+            printf 'Installer tests completed with outcome %s.\n' "$INSTALLER_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [[ "$TEST_OUTCOME" == failure && -f native-tests.log ]]; then
             awk '/^test .* \.\.\. FAILED$/ {print "- `" $2 "`"}' native-tests.log >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -87,7 +94,9 @@ jobs:
         if: always()
         with:
           name: native-test-results-${{ matrix.os }}
-          path: native-tests.log
+          path: |
+            native-tests.log
+            native-installer.log
           if-no-files-found: ignore
           retention-days: 14
 
