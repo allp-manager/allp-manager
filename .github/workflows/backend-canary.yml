@@ -63,6 +63,14 @@ jobs:
           grep -q '"schema_version": 2' canary.json
           grep -q '"complete": true' canary.json
           grep -q '"package_id":' canary.json
+      - name: Check Arch's default upgrade plan
+        if: matrix.backend == 'pacman'
+        shell: bash
+        run: |
+          target/debug/allp upgrade --dry-run --json >upgrade-plan.json
+          grep -q '"complete": true' upgrade-plan.json
+          grep -q '"backend_id": "pacman"' upgrade-plan.json
+          grep -q 'pacman -Syu' upgrade-plan.json
       - name: Report search failure
         if: failure()
         shell: bash
@@ -76,7 +84,9 @@ jobs:
         if: always()
         with:
           name: search-${{ matrix.backend }}
-          path: canary.json
+          path: |
+            canary.json
+            upgrade-plan.json
           if-no-files-found: ignore
 
   snap-search:

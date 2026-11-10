@@ -276,22 +276,32 @@ fn parse_dnf_search(backend: &DnfBackend, output: &str, query: &str) -> BackendS
 
     for line in output
         .lines()
-        .map(str::trim)
+        .map(str::trim_start)
         .filter(|line| !line.is_empty())
     {
-        if is_known_dnf_search_decoration(line) {
+        if is_known_dnf_search_decoration(line.trim_end()) {
             continue;
         }
-        let Some((left, description)) = line.split_once(" : ") else {
+        let Some((left, description)) = line
+            .split_once(" : ")
+            .filter(|(package, _)| !package.contains('\t'))
+            .or_else(|| line.split_once('\t'))
+        else {
             rejected_lines += 1;
             continue;
         };
         let package_id = left.trim();
-        if package_id.is_empty() {
+        if package_id.is_empty()
+            || !package_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+')
+            })
+        {
             rejected_lines += 1;
             continue;
         }
-        let base_name = package_id.split('.').next().unwrap_or(package_id);
+        let base_name = package_id
+            .rsplit_once('.')
+            .map_or(package_id, |(name, _)| name);
         let candidate_match = match_kind(base_name, query);
         report.candidates.push(PackageCandidate {
             backend_id: backend.id().to_owned(),
@@ -301,7 +311,7 @@ fn parse_dnf_search(backend: &DnfBackend, output: &str, query: &str) -> BackendS
             package_id: package_id.to_owned(),
             display_name: base_name.to_owned(),
             version: None,
-            description: Some(description.trim().to_owned()),
+            description: Some(description.trim().to_owned()).filter(|value| !value.is_empty()),
             source: Some("DNF repositories".to_owned()),
             installers: vec![backend.display_name().to_owned()],
             artifact_kind: "system package".to_owned(),
@@ -402,6 +412,25 @@ mod tests {
             unknown.issues[0].kind,
             BackendSearchIssueKind::UnrecognizedOutput
         );
+    }
+
+    #[test]
+    fn dnf5_search_parses_tab_delimited_rows_and_dotted_names() {
+        let report = parse_dnf_search(
+            &DnfBackend,
+            "Matched fields: name\n python3.14.x86_64\tPython : programming language\n python3.14-devel.x86_64\t\n",
+            "python3.14",
+        );
+        assert!(report.issues.is_empty());
+        assert_eq!(report.candidates.len(), 2);
+        let first = &report.candidates[0];
+        assert_eq!(first.package_id, "python3.14.x86_64");
+        assert_eq!(first.display_name, "python3.14");
+        assert_eq!(
+            first.description.as_deref(),
+            Some("Python : programming language")
+        );
+        assert_eq!(report.candidates[1].description, None);
     }
 
     #[test]

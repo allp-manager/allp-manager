@@ -19,6 +19,7 @@ Allp v0.6.5 prerelease
 ### Fixed
 
 - Resolve macOS account IDs from Directory Services using its tabular listing.
+- Parse tab-delimited search results on newer DNF5 versions while keeping DNF4 support.
 - Run Snap CLI fixtures on ARM64 and parse macOS account records consistently in
   Windows tests.
 
