@@ -302,6 +302,11 @@ fn apply_replacement_with_candidates(
     platform: &PlatformContext,
     candidates: &[PathBuf],
 ) -> AllpResult<ReplacementOutcome> {
+    if platform.is_termux() && platform.is_root {
+        return Err(AllpError::InvalidInput(
+            "Update Allp as the Termux app user, outside the root shell.".to_owned(),
+        ));
+    }
     if platform.os == OperatingSystem::Windows {
         return Ok(ReplacementOutcome::DeferredForWindows {
             staged_binary: staged.binary_path.clone(),
@@ -313,6 +318,12 @@ fn apply_replacement_with_candidates(
         &staged.expected_binary,
     )?;
     if !platform.executable_writable {
+        if platform.is_termux() {
+            return Err(AllpError::InvalidInput(
+                "The Termux installation is not writable by the current user. Reinstall Allp as the Termux app user."
+                    .to_owned(),
+            ));
+        }
         let mut helper = NativeCommand::new(&platform.current_executable).args([
             "internal-replace",
             "--staged",
@@ -633,7 +644,7 @@ fn extract_archive_safely(
     os: OperatingSystem,
 ) -> AllpResult<()> {
     match os {
-        OperatingSystem::Linux | OperatingSystem::MacOs => {
+        OperatingSystem::Android | OperatingSystem::Linux | OperatingSystem::MacOs => {
             let tar = resolve_self_update_helper("tar")?;
             let paths = Command::new(&tar).args(["-tzf"]).arg(archive).output()?;
             if !paths.status.success() {

@@ -11,6 +11,7 @@ use crate::{
         PackageInfo, PrivilegeRequirement,
     },
     execution::ProcessRunner,
+    platform::{OperatingSystem, PlatformContext},
 };
 
 pub struct PacmanBackend;
@@ -43,6 +44,11 @@ impl Backend for PacmanBackend {
     }
     fn command_requirements(&self) -> &'static [CommandRequirement] {
         REQUIREMENTS
+    }
+
+    fn platform_incompatibility(&self, platform: &PlatformContext) -> Option<String> {
+        (platform.os == OperatingSystem::Android)
+            .then(|| "Use the Termux backend for packages in the Android app prefix".to_owned())
     }
 
     fn search(

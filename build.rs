@@ -40,6 +40,9 @@ fn main() {
     if official && channel == "continuous" && parsed_revision == 0 {
         panic!("official continuous builds require a positive ALLP_BUILD_REVISION");
     }
+    if official && matches!(channel.as_str(), "stable" | "prerelease") && parsed_revision != 0 {
+        panic!("official tagged releases require ALLP_BUILD_REVISION=0");
+    }
 
     let git_sha = env::var("ALLP_GIT_SHA")
         .ok()

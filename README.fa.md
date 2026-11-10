@@ -24,7 +24,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه Build فعلی: **0.6.5.1** (نسخه پایه Cargo: **0.6.5**)
+نسخهٔ Stable **0.6.5**
 سطح بلوغ: **Public Alpha**
 
 ## از اینجا شروع کنید
@@ -59,13 +59,15 @@ Allp Package Manager تازه ای نیست. هسته runtime آن cross-platfor
 
 ## سیستم ها و Backendها
 
-لایه platform توزیع و خانواده Linux، از جمله Bazzite به‌عنوان host image-based از خانواده Fedora، و همچنین macOS، Windows، WSL، container، معماری، libc، کاربرها، مالکیت executable و مسیرهای داده را تشخیص می دهد. عملیات package در Linux بالغ تر است. Homebrew روی macOS هنوز Experimental است؛ Windows فعلا compilation، diagnostics، انتخاب release target و self-replacement به روش deferred را پوشش می دهد و Snap/Flatpak لینوکسی را advertise نمی کند.
+Allp توزیع‌ها و مدیرهای بستهٔ Linux، از جمله Bazzite، و محیط‌های macOS، Windows، WSL و Termux را تشخیص می‌دهد. در Windows از مخزن عمومی WinGet در Microsoft App Installer استفاده می‌کند. `allp search sharkdp.fd --from winget` در این مخزن جست‌وجو می‌کند و `allp upgrade --from winget --dry-run` پیش‌نمایش ارتقا را نشان می‌دهد.
 
 | Source | وضعیت | Search | Install | Remove | Update | Upgrade | List | Info |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | APT | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | Pacman | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | DNF / DNF5 | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
+| مخزن عمومی WinGet | Windows | بله | بله | بله | بله | بله | بله | بله |
+| مدیر بستهٔ Termux | Android Termux | بله | بله | بله | فقط APT | بله | بله | بله |
 | rpm-ostree / Bazzite / Fedora Atomic | Experimental | بله | بله | بله | بله | بله | بله | بله |
 | Flatpak | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | Snap | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
@@ -112,7 +114,9 @@ allp --version
 
 ### Termux در اندروید
 
-Termux فعلاً محیط پشتیبانی‌شدهٔ ALLP Manager نیست. دستور `make install` از `sudo` استفاده می‌کند و در `/usr/local/bin` نصب می‌کند؛ این روش با Termux معمولی سازگار نیست. دستور `make install-user` در مرحلهٔ نصب به sudo نیاز ندارد، اما عملیات مدیریت پکیج را با Termux سازگار نمی‌کند: عملیات تغییردهندهٔ APT در ALLP Manager همچنان دسترسی روت می‌خواهند. پشتیبانی بومی Termux به سازگاری جداگانهٔ اجرا، مسیرها و سطح دسترسی نیاز دارد. تا پیاده‌سازی و آزمایش این پشتیبانی، پکیج‌های Termux را با دستور بومی `pkg` مدیریت کنید.
+در Android، Allp را با کاربر معمولی برنامهٔ Termux اجرا کنید. از آرشیو Android برای ARM64 یا x86-64 استفاده کنید، یا با `pkg install rust clang make git` ابزارهای ساخت را بگیرید و در پوشهٔ سورس `make install-termux` بزنید. نصب‌کنندهٔ ریلیز با `sh install-allp.sh` اجرا می‌شود و مسیر پیش‌فرض آن `$PREFIX/bin` است.
+
+مدیر `termux` (با نام `--from pkg` هم قابل انتخاب است) جست‌وجو، فهرست، اطلاعات بسته، نصب، حذف و ارتقا را در محدودهٔ Termux با APT یا Pacman همان محیط انجام می‌دهد. Termux اجرای مدیر بسته با شناسهٔ مؤثر کاربر صفر را رد می‌کند. روی گوشی روت‌شده هم از شل روت خارج شوید و با کاربر عادی Termux ادامه دهید. برای پیش‌نمایش ارتقا `allp upgrade --from termux --dry-run` را بزنید.
 
 ### بررسی نصب
 
@@ -594,8 +598,8 @@ RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 
 ## Changelog
 
-نسخهٔ `0.6.5` یک پیش‌انتشار اختیاری است که ایرادهای نگه‌داری بسته‌ها را رفع می‌کند،
-مدیر نصب ابزارهای Node و Python را حفظ می‌کند و بعد از خودبه‌روزرسانی نسخهٔ قبلی را
+نسخهٔ Stable `0.6.5` از WinGet و Termux پشتیبانی می‌کند، ایرادهای نگه‌داری بسته‌ها را رفع
+می‌کند، مدیر نصب ابزارهای Node و Python را حفظ می‌کند و بعد از خودبه‌روزرسانی نسخهٔ قبلی را
 در بک‌آپ نگه می‌دارد. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 
 ## محدودیت های شناخته شده

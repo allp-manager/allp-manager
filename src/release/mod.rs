@@ -172,6 +172,7 @@ fn safe_asset_name(value: &str) -> bool {
 fn os_manifest_name(os: OperatingSystem) -> &'static str {
     match os {
         OperatingSystem::Linux => "linux",
+        OperatingSystem::Android => "android",
         OperatingSystem::MacOs => "macos",
         OperatingSystem::Windows => "windows",
         OperatingSystem::Other => "other",

@@ -605,7 +605,13 @@ pub fn runtime_context() -> RuntimePrivilegeContext {
     RuntimePrivilegeContext::RootDirect
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "android")]
+fn effective_uid() -> Option<u32> {
+    // Android's actual process credentials do not depend on Termux's PATH or shell environment.
+    Some(unsafe { libc::geteuid() })
+}
+
+#[cfg(all(unix, not(target_os = "android")))]
 fn effective_uid() -> Option<u32> {
     if let Ok(status) = fs::read_to_string("/proc/self/status") {
         if let Some(uid) = status.lines().find_map(|line| {

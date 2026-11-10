@@ -35,6 +35,8 @@ def target_fields(target: str) -> tuple[str, str, str | None, str]:
         return "macos", architecture, None, "allp"
     if target.endswith("-pc-windows-msvc"):
         return "windows", architecture, None, "allp.exe"
+    if target.endswith("-linux-android") and architecture in ("aarch64", "x86_64"):
+        return "android", architecture, "bionic", "allp"
     fail(f"unsupported release target in asset name: {target}")
 
 

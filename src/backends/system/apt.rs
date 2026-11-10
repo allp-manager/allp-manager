@@ -11,6 +11,7 @@ use crate::{
         PackageCandidate, PackageDomain, PackageInfo, PrivilegeRequirement,
     },
     execution::{render_execution_plan_with_context, ProcessRunner, ProcessStatus},
+    platform::{OperatingSystem, PlatformContext},
 };
 
 pub struct AptBackend;
@@ -57,6 +58,11 @@ impl Backend for AptBackend {
     }
     fn command_requirements(&self) -> &'static [CommandRequirement] {
         REQUIREMENTS
+    }
+
+    fn platform_incompatibility(&self, platform: &PlatformContext) -> Option<String> {
+        (platform.os == OperatingSystem::Android)
+            .then(|| "Use the Termux backend for packages in the Android app prefix".to_owned())
     }
 
     fn operation_capability(&self, capability: Capability) -> BackendOperationCapability {

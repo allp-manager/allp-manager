@@ -3,6 +3,9 @@ CARGO ?= cargo
 BASH ?= bash
 ARGS ?=
 PREFIX ?= /usr/local
+ifneq ($(and $(TERMUX_VERSION),$(wildcard $(PREFIX)/bin/sh)),)
+SHELL := $(PREFIX)/bin/sh
+endif
 BINDIR ?= $(PREFIX)/bin
 BINARY := allp
 RELEASE_BINARY := target/release/$(BINARY)
@@ -15,7 +18,7 @@ CURRENT_GIT_SHA := $(shell git rev-parse --verify HEAD 2>/dev/null || printf unk
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt fmt-check check clippy test architecture build release quality clean run doctor version git-status docs-check wiki-check wiki-publish install uninstall reinstall install-user install-check install-resolution-warning release-prepare release-status release-notes release-archive release-checksum release-finalize release-push release-clean hooks-install hooks-status release-workflow-test release-assets-test
+.PHONY: help fmt fmt-check check clippy test architecture build release quality clean run doctor version git-status docs-check wiki-check wiki-publish install uninstall reinstall install-user install-termux install-check install-resolution-warning release-prepare release-status release-notes release-archive release-checksum release-finalize release-push release-clean hooks-install hooks-status release-workflow-test release-assets-test
 
 help:
 	@printf '%s\n' 'Allp development targets:'
@@ -42,6 +45,7 @@ help:
 	@printf '%s\n' '  make reinstall        Rebuild and replace /usr/local/bin/allp (warns if PATH shadows it)'
 	@printf '%s\n' '  make uninstall        Remove the installed allp binary'
 	@printf '%s\n' '  make install-user     Install allp to $$HOME/.local/bin without sudo'
+	@printf '%s\n' '  make install-termux   Install a source build into the Termux prefix without sudo'
 	@printf '%s\n' '  make install-check    Show the allp binary resolved by the shell'
 	@printf '%s\n' ''
 	@printf '%s\n' 'Local release workflow:'
@@ -212,6 +216,12 @@ install-user: release
 	"$$HOME/.local/bin/$(BINARY)" --version --verbose
 	@case ":$$PATH:" in *":$$HOME/.local/bin:"*) : ;; *) printf '%s\n' 'Warning: $$HOME/.local/bin is not on PATH.' ;; esac
 	@printf 'Installed %s\n' "$$HOME/.local/bin/$(BINARY)"
+
+install-termux: release
+	@test "$$(uname -o 2>/dev/null)" = Android && test "$$(id -u)" != 0 && test -x "$(PREFIX)/bin/pkg" || \
+		{ printf '%s\n' 'Run make install-termux as the Termux app user.' >&2; exit 1; }
+	install -m755 "$(RELEASE_BINARY)" "$(PREFIX)/bin/$(BINARY)"
+	"$(PREFIX)/bin/$(BINARY)" --version
 
 install-resolution-warning:
 	@resolved=$$(command -v "$(BINARY)" || true); \

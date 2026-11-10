@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      publish_snapshot:
+        description: Publish a downloadable continuous snapshot as a GitHub prerelease
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -191,6 +196,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Publish anonymous-download mirror as a non-stable prerelease
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_snapshot
         shell: bash
         run: |
           set -euo pipefail
@@ -206,10 +212,10 @@ jobs:
               "$GITHUB_RUN_ID" \
               "$GITHUB_SHA"
             gh release upload "$tag" dist/* --clobber
-            gh release edit "$tag" --prerelease --title "Allp continuous ${{ needs.metadata.outputs.display_version }}"
+            gh release edit "$tag" --prerelease --latest=false --title "Allp continuous ${{ needs.metadata.outputs.display_version }}"
           else
             gh release create "$tag" dist/* \
-              --prerelease \
+              --prerelease --latest=false \
               --target "$GITHUB_SHA" \
               --title "Allp continuous ${{ needs.metadata.outputs.display_version }}" \
               --notes "Automated verified continuous build. This is not a stable release."

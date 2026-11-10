@@ -15,6 +15,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[serde(rename_all = "snake_case")]
 pub enum OperatingSystem {
     Linux,
+    Android,
     MacOs,
     Windows,
     Other,
@@ -24,6 +25,7 @@ impl OperatingSystem {
     pub fn current() -> Self {
         match env::consts::OS {
             "linux" => Self::Linux,
+            "android" => Self::Android,
             "macos" => Self::MacOs,
             "windows" => Self::Windows,
             _ => Self::Other,
@@ -33,6 +35,7 @@ impl OperatingSystem {
     pub fn label(self) -> &'static str {
         match self {
             Self::Linux => "Linux",
+            Self::Android => "Android",
             Self::MacOs => "macOS",
             Self::Windows => "Windows",
             Self::Other => "Other",
@@ -102,6 +105,7 @@ impl Architecture {
 pub enum LibcFamily {
     Glibc,
     Musl,
+    Bionic,
     Other,
 }
 
@@ -111,6 +115,9 @@ impl LibcFamily {
     }
 
     fn from_target_env(os: OperatingSystem, target_env: &str) -> Option<Self> {
+        if os == OperatingSystem::Android {
+            return Some(Self::Bionic);
+        }
         if os != OperatingSystem::Linux {
             return None;
         }
@@ -127,6 +134,7 @@ impl LibcFamily {
         match self {
             Self::Glibc => "glibc",
             Self::Musl => "musl",
+            Self::Bionic => "bionic",
             Self::Other => "other",
         }
     }
@@ -184,6 +192,15 @@ impl PlatformContext {
         let os = OperatingSystem::current();
         let (distribution, distribution_family) = if os == OperatingSystem::Linux {
             detect_linux_distribution(Path::new("/etc/os-release"))
+        } else if os == OperatingSystem::Android && termux_prefix().is_some() {
+            (
+                Some(Distribution {
+                    id: "termux".to_owned(),
+                    name: "Termux".to_owned(),
+                    version: env::var("TERMUX_VERSION").ok(),
+                }),
+                None,
+            )
         } else {
             (None, None)
         };
@@ -225,6 +242,14 @@ impl PlatformContext {
         }
     }
 
+    pub fn is_termux(&self) -> bool {
+        self.os == OperatingSystem::Android
+            && self
+                .distribution
+                .as_ref()
+                .is_some_and(|distribution| distribution.id == "termux")
+    }
+
     pub fn target_triple(&self) -> Option<String> {
         let arch = self.architecture.as_str();
         match self.os {
@@ -235,9 +260,23 @@ impl PlatformContext {
             },
             OperatingSystem::MacOs => Some(format!("{arch}-apple-darwin")),
             OperatingSystem::Windows => Some(format!("{arch}-pc-windows-msvc")),
+            OperatingSystem::Android if self.is_termux() => match self.architecture {
+                Architecture::Aarch64 | Architecture::X86_64 => {
+                    Some(format!("{arch}-linux-android"))
+                }
+                _ => None,
+            },
+            OperatingSystem::Android => None,
             OperatingSystem::Other => None,
         }
     }
+}
+
+pub(crate) fn termux_prefix() -> Option<PathBuf> {
+    let prefix = env::var_os("PREFIX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/data/data/com.termux/files/usr"));
+    (prefix.is_absolute() && prefix.join("bin/pkg").is_file()).then_some(prefix)
 }
 
 pub fn detect_linux_distribution(

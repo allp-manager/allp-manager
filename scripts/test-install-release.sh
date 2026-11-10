@@ -64,7 +64,11 @@ esac
 SH
 cat > "$test_root/helpers/uname" <<'SH'
 #!/bin/sh
-case "$1" in -s) printf '%s\n' "$ALLP_TEST_OS";; -m) printf 'x86_64\n';; esac
+case "$1" in
+    -s) printf '%s\n' "$ALLP_TEST_OS" ;;
+    -m) printf '%s\n' "${ALLP_TEST_ARCH:-x86_64}" ;;
+    -o) printf '%s\n' "${ALLP_TEST_UNAME_OS:-}" ;;
+esac
 SH
 cat > "$test_root/helpers/sha256sum" <<'SH'
 #!/bin/sh
@@ -164,6 +168,29 @@ fixture latest
 run_installer
 grep -q 'Installed Allp 9.8.7' "$case_dir/output"
 pass 'the normal latest stable manifest remains supported'
+
+fixture termux
+termux_prefix="$case_dir/prefix"
+mkdir -p "$termux_prefix/bin" "$termux_prefix/tmp"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$termux_prefix/bin/pkg"
+chmod +x "$termux_prefix/bin/pkg"
+unset ALLP_INSTALL_DIR
+for architecture in x86_64 aarch64; do
+    (
+        archive="allp-v9.8.7-$architecture-linux-android.tar.gz"
+        tar -czf "$test_root/assets/$archive" -C "$test_root/payload" allp
+        (cd "$test_root/assets" && write_checksum > "$archive.sha256")
+    )
+    ALLP_TEST_OS=Linux ALLP_TEST_UNAME_OS=Android ALLP_TEST_ARCH="$architecture" \
+        PREFIX="$termux_prefix" TMPDIR="$termux_prefix/tmp" run_installer 9.8.7
+    "$ALLP_TEST_CMP" "$test_root/payload/allp" "$termux_prefix/bin/allp"
+done
+if ALLP_TEST_OS=Linux ALLP_TEST_UNAME_OS=Android ALLP_TEST_UID=0 \
+    PREFIX="$termux_prefix" TMPDIR="$termux_prefix/tmp" run_installer 9.8.7; then
+    fail 'the Termux installer accepted a root shell'
+fi
+grep -q 'as the Termux app user' "$case_dir/output"
+pass 'Termux selects Android archives and installs into PREFIX/bin as the app user'
 
 if command -v python3 >/dev/null 2>&1; then
     fixture latest_fallback

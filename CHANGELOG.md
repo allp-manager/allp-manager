@@ -8,17 +8,23 @@ All notable changes to Allp will be documented in this file.
 
 ### Release Title
 
-Allp v0.6.5 prerelease
+Allp v0.6.5
 
 ### Changed
 
 - Report native test results and retain per-platform logs for prerelease branches.
 - Keep pip, pipx, uv, npm, pnpm, and Yarn Classic inventories tied to their native
   installer for removal and profile restore.
+- Display the three-part version for tagged Stable releases. Public Continuous
+  snapshots now require an explicit workflow dispatch.
 
 ### Fixed
 
 - Resolve macOS account IDs from Directory Services using its tabular listing.
+- Search PyPI without system pip, and use the project's `.venv` consistently
+  for pip install, inventory, removal, and maintenance.
+- Check pnpm global availability before planning upgrades and explain missing
+  optional tools when a backend is explicitly selected.
 - Parse tab-delimited search results on newer DNF5 versions while keeping DNF4 support.
 - Run Snap CLI fixtures on ARM64 and parse macOS account records consistently in
   Windows tests.
@@ -58,6 +64,9 @@ Allp v0.6.5 prerelease
 
 ### Added
 
+- Native WinGet support for the community source on Windows.
+- Native package management for the Android Termux app user and Bionic release
+  binaries for ARM64 and x86-64.
 - Add a manually dispatched Arch User Repository build and publish workflow
   for already published stable releases.
 - Release installer `--sync-existing` and repeatable `--replace-existing`

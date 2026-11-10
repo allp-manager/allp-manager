@@ -8,9 +8,12 @@ trap 'rm -rf "$fixture"' EXIT
 version="9.8.7"
 archive="$fixture/allp-v${version}-x86_64-unknown-linux-gnu.tar.gz"
 printf '%s\n' 'fixture binary archive' >"$archive"
+for target in aarch64-linux-android x86_64-linux-android; do
+    printf '%s\n' 'fixture Android archive' >"$fixture/allp-v${version}-${target}.tar.gz"
+done
 (
     cd "$fixture"
-    sha256sum "$(basename "$archive")" >"$(basename "$archive").sha256"
+    for archive in *.tar.gz; do sha256sum "$archive" >"$archive.sha256"; done
 )
 
 python3 "$root/scripts/generate-release-manifest.py" \
@@ -29,9 +32,13 @@ import sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 assert manifest["version"] == "9.8.7"
 assert manifest["channel"] == "stable"
-assert manifest["assets"][0]["target"] == "x86_64-unknown-linux-gnu"
-assert manifest["assets"][0]["libc"] == "glibc"
-assert len(manifest["assets"][0]["sha256"]) == 64
+assets = {asset["target"]: asset for asset in manifest["assets"]}
+assert assets["x86_64-unknown-linux-gnu"]["libc"] == "glibc"
+for target in ("aarch64-linux-android", "x86_64-linux-android"):
+    assert assets[target]["os"] == "android"
+    assert assets[target]["libc"] == "bionic"
+    assert assets[target]["binary"] == "allp"
+assert all(len(asset["sha256"]) == 64 for asset in assets.values())
 PY
 
 python3 "$root/scripts/generate-release-manifest.py" \

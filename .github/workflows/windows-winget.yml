@@ -1,0 +1,71 @@
+name: Windows WinGet smoke
+
+on:
+  push:
+    branches: [main, "prerelease-*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  winget-native:
+    name: WinGet on Windows Server 2025
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Allp for Windows
+        run: cargo build --locked --release --bin allp
+      - name: Prepare Microsoft's WinGet client
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $aliasDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+          $env:PATH = "$aliasDir;$env:PATH"
+          function Test-WinGet {
+            $app = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
+            if (-not $app) { return $false }
+            try {
+              $version = & $app.Source --version | Select-Object -Last 1
+              if ($LASTEXITCODE -ne 0 -or $version -notmatch '^v?(\d+\.\d+(?:\.\d+)?)\s*$') { return $false }
+              Write-Host "WinGet $version"
+              # v1.29 stopped truncating identifiers in redirected table output.
+              return [version]$Matches[1] -ge [version]'1.29'
+            } catch {
+              return $false
+            }
+          }
+          if (-not (Test-WinGet)) {
+            # Official Microsoft bootstrap for a fresh Windows Sandbox account.
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -Scope CurrentUser -Force -Repository PSGallery
+            Repair-WinGetPackageManager -AllUsers -Latest -Force
+            if (-not (Test-WinGet)) {
+              try {
+                Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
+              } catch {
+                Write-Warning "App Installer registration returned: $_"
+              }
+            }
+            for ($attempt = 0; $attempt -lt 12; $attempt++) {
+              if (Test-WinGet) { break }
+              Start-Sleep -Seconds 2
+            }
+          }
+          if (-not (Test-WinGet)) { throw 'Microsoft WinGet 1.29 or newer did not start on this Windows runner.' }
+          $aliasDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Exercise native WinGet through Allp
+        shell: pwsh
+        run: ./scripts/test-winget.ps1 -AllpPath ./target/release/allp.exe -OutputDirectory winget-native-results -LiveLifecycle
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: winget-native-results
+          path: winget-native-results/
+          if-no-files-found: warn
+          retention-days: 14

@@ -82,7 +82,21 @@ fn standard_executable_directories() -> Vec<PathBuf> {
         }
         paths
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "android")]
+    {
+        let mut paths = Vec::new();
+        if let Some(prefix) = crate::platform::termux_prefix() {
+            paths.push(prefix.join("bin"));
+        }
+        paths.push(PathBuf::from("/system/bin"));
+        paths
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    )))]
     {
         Vec::new()
     }

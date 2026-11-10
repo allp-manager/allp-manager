@@ -882,7 +882,7 @@ fn standard_candidates(os: OperatingSystem) -> Vec<HomebrewCandidate> {
                 executable: PathBuf::from("/usr/local/bin/brew"),
             },
         ],
-        OperatingSystem::Windows | OperatingSystem::Other => Vec::new(),
+        OperatingSystem::Android | OperatingSystem::Windows | OperatingSystem::Other => Vec::new(),
     }
 }
 

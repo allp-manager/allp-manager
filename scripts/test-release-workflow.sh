@@ -288,16 +288,19 @@ test_missing_release_title_or_notes_fail() {
     pass "missing release title or notes prevented release finalization"
 }
 
-test_github_release_workflow_is_tag_only() {
+test_github_release_publication_is_tag_only() {
     local workflow="$SOURCE_ROOT/.github/workflows/release.yml"
 
     [ -f "$workflow" ] || fail "release workflow missing"
     grep -q 'tags:' "$workflow" || fail "release workflow is not tag-triggered"
     grep -q '"v\*\.\*\.\*"' "$workflow" || fail "semantic-version tag trigger missing"
-    ! grep -q 'branches:' "$workflow" || fail "release workflow must not trigger on branches"
+    grep -q '"release-candidate-\*"' "$workflow" || fail "release candidate packaging trigger missing"
+    grep -q '^  publish:$' "$workflow" || fail "publication job missing"
+    awk '/^  publish:$/ { getline; exit ($0 !~ /if: github.ref_type == .tag./) }' "$workflow" ||
+        fail "only a tag may run the publication job"
     grep -q 'contents: write' "$workflow" || fail "release workflow must be able to create releases"
     grep -q 'gh release create' "$workflow" || fail "release workflow does not create GitHub Release"
-    pass "GitHub Release workflow is gated on semantic-version tags"
+    pass "candidate branches can package artifacts and only semantic-version tags can publish"
 }
 
 test_bump_modes_and_invalid_versions() {
@@ -364,7 +367,7 @@ test_existing_archive_is_not_overwritten
 test_missing_release_title_or_notes_fail
 test_bump_modes_and_invalid_versions
 test_interrupted_prepare_can_resume_without_overwriting_notes
-test_github_release_workflow_is_tag_only
+test_github_release_publication_is_tag_only
 test_release_scripts_do_not_use_sudo
 
 printf 'All release workflow tests passed in temporary repositories.\n'

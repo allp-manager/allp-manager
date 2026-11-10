@@ -100,6 +100,13 @@ impl AllpBuildIdentity {
         if self.channel == BuildChannel::Continuous && self.build_revision == 0 {
             return Err("continuous build revision must be positive".to_owned());
         }
+        if matches!(
+            self.channel,
+            BuildChannel::Stable | BuildChannel::Prerelease
+        ) && self.build_revision != 0
+        {
+            return Err("tagged release build revision must be zero".to_owned());
+        }
         if !matches!(self.git_commit.len(), 40 | 64)
             || !self.git_commit.bytes().all(|byte| byte.is_ascii_hexdigit())
         {

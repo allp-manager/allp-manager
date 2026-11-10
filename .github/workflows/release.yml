@@ -2,11 +2,13 @@ name: Release
 
 on:
   push:
+    branches:
+      - "release-candidate-*"
     tags:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   ALLP_BUILD_REVISION: "0"
@@ -18,6 +20,9 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -36,11 +41,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
-          test "$version" = "$cargo_version"
+          version="$cargo_version"
+          tag="v${version}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          commit="$(git rev-parse HEAD)"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            test "$GITHUB_REF_NAME" = "$tag"
+            test "$commit" = "$(git rev-list -n 1 "$tag")"
+          else
+            test "$GITHUB_REF_NAME" = "release-candidate-$version"
+          fi
           title="release/RELEASE_TITLE_v${version}.txt"
           notes="release/RELEASE_NOTES_v${version}.md"
           test -s "$title"
@@ -52,8 +63,6 @@ jobs:
             channel="$(tr -d '[:space:]' < "$channel_file")"
           fi
           [[ "$channel" == stable || "$channel" == prerelease ]]
-          commit="$(git rev-parse HEAD)"
-          test "$commit" = "$(git rev-list -n 1 "$tag")"
           printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$tag" >>"$GITHUB_OUTPUT"
           printf 'title=%s\n' "$title" >>"$GITHUB_OUTPUT"
@@ -65,13 +74,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - run: cargo fmt --all -- --check
-      - run: cargo check --all-targets
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --lib --bins --test catalog --test exit_codes --test modularity
+      - name: Require test runs for the tagged Stable source
+        if: github.ref_type == 'tag' && steps.version.outputs.channel == 'stable'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_COMMIT&per_page=100" > test-runs.json
+          for workflow in ci.yml backend-canary.yml windows-winget.yml termux-smoke.yml; do
+            jq --exit-status --arg path ".github/workflows/$workflow" --arg sha "$RELEASE_COMMIT" \
+              'any(.workflow_runs[]; (.path | split("@")[0]) == $path and .head_sha == $sha and .conclusion == "success")' \
+              test-runs.json >/dev/null || { printf 'No successful %s run for %s\n' "$workflow" "$RELEASE_COMMIT" >&2; exit 1; }
+          done
+      - run: cargo check --locked --all-targets
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --lib --bins --test catalog --test exit_codes --test modularity
       - run: bash scripts/check-architecture.sh
       - run: sh -n scripts/install-release.sh
       - run: bash scripts/test-install-release.sh
-      - run: cargo build --release
+      - run: cargo build --locked --release
 
   binary:
     needs: validate
@@ -102,15 +125,41 @@ jobs:
             target: x86_64-pc-windows-msvc
             archive: zip
             binary: allp.exe
+          - os: ubuntu-24.04
+            target: aarch64-linux-android
+            archive: tar.gz
+            binary: allp
+            android: true
+          - os: ubuntu-24.04
+            target: x86_64-linux-android
+            archive: tar.gz
+            binary: allp
+            android: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo test --lib --bins --test catalog --test exit_codes --test modularity
-      - run: cargo build --release --target "${{ matrix.target }}"
+          targets: ${{ matrix.target }}
+      - name: Configure Android NDK linker
+        if: matrix.android
+        shell: bash
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:?Missing Android NDK}}"
+          linker="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/${RELEASE_TARGET}24-clang"
+          test -x "$linker"
+          target_key="$(tr '[:lower:]-' '[:upper:]_' <<<"$RELEASE_TARGET")"
+          printf 'CARGO_TARGET_%s_LINKER=%s\n' "$target_key" "$linker" >> "$GITHUB_ENV"
+          printf 'CARGO_TARGET_%s_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384\n' "$target_key" >> "$GITHUB_ENV"
+      - run: cargo test --locked --lib --bins --test catalog --test exit_codes --test modularity
+        if: matrix.android != true
+      - run: cargo build --locked --release --target "${{ matrix.target }}"
       - name: Verify the compiled release identity
+        if: matrix.android != true
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
@@ -123,6 +172,12 @@ jobs:
           identity="$("$binary" --version --verbose | tr -d '\r')"
           test "$(awk '/^Channel:$/ { getline; print $1 }' <<<"$identity")" = "$ALLP_BUILD_CHANNEL"
           test "$(awk '/^Commit:$/ { getline; print $1 }' <<<"$identity")" = "$ALLP_GIT_SHA"
+      - name: Verify Android executable links against Android libc
+        if: matrix.android
+        shell: bash
+        run: |
+          readelf --wide --program-headers "target/${{ matrix.target }}/release/allp" |
+            grep -F '[Requesting program interpreter: /system/bin/linker64]'
       - name: Package Unix binary
         if: matrix.archive == 'tar.gz'
         shell: bash
@@ -157,7 +212,7 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  publish:
+  package:
     needs: [validate, binary]
     runs-on: ubuntu-latest
     steps:
@@ -173,6 +228,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ needs.validate.outputs.commit }}'
+          if [[ "$GITHUB_REF_TYPE" == branch ]]; then
+            # The candidate checkout needs a local archive ref. It is never pushed.
+            git tag --force '${{ needs.validate.outputs.tag }}' HEAD
+          fi
           test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 '${{ needs.validate.outputs.tag }}')"
           scripts/release-finalize.sh --archive
           scripts/release-finalize.sh --checksum
@@ -194,6 +254,24 @@ jobs:
           python3 scripts/generate-release-manifest.py \
             --verify dist/allp-release-manifest.json \
             --dist dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-${{ needs.validate.outputs.tag }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [validate, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-${{ needs.validate.outputs.tag }}
+          path: dist
       - name: Create or update GitHub Release
         shell: bash
         run: |
@@ -201,17 +279,19 @@ jobs:
           tag="${{ needs.validate.outputs.tag }}"
           title="$(cat '${{ needs.validate.outputs.title }}')"
           mapfile -t assets < <(find dist -maxdepth 1 -type f -printf '%p\n' | sort)
-          release_flags=()
           if [[ "$RELEASE_CHANNEL" == prerelease ]]; then
             release_flags=(--prerelease --latest=false)
+          else
+            release_flags=(--prerelease=false --latest=true)
           fi
           if gh release view "$tag" >/dev/null 2>&1; then
+            test "$(gh release view "$tag" --json isPrerelease --jq .isPrerelease)" = true
+            gh release upload "$tag" "${assets[@]}" --clobber
             gh release edit "$tag" \
               --verify-tag \
               "${release_flags[@]}" \
               --title "$title" \
               --notes-file "${{ needs.validate.outputs.notes }}"
-            gh release upload "$tag" "${assets[@]}" --clobber
           else
             gh release create "$tag" "${assets[@]}" \
               --verify-tag \

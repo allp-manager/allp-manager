@@ -16,7 +16,7 @@ usage() {
         '  --sync-existing  Replace writable standalone Allp copies, keeping backups.' \
         '                   Never invokes sudo or changes package-manager-owned paths.' \
         '  --replace-existing /path/allp  Explicitly include a custom standalone copy (repeatable).' \
-        '  ALLP_INSTALL_DIR Select the destination (default: ~/.local/bin; root: /usr/local/bin).'
+        '  ALLP_INSTALL_DIR Select the destination (default: ~/.local/bin; root: /usr/local/bin; Termux: $PREFIX/bin).'
 }
 while [ "$#" -gt 0 ]; do
     argument="$1"
@@ -58,6 +58,33 @@ for command in curl tar install mktemp uname sed id cmp grep dirname cp mv rm st
     fi
 done
 
+case "$(uname -s)" in
+    Linux)
+        os_target="linux"
+        if [ "$(uname -o 2>/dev/null || true)" = Android ] || [ -x /system/bin/getprop ]; then
+            if [ "$(id -u)" = 0 ]; then
+                printf 'error: install Allp as the Termux app user, outside the root shell\n' >&2
+                exit 1
+            fi
+            case "${PREFIX:-}" in
+                /*) ;;
+                *) printf 'error: Android installation requires the Termux app and its PREFIX\n' >&2; exit 1 ;;
+            esac
+            if [ ! -x "$PREFIX/bin/pkg" ]; then
+                printf 'error: Termux package tools were not found under PREFIX\n' >&2
+                exit 1
+            fi
+            os_target="android"
+            install_dir="${ALLP_INSTALL_DIR:-$PREFIX/bin}"
+        fi
+        ;;
+    Darwin) os_target="darwin" ;;
+    *)
+        printf 'error: this installer supports Linux, macOS, and Termux; use the release archive directly on other systems\n' >&2
+        exit 1
+        ;;
+esac
+
 if [ "$(id -u)" = 0 ] && [ -z "${ALLP_INSTALL_DIR:-}" ]; then
     install_dir="/usr/local/bin"
 fi
@@ -66,15 +93,6 @@ case "$install_dir" in
     *) printf 'error: ALLP_INSTALL_DIR must be an absolute path\n' >&2; exit 1 ;;
 esac
 install_dir="${install_dir%/}"
-
-case "$(uname -s)" in
-    Linux) os_target="linux" ;;
-    Darwin) os_target="darwin" ;;
-    *)
-        printf 'error: this installer supports Linux and macOS; use the release archive directly on other systems\n' >&2
-        exit 1
-        ;;
-esac
 
 case "$(uname -m)" in
     x86_64 | amd64) architecture="x86_64" ;;
@@ -88,6 +106,9 @@ esac
 target="${architecture}-unknown-linux-gnu"
 if [ "$os_target" = "darwin" ]; then
     target="${architecture}-apple-darwin"
+elif [ "$os_target" = "android" ]; then
+    target="${architecture}-linux-android"
+    TMPDIR="${TMPDIR:-$PREFIX/tmp}"
 fi
 
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/allp-install.XXXXXX")"
@@ -230,7 +251,12 @@ add_candidate() {
 }
 add_candidate "$install_dir/allp"
 add_candidate "${HOME}/.local/bin/allp"
-add_candidate '/usr/local/bin/allp'
+if [ "$os_target" = android ]; then
+    standard_copy="$PREFIX/bin/allp"
+else
+    standard_copy='/usr/local/bin/allp'
+fi
+add_candidate "$standard_copy"
 while IFS= read -r candidate; do
     if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
         printf 'error: explicitly selected installation does not exist: %s\n' "$candidate" >&2
@@ -267,7 +293,7 @@ while IFS= read -r candidate; do
         continue
     fi
     case "$candidate" in
-        "${HOME}/.local/bin/allp"|/usr/local/bin/allp)
+        "${HOME}/.local/bin/allp"|"$standard_copy")
             if [ "$sync_existing" = true ]; then
                 printf '%s\n' "$candidate" >> "$temporary_dir/targets"
             else
@@ -283,11 +309,11 @@ while IFS= read -r candidate; do
 done < "$temporary_dir/candidates"
 
 owner_uid() {
-    if [ "$os_target" = linux ]; then stat -c '%u' -- "$1";
+    if [ "$os_target" != darwin ]; then stat -c '%u' -- "$1";
     else stat -f '%u' "$1"; fi
 }
 directory_mode() {
-    if [ "$os_target" = linux ]; then stat -c '%a' -- "$1";
+    if [ "$os_target" != darwin ]; then stat -c '%a' -- "$1";
     else stat -f '%Lp' "$1"; fi
 }
 # Preflight every destination before replacing any binary. Never elevate implicitly.

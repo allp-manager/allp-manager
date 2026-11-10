@@ -42,7 +42,9 @@ The destination is `~/.local/bin/allp`. The PATH command above applies to the cu
 
 ## Termux on Android
 
-Termux is not currently a supported ALLP Manager environment. `make install` uses `sudo` and installs to `/usr/local/bin`; this does not fit a standard Termux installation. `make install-user` avoids sudo during installation, but does not make package operations compatible with Termux: ALLP Manager’s APT mutations still require root. Native Termux support needs separate runtime, path and privilege handling. Until that support is implemented and tested, manage Termux packages with its native `pkg` command.
+Run Allp as the Termux app user on Android. Use an Android release archive for ARM64 or x86-64, or build in Termux with `pkg install rust clang make git` followed by `make install-termux` in the source checkout. The release installer runs with `sh install-allp.sh` and installs to `$PREFIX/bin` by default.
+
+The `termux` backend (`--from pkg` is also accepted) searches and lists packages, shows package details, and plans installation, removal, and upgrades in the Termux prefix. It uses the APT or Pacman tools configured for that Termux installation. Termux rejects package management from an effective UID of 0, including root shells on rooted devices. Leave the root shell before using Allp there. Preview an upgrade with `allp upgrade --from termux --dry-run`.
 
 ## Verify path and identity
 

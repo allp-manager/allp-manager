@@ -25,7 +25,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, rpm-ostree on Bazzite/Atomic hosts, Flatpak, Snap, Homebrew/Linuxbrew, Python and Node installers, and Rust/Cargo, then shows the exact native command or local API request before anything mutates the system.
 
-Current build version: **0.6.5.1** (Cargo base version **0.6.5**)
+Stable release **0.6.5**
 Maturity: **public alpha**
 
 ## Start Here
@@ -60,7 +60,7 @@ Core principles:
 
 ## Supported Systems
 
-The platform layer detects Linux distributions and package-manager families, including Bazzite as a Fedora-family image-based host, plus macOS, Windows, WSL, containers, architecture, libc, users, executable ownership, and platform data directories. Package orchestration is maturest on Linux. Homebrew/macOS remains experimental; Windows currently supports compilation, diagnostics, release-target selection, and deferred self-replacement, but does not advertise Linux-only Snap or Flatpak backends.
+The platform layer detects Linux distributions and package-manager families, including Bazzite as a Fedora-family image-based host, plus macOS, Windows, WSL, Android Termux, containers, architecture, libc, users, executable ownership, and platform data directories. Windows uses Microsoft's WinGet community source through App Installer. For example, `allp search sharkdp.fd --from winget` searches that source and `allp upgrade --from winget --dry-run` previews available upgrades.
 
 ## Backends
 
@@ -69,6 +69,8 @@ The platform layer detects Linux distributions and package-manager families, inc
 | APT | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | Pacman | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | DNF / DNF5 | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
+| WinGet community source | Windows | yes | yes | yes | yes | yes | yes | yes |
+| Termux package manager | Android Termux | yes | yes | yes | APT only | yes | yes | yes |
 | rpm-ostree / Bazzite / Fedora Atomic | Experimental | yes | yes | yes | yes | yes | yes | yes |
 | Flatpak | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | Snap | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
@@ -115,7 +117,9 @@ The destination is `~/.local/bin/allp`. The PATH command above applies to the cu
 
 ### Termux on Android
 
-Termux is not currently a supported ALLP Manager environment. `make install` uses `sudo` and installs to `/usr/local/bin`; this does not fit a standard Termux installation. `make install-user` avoids sudo during installation, but does not make package operations compatible with Termux: ALLP Manager’s APT mutations still require root. Native Termux support needs separate runtime, path and privilege handling. Until that support is implemented and tested, manage Termux packages with its native `pkg` command.
+Run Allp as the Termux app user on Android. Use an Android release archive for ARM64 or x86-64, or build in Termux with `pkg install rust clang make git` followed by `make install-termux` in the source checkout. The release installer runs with `sh install-allp.sh` and installs to `$PREFIX/bin` by default.
+
+The `termux` backend (`--from pkg` is also accepted) searches and lists packages, shows package details, and plans installation, removal, and upgrades in the Termux prefix. It uses the APT or Pacman tools configured for that Termux installation. Termux rejects package management from an effective UID of 0, including root shells on rooted devices. Leave the root shell before using Allp there. Preview an upgrade with `allp upgrade --from termux --dry-run`.
 
 ### Verify installation
 
@@ -600,7 +604,7 @@ See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-Version `0.6.5` is an opt-in prerelease with package maintenance fixes,
+Version `0.6.5` is the Stable release with WinGet, Termux, package maintenance fixes,
 installer-aware Node and Python tools, and retained self-update backups.
 See [CHANGELOG.md](CHANGELOG.md).
 

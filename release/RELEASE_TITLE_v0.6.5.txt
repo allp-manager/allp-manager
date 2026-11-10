@@ -1,1 +1,1 @@
-Allp v0.6.5 prerelease
+Allp v0.6.5

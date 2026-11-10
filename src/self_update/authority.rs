@@ -28,7 +28,7 @@ pub fn detect_update_authority(
     platform: &PlatformContext,
     runner: &dyn ProcessRunner,
 ) -> UpdateAuthority {
-    if !matches!(platform.os, crate::platform::OperatingSystem::Linux) {
+    if platform.os != crate::platform::OperatingSystem::Linux && !platform.is_termux() {
         return UpdateAuthority::AllpSelfUpdate;
     }
 

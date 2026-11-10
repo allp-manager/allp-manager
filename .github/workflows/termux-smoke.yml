@@ -1,0 +1,55 @@
+name: Termux Android smoke
+
+on:
+  push:
+    branches: [main, "prerelease-*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-termux:
+    name: Android x86_64 Termux package lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - name: Build the Android CLI
+        shell: bash
+        env:
+          ALLP_BUILD_CHANNEL: stable
+          ALLP_BUILD_REVISION: "0"
+          ALLP_BUILD_OFFICIAL: "1"
+          ALLP_GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
+          test -x "$CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER"
+          cargo build --locked --release --target x86_64-linux-android
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          printf 'ALLP_SMOKE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+      - name: Enable KVM on the runner
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise Termux packages as a non-root Android UID
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: default
+          arch: x86_64
+          disable-animations: true
+          script: bash scripts/test-termux-android.sh target/x86_64-linux-android/release/allp termux-results "$ALLP_SMOKE_VERSION" "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: termux-android-results
+          path: termux-results
+          if-no-files-found: ignore
