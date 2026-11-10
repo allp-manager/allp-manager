@@ -100,10 +100,11 @@ Assert-Result ($upgrade.complete -and ($upgradePlan -or $current)) 'Upgrade prev
 
 if ($LiveLifecycle) {
     Assert-Result ($before.Count -eq 0) 'The disposable test machine had no preexisting copy of the test package.'
+    Invoke-Logged 'allp-update' $allp @('update', '--from', 'winget', '--skip-self-update', '--yes', '--no-interactive', '--no-tui', '--no-color')
+    $updated = Get-Content -LiteralPath (Join-Path $results 'allp-update.stdout.log') -Raw
+    Assert-Result ($updated -match 'source update --name winget' -and $updated -match '\bWinGet\s+Completed\b') 'Allp completed a live WinGet community source refresh.'
     $cleanupNeeded = $true
     try {
-        $updated = Invoke-Logged 'allp-update' $allp @('update', '--from', 'winget', '--skip-self-update', '--yes', '--no-interactive', '--json') -Json
-        Assert-Result ($updated.complete -and [bool]($updated.results | Where-Object { $_.command -match 'source update --name winget' -and $_.status -in 'completed','updated','up_to_date' })) 'Allp completed a live WinGet community source refresh.'
         Invoke-Logged 'allp-install' $allp @('install', $package, '--from', 'winget', '--yes', '--no-interactive', '--no-tui', '--no-color')
         $installed = @(Get-AllpInventory 'allp-list-installed')
         Assert-Result ($installed.Count -eq 1 -and [bool]$installed[0].version) 'Allp installed the real portable package and listed its version.'
@@ -118,7 +119,7 @@ if ($LiveLifecycle) {
     } finally {
         if ($cleanupNeeded) {
             try {
-                Invoke-Logged 'native-cleanup' $winget @('uninstall', '--id', $package, '--exact', '--source', 'winget', '--disable-interactivity')
+                Invoke-Logged 'native-cleanup' $winget @('uninstall', '--id', $package, '--exact', '--source', 'winget', '--disable-interactivity') -ExpectedExitCodes @(0, $noApplicationsFound)
             } catch {
                 Write-Warning "Cleanup of the disposable runner's test package did not succeed: $_"
             }
