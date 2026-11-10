@@ -1193,7 +1193,7 @@ fn resolve_sudo() -> AllpResult<PathBuf> {
     resolve_trusted_root_helper("sudo")
 }
 
-fn resolve_root_required_executable(path: &Path) -> AllpResult<PathBuf> {
+pub(crate) fn resolve_root_required_executable(path: &Path) -> AllpResult<PathBuf> {
     // Integration tests exercise the full sudo command construction with isolated fake
     // executables. This escape hatch is absent from release builds and is coupled to the
     // already-explicit fake-sudo test boundary.

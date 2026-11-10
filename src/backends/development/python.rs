@@ -251,7 +251,7 @@ fn python_maintenance(
     let target = target.unwrap_or(DeveloperTarget::All);
 
     if python_selector_allows(selector, "pip") && target.includes(DeveloperTarget::Environment) {
-        append_pip_environment_plan(backend, commands, runner, operation, &mut output)?;
+        append_pip_environment_plan(backend, runner, operation, &mut output)?;
     }
     if python_selector_allows(selector, "pipx") && target.includes(DeveloperTarget::Tools) {
         append_pipx_plan(backend, commands, runner, operation, &mut output)?;
@@ -274,7 +274,6 @@ fn python_maintenance(
 
 fn append_pip_environment_plan(
     backend: &PythonBackend,
-    commands: &CommandMap,
     runner: &dyn ProcessRunner,
     operation: OperationKind,
     output: &mut MaintenancePlan,
@@ -289,7 +288,28 @@ fn append_pip_environment_plan(
         return Ok(());
     };
 
-    let outdated = match pip_outdated(backend, commands, runner) {
+    let venv = Path::new(&venv);
+    let interpreters = if cfg!(windows) {
+        ["Scripts/python.exe", "Scripts/python3.exe"]
+    } else {
+        ["bin/python3", "bin/python"]
+    };
+    let python = interpreters
+        .map(|name| venv.join(name))
+        .into_iter()
+        .find(|path| path.is_file());
+    let Some(python) = python.filter(|_| venv.is_absolute() && venv.join("pyvenv.cfg").is_file())
+    else {
+        output.records.push(python_record(
+            backend,
+            "pip environment",
+            crate::domain::OperationStatus::Protected,
+            "VIRTUAL_ENV does not point to a virtual environment with a Python interpreter",
+        ));
+        return Ok(());
+    };
+
+    let outdated = match pip_outdated(backend, &python, runner) {
         Ok(outdated) => outdated,
         Err(AllpError::InvalidInput(message)) if message.contains("externally managed") => {
             output.records.push(python_record(
@@ -316,7 +336,9 @@ fn append_pip_environment_plan(
         .iter()
         .map(|package| package.name.as_str())
         .collect::<Vec<_>>();
-    let command = python_module_pip_command(commands, &["install", "--upgrade"], &package_ids)?;
+    let command = NativeCommand::new(&python)
+        .args(["-m", "pip", "install", "--upgrade"])
+        .args(package_ids);
     let versions = outdated
         .iter()
         .map(|package| {
@@ -335,7 +357,7 @@ fn append_pip_environment_plan(
         Some("PyPI".to_owned()),
         Some(format!(
             "active virtual environment · {} · pip uses the same native operation for update and upgrade · {versions}",
-            Path::new(&venv).display()
+            venv.display()
         )),
         command,
     ));
@@ -359,11 +381,24 @@ fn append_pipx_plan(
         return Ok(());
     };
 
-    if !tool_listing_has_entries(
+    let tools = capture_checked(
         backend,
         runner,
         NativeCommand::new(pipx).args(["list", "--json"]),
-    )? {
+    )?;
+    let tools = serde_json::from_str::<Value>(&tools)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("venvs")?
+                .as_object()
+                .map(|venvs| !venvs.is_empty())
+        })
+        .ok_or_else(|| AllpError::Parse {
+            backend: backend.display_name().to_owned(),
+            message: "pipx list did not return a valid venv inventory".to_owned(),
+        })?;
+    if !tools {
         output.records.push(python_record(
             backend,
             "pipx tools",
@@ -402,11 +437,12 @@ fn append_uv_tool_plan(
         return Ok(());
     };
 
-    if !tool_listing_has_entries(
+    let tools = capture_checked(
         backend,
         runner,
-        NativeCommand::new(uv).args(["tool", "list", "--json"]),
-    )? {
+        NativeCommand::new(uv).args(["tool", "list"]),
+    )?;
+    if tools.trim().is_empty() {
         output.records.push(python_record(
             backend,
             "uv tools",
@@ -437,11 +473,11 @@ struct PipOutdatedPackage {
 
 fn pip_outdated(
     backend: &PythonBackend,
-    commands: &CommandMap,
+    python: &Path,
     runner: &dyn ProcessRunner,
 ) -> AllpResult<Vec<PipOutdatedPackage>> {
     let command =
-        python_module_pip_command(commands, &["list", "--outdated", "--format=json"], &[])?;
+        NativeCommand::new(python).args(["-m", "pip", "list", "--outdated", "--format=json"]);
     let rendered = render_native_command(&command);
     let output = runner.capture(&command)?;
     if !output.success {
@@ -490,50 +526,6 @@ fn parse_pip_outdated_json(
             })
         })
         .collect())
-}
-
-fn tool_listing_has_entries(
-    backend: &PythonBackend,
-    runner: &dyn ProcessRunner,
-    command: NativeCommand,
-) -> AllpResult<bool> {
-    let rendered = render_native_command(&command);
-    let output = runner.capture(&command)?;
-    if !output.success {
-        return Err(AllpError::CommandFailed {
-            backend: backend.display_name().to_owned(),
-            command: rendered,
-            code: output.code,
-            stderr: output.stderr,
-        });
-    }
-    Ok(json_has_entries(&output.stdout))
-}
-
-fn json_has_entries(output: &str) -> bool {
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    match serde_json::from_str::<Value>(trimmed) {
-        Ok(Value::Object(map)) => !map.is_empty(),
-        Ok(Value::Array(items)) => !items.is_empty(),
-        _ => true,
-    }
-}
-
-fn python_module_pip_command(
-    commands: &CommandMap,
-    prefix: &[&str],
-    packages: &[&str],
-) -> AllpResult<NativeCommand> {
-    let python = commands
-        .get("python")
-        .ok_or_else(|| crate::domain::AllpError::BackendNotDetected("python".to_owned()))?;
-    Ok(NativeCommand::new(python)
-        .args(["-m", "pip"])
-        .args(prefix.iter().copied())
-        .args(packages.iter().copied()))
 }
 
 fn python_selector_allows(selector: Option<&str>, installer: &str) -> bool {

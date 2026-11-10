@@ -189,8 +189,7 @@ impl Backend for HomebrewBackend {
                 runner,
                 homebrew_command(brew).args(["list", "--formula", "--versions"]),
                 PrivilegeRequirement::OriginalUserRequired,
-            )
-            .unwrap_or_default(),
+            )?,
             "Homebrew formulae",
             "formula",
             &mut packages,
@@ -202,8 +201,7 @@ impl Backend for HomebrewBackend {
                 runner,
                 homebrew_command(brew).args(["list", "--cask", "--versions"]),
                 PrivilegeRequirement::OriginalUserRequired,
-            )
-            .unwrap_or_default(),
+            )?,
             "Homebrew casks",
             "cask",
             &mut packages,

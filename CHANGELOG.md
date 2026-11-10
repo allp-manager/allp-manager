@@ -4,6 +4,34 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Report deferred APT packages even when only a count is available, exclude
+  residual configuration entries from inventory, and fail metadata refreshes
+  when a repository fetch fails.
+- Report Flatpak no-op upgrades by installation scope and install the selected
+  remote and branch. Keep Pacman repository synchronization in the full upgrade.
+- Keep Node project discovery inside the current Git checkout and select one
+  manager for automatic project updates. Reject invalid npm outdated reports
+  and distinguish local tool versions from upgrade checks.
+  Inspect Python packages with the virtual environment's interpreter and use the
+  native tool inventories for pipx and uv.
+- Require an exact match for unattended installs and report backend failures
+  before making unattended removal choices. Keep Snap diagnostics valid UTF-8,
+  report truncated probe output, and recover stable update lookup when GitHub
+  marks a continuous build as latest.
+- Plan pnpm workspaces once from their root and skip projects with no outdated
+  packages. Preserve Flatpak installation, branch, and remote in profiles while
+  continuing to read existing profiles. Reject invalid npm inventories and
+  propagate Homebrew inventory errors. Preserve exact Zypper package names.
+- Keep the previous executable after a successful self-update, restore it on
+  verification failure, and parse the replacement helper's version argument.
+  Replace local state files atomically. Recover the
+  release installer's stable-tag lookup when the latest manifest is unavailable.
+- Refresh the compiled Git identity after the checked-out branch advances.
+- Use the native Snap installer with the resolved channel when a user-local
+  Allp build cannot run its privileged snapd installation helper.
+
 ### Documentation
 
 - Replace unavailable release-installer download instructions in both READMEs
@@ -13,6 +41,8 @@ All notable changes to Allp will be documented in this file.
 
 ### Added
 
+- Add a manually dispatched Arch User Repository build and publish workflow
+  for already published stable releases.
 - Release installer `--sync-existing` and repeatable `--replace-existing`
   reconcile explicitly scoped standalone Allp copies with private backups,
   all-target preflight, same-directory atomic replacement, and failure rollback.

@@ -64,28 +64,26 @@ fn flatpak_user_upgrade_deescalates_to_original_sudo_user() {
 }
 
 #[test]
-fn pacman_update_refreshes_sync_databases_with_policy_detail() {
+fn pacman_only_syncs_databases_with_a_full_upgrade() {
     let backend = PacmanBackend;
     let mut commands = CommandMap::new();
     commands.insert("pacman".to_owned(), PathBuf::from("/usr/bin/pacman"));
 
-    let plans = backend
+    assert!(backend
         .plan_update(&commands, &FlatpakProbeRunner, None, None)
-        .expect("Pacman update plan should be constructed")
+        .is_err());
+    let plans = backend
+        .plan_upgrade(&commands, &FlatpakProbeRunner, None, None)
+        .expect("Pacman upgrade plan should be constructed")
         .plans;
-    let plan = plans.first().expect("Pacman should have an update plan");
+    let plan = plans.first().expect("Pacman should have an upgrade plan");
 
-    assert_eq!(plan.operation, OperationKind::Update);
-    assert_eq!(plan.action, "Synchronize package databases");
+    assert_eq!(plan.operation, OperationKind::Upgrade);
     assert_eq!(plan.source.as_deref(), Some("Pacman repositories"));
     assert_eq!(
         render_execution_plan_with_context(plan, &RuntimePrivilegeContext::NormalUser),
-        "sudo -- /usr/bin/pacman -Sy"
+        "sudo -- /usr/bin/pacman -Syu"
     );
-    assert!(plan
-        .details
-        .iter()
-        .any(|(key, value)| key == "Policy" && value.contains("partial upgrades")));
 }
 
 struct FlatpakProbeRunner;

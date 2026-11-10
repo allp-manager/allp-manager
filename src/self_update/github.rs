@@ -227,7 +227,7 @@ impl ReleaseSource for GitHubReleaseSource<'_> {
         }
         match channel {
             UpdateChannel::Stable => self.latest_stable_release(current),
-            UpdateChannel::Prerelease => self.latest_semantic_prerelease(current),
+            UpdateChannel::Prerelease => self.latest_tagged_release(current, channel),
             UpdateChannel::Continuous => unreachable!("continuous channel rejected above"),
         }
     }
@@ -260,9 +260,13 @@ impl GitHubReleaseSource<'_> {
         let version = release
             .get("tag_name")
             .and_then(Value::as_str)
-            .ok_or_else(|| AllpError::InvalidInput("latest stable release has no tag".to_owned()))?
-            .parse::<Version>()
-            .map_err(AllpError::InvalidInput)?;
+            .and_then(|tag| {
+                let version = tag.parse::<Version>().ok()?;
+                (tag == format!("v{version}")).then_some(version)
+            });
+        let Some(version) = version else {
+            return self.latest_tagged_release(current, UpdateChannel::Stable);
+        };
         if version <= *current {
             return Ok(None);
         }
@@ -270,9 +274,10 @@ impl GitHubReleaseSource<'_> {
             .map(Some)
     }
 
-    fn latest_semantic_prerelease(
+    fn latest_tagged_release(
         &self,
         current: &Version,
+        channel: UpdateChannel,
     ) -> AllpResult<Option<ReleaseDescriptor>> {
         // Query only refs beginning with `v`; per-push `continuous-v...` tags cannot starve this
         // channel even when they dominate the ordinary releases feed.
@@ -284,15 +289,15 @@ impl GitHubReleaseSource<'_> {
         if response.status == 404 {
             return Ok(None);
         }
-        require_http_success("GitHub prerelease source", &refs_url, &response)?;
+        require_http_success("GitHub release source", &refs_url, &response)?;
         *self.response_etag.lock().expect("response ETag lock") = response.etag.clone();
         let refs: Value =
             serde_json::from_slice(&response.body).map_err(|error| AllpError::Parse {
-                backend: "GitHub prerelease source".to_owned(),
+                backend: "GitHub release source".to_owned(),
                 message: error.to_string(),
             })?;
         let refs = refs.as_array().ok_or_else(|| AllpError::Parse {
-            backend: "GitHub prerelease source".to_owned(),
+            backend: "GitHub release source".to_owned(),
             message: "GitHub matching refs response was not an array".to_owned(),
         })?;
         let mut versions = refs
@@ -300,7 +305,7 @@ impl GitHubReleaseSource<'_> {
             .filter_map(|reference| {
                 let name = reference.get("ref")?.as_str()?.strip_prefix("refs/tags/")?;
                 let version = name.parse::<Version>().ok()?;
-                (version > *current).then_some(version)
+                (name == format!("v{version}") && version > *current).then_some(version)
             })
             .collect::<Vec<_>>();
         versions.sort_unstable_by_key(|version| Reverse(*version));
@@ -315,18 +320,18 @@ impl GitHubReleaseSource<'_> {
             if release_response.status == 404 {
                 continue;
             }
-            require_http_success("GitHub prerelease source", &url, &release_response)?;
+            require_http_success("GitHub release source", &url, &release_response)?;
             let release: Value =
                 serde_json::from_slice(&release_response.body).map_err(|error| {
                     AllpError::Parse {
-                        backend: "GitHub prerelease source".to_owned(),
+                        backend: "GitHub release source".to_owned(),
                         message: error.to_string(),
                     }
                 })?;
-            if release
-                .get("draft")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
+            if release.get("tag_name").and_then(Value::as_str) != Some(tag.as_str())
+                || release.get("draft").and_then(Value::as_bool) == Some(true)
+                || (channel == UpdateChannel::Stable
+                    && release.get("prerelease").and_then(Value::as_bool) == Some(true))
             {
                 continue;
             }
@@ -346,7 +351,7 @@ impl GitHubReleaseSource<'_> {
         let tag = release
             .get("tag_name")
             .and_then(Value::as_str)
-            .expect("selected release has a tag")
+            .ok_or_else(|| AllpError::InvalidInput("selected release has no tag".to_owned()))?
             .to_owned();
         let manifest_url = release
             .get("assets")
@@ -968,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_lookup_uses_latest_endpoint_not_continuous_release_feed() {
+    fn stable_lookup_falls_back_to_semantic_tags_when_latest_is_continuous() {
         struct UrlHttp {
             responses: Mutex<Vec<HttpResponse>>,
             urls: Mutex<Vec<String>>,
@@ -999,7 +1004,16 @@ mod tests {
             "assets": []
         });
         let http = UrlHttp {
-            responses: Mutex::new(vec![response(release), response(manifest)]),
+            responses: Mutex::new(vec![
+                response(serde_json::json!({"tag_name":"continuous-v0.6.4.34"})),
+                response(serde_json::json!([
+                    {"ref": "refs/tags/v0.3.4"},
+                    {"ref": "refs/tags/v0.3.5"}
+                ])),
+                response(serde_json::json!({"tag_name":"v0.3.5", "prerelease":true})),
+                response(release),
+                response(manifest),
+            ]),
             urls: Mutex::new(Vec::new()),
         };
         GitHubReleaseSource::official(&http)
@@ -1008,6 +1022,9 @@ mod tests {
             .expect("stable candidate should exist");
         let urls = http.urls.lock().unwrap();
         assert!(urls[0].ends_with("/releases/latest"));
+        assert!(urls[1].ends_with("/git/matching-refs/tags/v"));
+        assert!(urls[2].ends_with("/releases/tags/v0.3.5"));
+        assert!(urls[3].ends_with("/releases/tags/v0.3.4"));
         assert!(!urls.iter().any(|url| url.contains("releases?per_page")));
     }
 

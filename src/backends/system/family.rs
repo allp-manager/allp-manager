@@ -316,7 +316,16 @@ fn parse_candidate_line(
         return None;
     }
 
-    let (raw_id, description, source) = if line.contains('|') {
+    let zypper_row = if backend.id() == "zypper" && line.contains('|') {
+        Some(zypper_package_row(line)?)
+    } else {
+        None
+    };
+    let (raw_id, description, source) = if let Some((name, _, repository)) = zypper_row {
+        (name.to_owned(), None, Some(repository.to_owned()))
+    } else if backend.id() == "zypper" && !line.contains(" - ") {
+        return None;
+    } else if line.contains('|') {
         let columns = line
             .split('|')
             .map(str::trim)
@@ -347,7 +356,11 @@ fn parse_candidate_line(
     };
 
     let (package_id, source) = split_repo_prefix(&raw_id, source);
-    let package_id = strip_version_suffix(&package_id);
+    let package_id = if backend.id() == "zypper" {
+        package_id
+    } else {
+        strip_version_suffix(&package_id)
+    };
     if package_id.is_empty() {
         return None;
     }
@@ -360,7 +373,7 @@ fn parse_candidate_line(
         domain: PackageDomain::System,
         package_id: package_id.clone(),
         display_name: package_id.clone(),
-        version: None,
+        version: zypper_row.map(|(_, version, _)| version.to_owned()),
         description: description.filter(|value| !value.is_empty()),
         source: source.or_else(|| Some(backend.config.source.to_owned())),
         installers: vec![backend.display_name().to_owned()],
@@ -388,12 +401,19 @@ fn parse_installed(backend: &SystemFamilyBackend, output: &str) -> Vec<Installed
             {
                 return None;
             }
-            let columns = line
-                .split_whitespace()
-                .filter(|part| !matches!(*part, "ii" | "i" | "[installed]"))
-                .collect::<Vec<_>>();
-            let raw_id = columns.first()?;
-            let package_id = strip_version_suffix(raw_id);
+            let (package_id, version, source) = if backend.id() == "zypper" {
+                let (name, version, repository) = zypper_package_row(line)?;
+                (name.to_owned(), Some(version.to_owned()), repository)
+            } else {
+                let mut columns = line
+                    .split_whitespace()
+                    .filter(|part| !matches!(*part, "ii" | "i" | "[installed]"));
+                (
+                    strip_version_suffix(columns.next()?),
+                    columns.next().map(str::to_owned),
+                    backend.config.source,
+                )
+            };
             Some(InstalledPackage {
                 backend_id: backend.id().to_owned(),
                 backend_name: backend.display_name().to_owned(),
@@ -401,13 +421,25 @@ fn parse_installed(backend: &SystemFamilyBackend, output: &str) -> Vec<Installed
                 domain: PackageDomain::System,
                 package_id: package_id.clone(),
                 display_name: package_id,
-                version: columns.get(1).map(|value| (*value).to_owned()),
+                version,
                 description: None,
-                source: Some(backend.config.source.to_owned()),
+                source: Some(source.to_owned()),
                 scope: Some("system".to_owned()),
             })
         })
         .collect()
+}
+
+fn zypper_package_row(line: &str) -> Option<(&str, &str, &str)> {
+    let mut columns = line.splitn(6, '|').map(str::trim);
+    let _status = columns.next()?;
+    let name = columns.next()?;
+    let kind = columns.next()?;
+    let version = columns.next()?;
+    let _architecture = columns.next()?;
+    let repository = columns.next()?;
+    (kind == "package" && !name.is_empty() && !version.is_empty())
+        .then_some((name, version, repository))
 }
 
 fn info_from_output(backend: &SystemFamilyBackend, package_id: &str, output: &str) -> PackageInfo {
@@ -540,7 +572,12 @@ pub const ZYPPER: SystemFamilyConfig = SystemFamilyConfig {
     }),
     list: Some(QueryTemplate {
         key: "zypper",
-        args: &["--non-interactive", "search", "--installed-only"],
+        args: &[
+            "--non-interactive",
+            "search",
+            "--installed-only",
+            "--details",
+        ],
     }),
     info: Some(QueryTemplate {
         key: "zypper",

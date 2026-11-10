@@ -233,6 +233,9 @@ pub trait Backend: Send + Sync {
         Err(error)
     }
 
+    /// Coalesce equivalent choices for installs without an explicit installation target.
+    fn filter_default_install_candidates(&self, _candidates: &mut Vec<PackageCandidate>) {}
+
     fn plan_install(
         &self,
         _commands: &CommandMap,

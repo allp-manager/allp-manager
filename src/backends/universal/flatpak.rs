@@ -1,7 +1,10 @@
 use crate::{
     backends::{
         contract::{command_path, BackendOperationCapability},
-        util::{capture_checked, match_kind, parse_key_value_lines, split_tab_or_whitespace},
+        util::{
+            capture_checked, capture_checked_with_privilege, match_kind, parse_key_value_lines,
+            split_tab_or_whitespace,
+        },
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
@@ -155,28 +158,73 @@ impl Backend for FlatpakBackend {
     ) -> AllpResult<BackendSearchReport> {
         let flatpak = command_path(self, commands, "flatpak")?;
         let probe = detect_flatpak_probe(commands, runner);
-        if !matches!(
-            probe.state,
-            FlatpakBackendState::InstalledUserScopeReady
-                | FlatpakBackendState::InstalledSystemScopeReady
-                | FlatpakBackendState::InstalledBothScopesReady
-        ) {
-            return Err(AllpError::NoConfiguredRemotes {
-                backend: self.display_name().to_owned(),
-            });
+        let scopes: &[FlatpakScope] = match probe.state {
+            FlatpakBackendState::InstalledUserScopeReady => &[FlatpakScope::User],
+            FlatpakBackendState::InstalledSystemScopeReady => &[FlatpakScope::System],
+            FlatpakBackendState::InstalledBothScopesReady => {
+                &[FlatpakScope::User, FlatpakScope::System]
+            }
+            FlatpakBackendState::BackendError(stderr) => {
+                return Err(AllpError::CommandFailed {
+                    backend: self.display_name().to_owned(),
+                    command: "flatpak remotes --user/--system".to_owned(),
+                    code: None,
+                    stderr,
+                });
+            }
+            _ => {
+                return Err(AllpError::NoConfiguredRemotes {
+                    backend: self.display_name().to_owned(),
+                });
+            }
+        };
+        let mut report = BackendSearchReport::default();
+        for &scope in scopes {
+            let output = capture_checked_with_privilege(
+                self,
+                runner,
+                NativeCommand::new(flatpak).args([
+                    "search",
+                    query,
+                    scope.cli_arg(),
+                    "--columns=application,name,description,version,branch,remotes",
+                ]),
+                match scope {
+                    FlatpakScope::User => PrivilegeRequirement::OriginalUserRequired,
+                    FlatpakScope::System => PrivilegeRequirement::NoElevation,
+                },
+            );
+            let output = match output {
+                Ok(output) => output,
+                Err(error) if scopes.len() == 1 => return Err(error),
+                Err(error) => {
+                    report.issues.push(BackendSearchIssue {
+                        kind: BackendSearchIssueKind::CommandFailed,
+                        stage: Some(format!("flatpak search {}", scope.cli_arg())),
+                        message: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let scoped = parse_flatpak_search(self, &output, query);
+            report.issues.extend(scoped.issues);
+            for mut candidate in scoped.candidates {
+                candidate.scope = Some(scope.label().to_owned());
+                if let Some(remotes) = candidate.metadata.get("flatpak.remote") {
+                    for remote in remotes.split(',').map(str::trim).filter(|r| !r.is_empty()) {
+                        let mut selected = candidate.clone();
+                        selected.source = Some(remote.to_owned());
+                        selected
+                            .metadata
+                            .insert("flatpak.remote".to_owned(), remote.to_owned());
+                        report.candidates.push(selected);
+                    }
+                } else {
+                    report.candidates.push(candidate);
+                }
+            }
         }
-
-        let output = capture_checked(
-            self,
-            runner,
-            NativeCommand::new(flatpak).args([
-                "search",
-                query,
-                "--columns=application,name,description,version,branch,remotes",
-            ]),
-        )?;
-
-        Ok(parse_flatpak_search(self, &output, query))
+        Ok(report)
     }
 
     fn plan_search_prerequisite(&self, commands: &CommandMap) -> AllpResult<Option<ExecutionPlan>> {
@@ -295,6 +343,29 @@ impl Backend for FlatpakBackend {
         )
     }
 
+    fn filter_default_install_candidates(&self, candidates: &mut Vec<PackageCandidate>) {
+        let key = |candidate: &PackageCandidate| {
+            (
+                candidate.package_id.clone(),
+                candidate.source.clone(),
+                candidate.version.clone(),
+                candidate.metadata.get("flatpak.branch").cloned(),
+            )
+        };
+        let user_matches = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.backend_id == self.id() && candidate.scope.as_deref() == Some("User")
+            })
+            .map(key)
+            .collect::<std::collections::BTreeSet<_>>();
+        candidates.retain(|candidate| {
+            candidate.backend_id != self.id()
+                || candidate.scope.as_deref() != Some("System")
+                || !user_matches.contains(&key(candidate))
+        });
+    }
+
     fn plan_install(
         &self,
         commands: &CommandMap,
@@ -312,8 +383,21 @@ impl Backend for FlatpakBackend {
                         .to_owned(),
                 )
             })?;
-        let mut command = NativeCommand::new(flatpak).args(["install", "--user", remote]);
-        command = command.arg(candidate.package_id.as_str());
+        let scope = match candidate.scope.as_deref() {
+            Some("System") => FlatpakScope::System,
+            _ => FlatpakScope::User,
+        };
+        let branch = candidate.metadata.get("flatpak.branch");
+        let reference = branch
+            .map(|branch| format!("{}//{branch}", candidate.package_id))
+            .unwrap_or_else(|| candidate.package_id.clone());
+        let command = NativeCommand::new(flatpak).args([
+            "install",
+            scope.cli_arg(),
+            "--",
+            remote,
+            &reference,
+        ]);
         Ok(ExecutionPlan {
             backend_id: self.id().to_owned(),
             backend_name: self.display_name().to_owned(),
@@ -321,15 +405,13 @@ impl Backend for FlatpakBackend {
             action: "Install Flatpak application".to_owned(),
             package_id: Some(candidate.package_id.clone()),
             source: candidate.source.clone(),
-            scope: Some("User".to_owned()),
-            details: candidate
-                .metadata
-                .get("flatpak.branch")
+            scope: Some(scope.label().to_owned()),
+            details: branch
                 .map(|branch| vec![("Branch".to_owned(), branch.clone())])
                 .unwrap_or_default(),
             command,
-            privilege: PrivilegeRequirement::OriginalUserRequired,
-            requires_root: false,
+            privilege: scope.privilege(),
+            requires_root: scope == FlatpakScope::System,
             interactive: true,
         })
     }
@@ -496,7 +578,7 @@ fn flatpak_plan(
 ) -> ExecutionPlan {
     ExecutionPlan {
         backend_id: backend.id().to_owned(),
-        backend_name: backend.display_name().to_owned(),
+        backend_name: format!("{} ({})", backend.display_name(), scope.label()),
         operation,
         action: action.to_owned(),
         package_id: None,
@@ -549,8 +631,10 @@ impl FlatpakScope {
 fn parse_flatpak_update_status(stdout: &str, stderr: &str) -> Option<(OperationStatus, String)> {
     let output = format!("{stdout}\n{stderr}");
     let lower = output.to_ascii_lowercase();
-    if lower.contains("nothing to do") {
-        return Some((OperationStatus::UpToDate, "nothing to do".to_owned()));
+    for message in ["nothing to do", "nothing to update"] {
+        if lower.contains(message) {
+            return Some((OperationStatus::UpToDate, message.to_owned()));
+        }
     }
     if lower.lines().any(|line| {
         let line = line.trim();
@@ -902,6 +986,7 @@ mod tests {
         commands.insert("flatpak".to_owned(), PathBuf::from("/usr/bin/flatpak"));
         let mut metadata = BTreeMap::new();
         metadata.insert("flatpak.remote".to_owned(), "flathub".to_owned());
+        metadata.insert("flatpak.branch".to_owned(), "beta".to_owned());
         let candidate = PackageCandidate {
             backend_id: "flatpak".to_owned(),
             backend_name: "Flatpak".to_owned(),
@@ -914,7 +999,7 @@ mod tests {
             source: Some("flathub".to_owned()),
             installers: vec!["Flatpak".to_owned()],
             artifact_kind: "universal application".to_owned(),
-            scope: None,
+            scope: Some("System".to_owned()),
             match_kind: MatchKind::Exact,
             identity: PackageCandidate::infer_identity(
                 MatchKind::Exact,
@@ -935,7 +1020,14 @@ mod tests {
                 .iter()
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect::<Vec<_>>(),
-            vec!["install", "--user", "flathub", "org.telegram.desktop"]
+            vec![
+                "install",
+                "--system",
+                "--",
+                "flathub",
+                "org.telegram.desktop//beta"
+            ]
         );
+        assert!(plan.requires_root);
     }
 }

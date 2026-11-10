@@ -350,7 +350,7 @@ fn decode_chunked(bytes: &[u8]) -> Result<Vec<u8>, SnapdRestError> {
         if size == 0 {
             break;
         }
-        if remaining.len() < size + 2 || &remaining[size..size + 2] != b"\r\n" {
+        if remaining.get(size..).and_then(|tail| tail.get(..2)) != Some(b"\r\n") {
             return Err(SnapdRestError::UnrecognizedResponse(
                 "truncated chunked body".to_owned(),
             ));
@@ -375,6 +375,15 @@ mod tests {
     #[test]
     fn query_values_are_percent_encoded() {
         assert_eq!(percent_encode("C++ editor"), "C%2B%2B%20editor");
+    }
+
+    #[test]
+    fn impossible_chunk_size_is_a_parse_error() {
+        let body = format!("{:x}\r\n", usize::MAX);
+        assert!(matches!(
+            decode_chunked(body.as_bytes()),
+            Err(SnapdRestError::UnrecognizedResponse(_))
+        ));
     }
 
     #[test]

@@ -15,7 +15,7 @@
 <p align="center">
   <img alt="Version 0.6.4" src="https://img.shields.io/badge/version-0.6.4-7c3aed">
   <img alt="Public alpha" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
-  <img alt="Rust 1.74+" src="https://img.shields.io/badge/rust-1.74%2B-dea584">
+  <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-dea584">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
 </p>
 

@@ -1,6 +1,6 @@
 use crate::{
     domain::{AllpError, AllpResult, Capability},
-    operations::{self, OperationContext},
+    operations::{self, install::ExactInstall, OperationContext},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -35,6 +35,34 @@ pub struct ProfilePackage {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flatpak: Option<ProfileFlatpak>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileFlatpak {
+    pub scope: FlatpakScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum FlatpakScope {
+    User,
+    System,
+}
+
+impl FlatpakScope {
+    fn label(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::System => "system",
+        }
+    }
 }
 
 impl Profile {
@@ -65,7 +93,11 @@ impl Profile {
 
             let key = (
                 package.backend.to_ascii_lowercase(),
-                package.package.to_owned(),
+                package.package.to_ascii_lowercase(),
+                package
+                    .flatpak
+                    .as_ref()
+                    .map(|app| (app.scope, app.branch.as_deref())),
             );
 
             if !seen.insert(key) {
@@ -108,12 +140,39 @@ pub fn save_current(context: &OperationContext<'_>, name: &str) -> AllpResult<Pr
     let mut packages = report
         .packages
         .into_iter()
-        .map(|package| ProfilePackage {
-            backend: package.backend_id,
-            package: package.package_id,
-            version: package.version,
+        .map(|package| {
+            let flatpak = if package.backend_id == "flatpak" {
+                let scope = match package.scope.as_deref() {
+                    Some(scope) if scope.eq_ignore_ascii_case("user") => FlatpakScope::User,
+                    Some(scope) if scope.eq_ignore_ascii_case("system") => FlatpakScope::System,
+                    scope => {
+                        return Err(AllpError::InvalidInput(format!(
+                            "cannot save Flatpak '{}' from installation '{}'",
+                            package.package_id,
+                            scope.unwrap_or("unknown"),
+                        )))
+                    }
+                };
+                Some(ProfileFlatpak {
+                    scope,
+                    branch: package
+                        .description
+                        .as_deref()
+                        .and_then(|text| text.strip_prefix("branch: "))
+                        .map(str::to_owned),
+                    remote: package.source,
+                })
+            } else {
+                None
+            };
+            Ok(ProfilePackage {
+                backend: package.backend_id,
+                package: package.package_id,
+                version: package.version,
+                flatpak,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<AllpResult<Vec<_>>>()?;
 
     packages.sort_by(|a, b| a.backend.cmp(&b.backend).then(a.package.cmp(&b.package)));
 
@@ -191,14 +250,7 @@ pub fn show(config_dir: &Path, name: &str, renderer: &crate::cli::Renderer) -> A
         println!("Packages: {}", profile.packages.len());
 
         for package in &profile.packages {
-            match &package.version {
-                Some(version) => {
-                    println!("  {}:{} ({version})", package.backend, package.package);
-                }
-                None => {
-                    println!("  {}:{}", package.backend, package.package);
-                }
-            }
+            println!("  {}", package.description());
         }
     }
 
@@ -250,20 +302,24 @@ pub fn install(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
     );
 
     for package in &profile.packages {
-        context.renderer.info_message(&format!(
-            "Profile package: {}:{}{}",
-            package.backend,
-            package.package,
-            package
-                .version
-                .as_deref()
-                .map(|version| format!(" ({version})"))
-                .unwrap_or_default()
-        ));
+        context
+            .renderer
+            .info_message(&format!("Profile package: {}", package.description()));
 
         let package_context = context.with_backend_filter(Some(package.backend.as_str()));
 
-        operations::install::run(&package_context, &package.package)?;
+        let exact = package
+            .flatpak
+            .as_ref()
+            .map_or_else(ExactInstall::default, |app| ExactInstall {
+                scope: Some(app.scope.label()),
+                source: app.remote.as_deref(),
+                metadata: app
+                    .branch
+                    .as_deref()
+                    .map(|branch| ("flatpak.branch", branch)),
+            });
+        operations::install::run_exact(&package_context, &package.package, exact)?;
     }
 
     if context.dry_run {
@@ -374,66 +430,15 @@ fn write_profile(config_dir: &Path, profile: &Profile) -> AllpResult<()> {
 }
 
 fn write_toml_atomically(path: &Path, profile: &Profile) -> AllpResult<()> {
-    let parent = path.parent().ok_or_else(|| {
-        AllpError::InvalidInput(format!("profile path has no parent: {}", path.display()))
-    })?;
-
-    fs::create_dir_all(parent)?;
-
     let contents = toml::to_string_pretty(profile).map_err(|error| AllpError::Parse {
         backend: "Allp profile".to_owned(),
         message: error.to_string(),
     })?;
-
-    let file_name = path
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or("profile.toml");
-
-    let temporary = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
-
-    let result = (|| -> AllpResult<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
-
+    crate::state::write_file_atomically(path, |file| {
         file.write_all(contents.as_bytes())?;
         file.write_all(b"\n")?;
-        file.sync_all()?;
-
-        if !path.exists() {
-            fs::rename(&temporary, path)?;
-            return Ok(());
-        }
-
-        let backup = parent.join(format!(".{file_name}.rollback-{}", std::process::id()));
-
-        fs::rename(path, &backup)?;
-
-        if let Err(error) = fs::rename(&temporary, path) {
-            let rollback = fs::rename(&backup, path);
-
-            return match rollback {
-                Ok(()) => Err(error.into()),
-
-                Err(rollback_error) => Err(AllpError::Io(std::io::Error::other(format!(
-                    "profile replacement failed ({error}); \
-                             rollback also failed: {rollback_error}"
-                )))),
-            };
-        }
-
-        fs::remove_file(backup)?;
-
         Ok(())
-    })();
-
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-
-    result
+    })
 }
 
 fn validate_profile_name(name: &str) -> AllpResult<()> {
@@ -495,7 +500,42 @@ fn validate_package_entry(package: &ProfilePackage) -> AllpResult<()> {
         }
     }
 
+    if let Some(app) = &package.flatpak {
+        if !package.backend.eq_ignore_ascii_case("flatpak")
+            || [app.branch.as_deref(), app.remote.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|value| {
+                    value.is_empty()
+                        || value.len() > MAX_PACKAGE_ID_LEN
+                        || value
+                            .chars()
+                            .any(|ch| ch.is_whitespace() || ch.is_control())
+                })
+        {
+            return Err(AllpError::InvalidInput(format!(
+                "invalid Flatpak installation metadata for package '{}'",
+                package.package
+            )));
+        }
+    }
     Ok(())
+}
+
+impl ProfilePackage {
+    fn description(&self) -> String {
+        let mut description = format!("{}:{}", self.backend, self.package);
+        if let Some(version) = &self.version {
+            description.push_str(&format!(" ({version})"));
+        }
+        if let Some(app) = &self.flatpak {
+            description.push_str(&format!(" · {}", app.scope.label()));
+            if let Some(branch) = &app.branch {
+                description.push_str(&format!(" · {branch}"));
+            }
+        }
+        description
+    }
 }
 
 #[cfg(test)]
@@ -519,11 +559,13 @@ mod tests {
                     backend: "apt".to_owned(),
                     package: "git".to_owned(),
                     version: None,
+                    flatpak: None,
                 },
                 ProfilePackage {
                     backend: "apt".to_owned(),
                     package: "git".to_owned(),
                     version: None,
+                    flatpak: None,
                 },
             ],
         };
@@ -540,6 +582,7 @@ mod tests {
                 backend: "cargo".to_owned(),
                 package: "ripgrep".to_owned(),
                 version: Some("14.1.0".to_owned()),
+                flatpak: None,
             }],
         };
 
@@ -559,6 +602,7 @@ mod tests {
                 backend: "apt".to_owned(),
                 package: "git\u{1b}[2J".to_owned(),
                 version: None,
+                flatpak: None,
             }],
         };
 

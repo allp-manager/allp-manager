@@ -84,19 +84,20 @@ fn select_candidate_inner(
             "no candidates are available for selection".to_owned(),
         ));
     }
-    let registry_non_exact = candidates.len() == 1
-        && matches!(
-            candidates[0].domain,
-            PackageDomain::Python | PackageDomain::Node | PackageDomain::Rust
-        )
+    let single_non_exact = candidates.len() == 1
+        && (prompt_single
+            || matches!(
+                candidates[0].domain,
+                PackageDomain::Python | PackageDomain::Node | PackageDomain::Rust
+            ))
         && candidates[0].match_kind != MatchKind::Exact;
-    if candidates.len() == 1 && !registry_non_exact && (!prompt_single || no_interactive) {
+    if candidates.len() == 1 && !single_non_exact && (!prompt_single || no_interactive) {
         return Ok(0);
     }
     if no_interactive {
-        if registry_non_exact {
+        if single_non_exact {
             return Err(AllpError::AmbiguousSelection(
-                "registry result is not an exact match; select it explicitly or use an exact package ID"
+                "result is not an exact match; select it explicitly or use an exact package ID"
                     .to_owned(),
             ));
         }

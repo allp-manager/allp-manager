@@ -19,7 +19,6 @@ const CAPABILITIES: &[Capability] = &[
     Capability::Search,
     Capability::Install,
     Capability::Remove,
-    Capability::Update,
     Capability::Upgrade,
     Capability::List,
     Capability::Info,
@@ -170,6 +169,10 @@ impl Backend for PacmanBackend {
         candidate: &PackageCandidate,
     ) -> AllpResult<ExecutionPlan> {
         let pacman = command_path(self, commands, "pacman")?;
+        let target = candidate
+            .source
+            .as_ref()
+            .map(|repository| format!("{repository}/{}", candidate.package_id));
         Ok(plan(
             self,
             pacman,
@@ -179,7 +182,11 @@ impl Backend for PacmanBackend {
                 package_id: Some(candidate.package_id.clone()),
                 source: candidate.source.clone(),
                 scope: candidate.scope.clone(),
-                args: ["-S", "--", candidate.package_id.as_str()],
+                args: [
+                    "-S",
+                    "--",
+                    target.as_deref().unwrap_or(&candidate.package_id),
+                ],
             },
         ))
     }
@@ -202,33 +209,6 @@ impl Backend for PacmanBackend {
                 args: ["-R", "--", package.package_id.as_str()],
             },
         ))
-    }
-
-    fn plan_update(
-        &self,
-        commands: &CommandMap,
-        _runner: &dyn ProcessRunner,
-        _selector: Option<&str>,
-        _target: Option<DeveloperTarget>,
-    ) -> AllpResult<MaintenancePlan> {
-        let pacman = command_path(self, commands, "pacman")?;
-        let mut plan = plan(
-            self,
-            pacman,
-            PlanSpec {
-                operation: OperationKind::Update,
-                action: "Synchronize package databases",
-                package_id: None,
-                source: Some("Pacman repositories".to_owned()),
-                scope: Some("system".to_owned()),
-                args: ["-Sy"],
-            },
-        );
-        plan.details.push((
-            "Policy".to_owned(),
-            "Pacman -Sy refreshes sync databases only; run a full upgrade before installing packages to avoid partial upgrades".to_owned(),
-        ));
-        Ok(MaintenancePlan::from_plans(vec![plan]))
     }
 
     fn plan_upgrade(

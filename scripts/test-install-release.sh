@@ -32,11 +32,19 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
-if [ "${url##*/}" = allp-release-manifest.json ]; then
-    printf '{"version":"9.8.7"}\n' > "$output"
-else
-    /usr/bin/cp "$ALLP_TEST_ROOT/assets/${url##*/}" "$output"
-fi
+case "$url" in
+    */latest/download/allp-release-manifest.json)
+        [ "${ALLP_TEST_LATEST_MISSING:-}" != 1 ] || exit 22
+        printf '{"version":"9.8.7"}\n' > "$output" ;;
+    */git/matching-refs/tags/v)
+        printf '%s\n' '[{"ref":"refs/tags/v9.8.7"},{"ref":"refs/tags/v10.0.0"},{"ref":"refs/tags/v9.9.0"},{"ref":"refs/tags/continuous-v99.1.2.3"}]' > "$output" ;;
+    */releases/tags/v10.0.0)
+        printf '%s\n' '{"tag_name":"v10.0.0","prerelease":true,"draft":false,"assets":[{"name":"allp-release-manifest.json"}]}' > "$output" ;;
+    */releases/tags/v9.9.0) exit 22 ;;
+    */releases/tags/v9.8.7)
+        printf '%s\n' '{"tag_name":"v9.8.7","prerelease":false,"draft":false,"assets":[{"name":"allp-release-manifest.json"}]}' > "$output" ;;
+    *) /usr/bin/cp "$ALLP_TEST_ROOT/assets/${url##*/}" "$output" ;;
+esac
 SH
 cat > "$test_root/helpers/uname" <<'SH'
 #!/bin/sh
@@ -135,6 +143,18 @@ run_installer 9.8.7
 /usr/bin/cmp "$test_root/payload/allp" "$case_dir/main/allp"
 grep -q 'backup:' "$case_dir/output"
 pass 'legacy exact-version argument works and keeps the old binary'
+
+fixture latest
+run_installer
+grep -q 'Installed Allp 9.8.7' "$case_dir/output"
+pass 'the normal latest stable manifest remains supported'
+
+if command -v python3 >/dev/null 2>&1; then
+    fixture latest_fallback
+    ALLP_TEST_LATEST_MISSING=1 run_installer
+    grep -q 'Installed Allp 9.8.7' "$case_dir/output"
+    pass 'a missing latest manifest falls back to a published stable semantic tag'
+fi
 
 fixture sync
 run_installer --sync-existing 9.8.7 --replace-existing "$case_dir/other/allp"

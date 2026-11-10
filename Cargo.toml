@@ -2,7 +2,7 @@
 name = "allp"
 version = "0.6.4"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.85"
 license = "MIT"
 description = "A transparent package-manager orchestrator for Linux"
 repository = "https://github.com/allp-manager/allp-manager"

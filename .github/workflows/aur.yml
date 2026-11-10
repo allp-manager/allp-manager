@@ -1,0 +1,114 @@
+name: AUR package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable tag (vX.Y.Z)
+        required: true
+        type: string
+      publish:
+        description: Publish the tested package to AUR
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aur-package
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: pacman -Syu --noconfirm --needed cargo git jq
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate and test the AUR package
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Expected a stable tag in vX.Y.Z format." >&2
+            exit 1
+          fi
+          curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/allp-manager/allp-manager/releases/tags/$TAG" |
+            jq -e --arg tag "$TAG" '.tag_name == $tag and (.draft == false) and (.prerelease == false)' >/dev/null
+
+          version="${TAG#v}"
+          build_dir="$(mktemp -d)"
+          archive="$build_dir/allp-manager-$version.tar.gz"
+          curl -fsSL --retry 3 "https://github.com/allp-manager/allp-manager/archive/refs/tags/$TAG.tar.gz" \
+            -o "$archive"
+          checksum="$(sha256sum "$archive" | cut -d' ' -f1)"
+          sed -e "s/@VERSION@/$version/" -e "s/@SHA256@/$checksum/" \
+            packaging/aur/PKGBUILD > "$build_dir/PKGBUILD"
+
+          useradd --create-home builder
+          chown -R builder:builder "$build_dir"
+          cd "$build_dir"
+          runuser -u builder -- makepkg --noconfirm
+          mkdir -p "$GITHUB_WORKSPACE/aur-package"
+          cp PKGBUILD "$GITHUB_WORKSPACE/aur-package/"
+          runuser -u builder -- makepkg --printsrcinfo > "$GITHUB_WORKSPACE/aur-package/.SRCINFO"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aur-package
+          path: aur-package/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  publish:
+    if: inputs.publish && github.ref == 'refs/heads/main' && github.repository == 'allp-manager/allp-manager'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: aur-package
+          path: aur-package
+      - name: Push package metadata to AUR
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${AUR_SSH_PRIVATE_KEY:?Configure the AUR_SSH_PRIVATE_KEY Actions secret first.}"
+          ssh_dir="$(mktemp -d)"
+          trap 'rm -rf "$ssh_dir"' EXIT
+          umask 077
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$ssh_dir/key"
+          unset AUR_SSH_PRIVATE_KEY
+          ssh-keyscan -T 10 -t ed25519 aur.archlinux.org > "$ssh_dir/known_hosts" 2>/dev/null
+          # Published at https://aur.archlinux.org/
+          test "$(ssh-keygen -lf "$ssh_dir/known_hosts" | awk '{print $2}')" = \
+            'SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4'
+          export GIT_SSH_COMMAND="ssh -F /dev/null -i $ssh_dir/key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts"
+
+          git clone ssh://aur@aur.archlinux.org/allp-manager.git aur-repo
+          cp aur-package/PKGBUILD aur-package/.SRCINFO aur-repo/
+          cd aur-repo
+          if git diff --quiet -- PKGBUILD .SRCINFO; then
+            echo "AUR already contains this package."
+            exit 0
+          fi
+          current="$(git show HEAD:.SRCINFO | awk '$1 == "pkgver" { print $3; exit }')"
+          version="${TAG#v}"
+          if [[ -z "$current" || "$current" == "$version" || "$(printf '%s\n' "$current" "$version" | sort -V | tail -n1)" != "$version" ]]; then
+            echo "AUR package version $current must be older than $version." >&2
+            exit 1
+          fi
+          git add -- PKGBUILD .SRCINFO
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "Update allp-manager to $version"
+          git push origin HEAD

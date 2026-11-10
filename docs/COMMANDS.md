@@ -143,10 +143,10 @@ Examples:
 - DNF refreshes metadata cache.
 - Snap refreshes installed snaps.
 - Flatpak updates installed apps/runtimes.
-- Pacman synchronizes package databases with `pacman -Sy`; run a full upgrade before installing packages to avoid partial upgrades.
+- Use `allp upgrade --from pacman` to synchronize repositories and upgrade installed packages together.
 - npm project update uses `npm update` after `npm outdated --json` inspection.
 - npm global update uses `npm update --global` after global outdated inspection.
-- pnpm project/workspace/global update uses native `pnpm update` forms.
+- pnpm uses its native update commands. Workspace maintenance runs recursively from the workspace root once.
 - Yarn update detects the Yarn major version and uses Yarn 1 or modern Yarn commands.
 - pip active-environment update inspects `python -m pip list --outdated --format=json`.
 - pipx tools update uses `pipx upgrade-all`.
@@ -258,6 +258,10 @@ does not pin them. Backend IDs are also preserved: Allp does not translate an
 APT package into a DNF package or infer cross-ecosystem equivalence. Native
 system listings may include dependencies, so exported profiles must be reviewed
 before being moved to another host.
+
+New Flatpak entries record the user or default system installation, remote,
+and branch when available. Existing profiles without these fields can still
+be loaded. Profile restore requires the saved package ID in the chosen backend.
 
 ## `self-update`
 

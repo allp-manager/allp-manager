@@ -2,12 +2,15 @@ use crate::{
     cli::{confirm_execution, select_installed, ConfirmationRequest},
     domain::{AllpError, AllpResult, OperationStatus},
     execution::render_execution_plan_with_context,
-    operations::{list, validate_package_id, OperationContext},
+    operations::{incomplete_backend_error, list, validate_package_id, OperationContext},
 };
 use std::time::Instant;
 
 pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
     let report = list::gather(context)?;
+    if !report.complete && context.no_interactive {
+        return Err(incomplete_backend_error("Removal", &report.issues));
+    }
     for issue in &report.issues {
         context
             .renderer
@@ -54,6 +57,9 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
     });
 
     if matches.is_empty() {
+        if !report.complete {
+            return Err(incomplete_backend_error("Removal", &report.issues));
+        }
         return Err(AllpError::PackageNotFound(package.to_owned()));
     }
 
