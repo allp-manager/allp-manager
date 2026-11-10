@@ -1357,7 +1357,13 @@ impl Renderer {
         }
     }
 
-    pub fn maintenance_summary(&self, report: &MultiOperationReport, verbose: bool, dry_run: bool) {
+    pub fn maintenance_summary(
+        &self,
+        report: &MultiOperationReport,
+        verbose: bool,
+        explicitly_selected: bool,
+        dry_run: bool,
+    ) {
         if self.json {
             #[derive(Serialize)]
             struct MaintenanceEnvelope<'a> {
@@ -1419,8 +1425,9 @@ impl Renderer {
             .iter()
             .filter(|record| record.status.is_optional_unavailable())
             .count();
+        let hide_optional = !verbose && !explicitly_selected;
         for record in &report.records {
-            if record.status.is_optional_unavailable() && !verbose {
+            if record.status.is_optional_unavailable() && hide_optional {
                 continue;
             }
             let marker = self.status_marker(&record.status);
@@ -1450,7 +1457,7 @@ impl Renderer {
                 }
             }
         }
-        if hidden_unavailable > 0 && !verbose {
+        if hidden_unavailable > 0 && hide_optional {
             println!("\nOptional unavailable targets hidden; use --verbose to show details.");
         }
 

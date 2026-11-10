@@ -146,9 +146,10 @@ Examples:
 - Use `allp upgrade --from pacman` to synchronize repositories and upgrade installed packages together.
 - npm project update uses `npm update` after `npm outdated --json` inspection.
 - npm global update uses `npm update --global` after global outdated inspection.
-- pnpm uses its native update commands. Workspace maintenance runs recursively from the workspace root once.
+- pnpm checks for outdated global packages before planning global maintenance. Workspace maintenance runs recursively from the workspace root once.
 - Yarn update detects the Yarn major version and uses Yarn 1 or modern Yarn commands.
-- pip active-environment update inspects `python -m pip list --outdated --format=json`.
+- pip uses the active virtual environment or an existing project `.venv`. From your project root, run `python3 -m venv .venv` to create one (`python -m venv .venv` on Windows). Allp uses that interpreter for installation, inventory, removal, and outdated checks.
+- PyPI search and package information can use the public PyPI JSON API when pip is missing. Installing still requires a Python environment with pip, pipx, or uv.
 - pipx tools update uses `pipx upgrade-all`.
 - uv tools update uses `uv tool upgrade --all`.
 

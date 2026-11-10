@@ -199,9 +199,12 @@ pub fn run(
             records,
         };
         update_phase(context, operation_name, "Phase 6: Summary");
-        context
-            .renderer
-            .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+        context.renderer.maintenance_summary(
+            &report,
+            context.verbose > 0,
+            context.backend_filter.is_some(),
+            context.dry_run,
+        );
         return Ok(report);
     }
 
@@ -219,9 +222,12 @@ pub fn run(
             records,
         };
         update_phase(context, operation_name, "Phase 6: Summary");
-        context
-            .renderer
-            .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+        context.renderer.maintenance_summary(
+            &report,
+            context.verbose > 0,
+            context.backend_filter.is_some(),
+            context.dry_run,
+        );
         return Ok(report);
     }
 
@@ -267,9 +273,12 @@ pub fn run(
             records,
         };
         update_phase(context, operation_name, "Phase 6: Summary");
-        context
-            .renderer
-            .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+        context.renderer.maintenance_summary(
+            &report,
+            context.verbose > 0,
+            context.backend_filter.is_some(),
+            context.dry_run,
+        );
         return Ok(report);
     }
 
@@ -691,9 +700,12 @@ pub fn run(
         tui.finish();
     }
     update_phase(context, operation_name, "Phase 6: Summary");
-    context
-        .renderer
-        .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+    context.renderer.maintenance_summary(
+        &report,
+        context.verbose > 0,
+        context.backend_filter.is_some(),
+        context.dry_run,
+    );
     Ok(report)
 }
 
@@ -743,9 +755,12 @@ fn finish_before_execution_for_privilege_failure(
         records,
     };
     update_phase(context, operation_name, "Phase 6: Summary");
-    context
-        .renderer
-        .maintenance_summary(&report, context.verbose > 0, context.dry_run);
+    context.renderer.maintenance_summary(
+        &report,
+        context.verbose > 0,
+        context.backend_filter.is_some(),
+        context.dry_run,
+    );
     Ok(report)
 }
 

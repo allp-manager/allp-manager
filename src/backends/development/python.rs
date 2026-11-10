@@ -1,7 +1,7 @@
 use crate::{
     backends::{
         contract::command_path,
-        util::{capture_checked, match_kind},
+        util::{capture_checked_with_privilege, match_kind},
         Backend, CommandMap, CommandRequirement,
     },
     domain::{
@@ -12,9 +12,11 @@ use crate::{
     },
     execution::{render_native_command, ProcessRunner},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub struct PythonBackend;
 
@@ -48,6 +50,27 @@ const OPTIONAL: &[CommandRequirement] = &[
     },
 ];
 const DOMAINS: &[PackageDomain] = &[PackageDomain::Python];
+pub(crate) const PIP_SETUP: &str = "pip is unavailable for this Python. In your project, create an environment with `python3 -m venv .venv` (Windows: `python -m venv .venv`), or use an installed pipx or uv for CLI tools.";
+const PYPI_LOOKUP: &str = r#"
+import json
+import sys
+from urllib.error import HTTPError
+from urllib.request import urlopen
+
+try:
+    with urlopen(f'https://pypi.org/pypi/{sys.argv[1]}/json', timeout=10) as response:
+        limit = 16 * 1024 * 1024
+        data = response.read(limit + 1)
+        if len(data) > limit:
+            sys.exit('PyPI project metadata exceeded 16 MiB')
+        info = json.loads(data)['info']
+except HTTPError as error:
+    if error.code != 404:
+        raise
+    print('null')
+else:
+    print(json.dumps({key: info[key] for key in ('name', 'version', 'summary')}))
+"#;
 
 impl Backend for PythonBackend {
     fn id(&self) -> &'static str {
@@ -88,8 +111,25 @@ impl Backend for PythonBackend {
         runner: &dyn ProcessRunner,
         query: &str,
     ) -> AllpResult<BackendSearchReport> {
-        let output = python_pip_capture(commands, runner, &["index", "versions", query])?;
-        let installers = installer_choices(commands);
+        let Some(output) =
+            python_pip_capture_if_available(commands, runner, &["index", "versions", query])?
+        else {
+            let candidates = pypi_project(commands, runner, query)?
+                .map(|project| {
+                    candidate(
+                        self,
+                        &project.name,
+                        Some(project.version),
+                        project.summary,
+                        crate::domain::MatchKind::Exact,
+                        installer_choices(commands, false),
+                    )
+                })
+                .into_iter()
+                .collect();
+            return Ok(BackendSearchReport::complete(candidates));
+        };
+        let installers = installer_choices(commands, true);
         let candidates = parse_pypi_candidates(self, &output, query, installers);
         if candidates.is_empty() && !output.trim().is_empty() {
             return Ok(
@@ -127,8 +167,17 @@ impl Backend for PythonBackend {
         runner: &dyn ProcessRunner,
         package_id: &str,
     ) -> AllpResult<PackageInfo> {
-        let output = python_pip_capture(commands, runner, &["show", package_id])?;
-        Ok(info_from_pip_show(self, package_id, &output))
+        match installed_pip_info(commands, runner, package_id)? {
+            Some(output) => Ok(info_from_pip_show(self, package_id, &output)),
+            None => {
+                let project = require_pypi_project(commands, runner, package_id)?;
+                let mut info = info_from_pip_show(self, &project.name, "");
+                info.version = Some(project.version);
+                info.description = project.summary;
+                info.scope = None;
+                Ok(info)
+            }
+        }
     }
 
     fn raw_info(
@@ -137,7 +186,11 @@ impl Backend for PythonBackend {
         runner: &dyn ProcessRunner,
         package_id: &str,
     ) -> AllpResult<String> {
-        python_pip_capture(commands, runner, &["show", package_id])
+        if let Some(output) = installed_pip_info(commands, runner, package_id)? {
+            return Ok(output);
+        }
+        serde_json::to_string_pretty(&require_pypi_project(commands, runner, package_id)?)
+            .map_err(|error| pypi_parse_error(error.to_string()))
     }
 
     fn plan_install(
@@ -145,7 +198,10 @@ impl Backend for PythonBackend {
         commands: &CommandMap,
         candidate: &PackageCandidate,
     ) -> AllpResult<ExecutionPlan> {
-        let installer = preferred_installer(candidate, commands);
+        let installer = candidate
+            .installers
+            .first()
+            .ok_or_else(|| AllpError::InvalidInput(PIP_SETUP.to_owned()))?;
         let (command, action) = match installer.as_str() {
             "pipx" => (
                 NativeCommand::new(command_path(self, commands, "pipx")?)
@@ -160,18 +216,25 @@ impl Backend for PythonBackend {
                 ]),
                 "Install Python tool with uv",
             ),
-            _ => (
+            "pip" => (
                 python_pip_command(commands, &["install", candidate.package_id.as_str()])?,
                 "Install Python package",
             ),
+            _ => {
+                return Err(AllpError::InvalidInput(format!(
+                    "unknown Python installer {installer}"
+                )))
+            }
         };
-        Ok(plan(
+        let mut install = plan(
             self,
             OperationKind::Install,
             action,
             Some(candidate.package_id.clone()),
             command,
-        ))
+        );
+        install.scope = Some(installer_scope(commands, installer)?);
+        Ok(install)
     }
 
     fn plan_remove(
@@ -181,7 +244,7 @@ impl Backend for PythonBackend {
     ) -> AllpResult<ExecutionPlan> {
         let installer = package.installer.as_deref().unwrap_or("pip");
         let command = match installer {
-            "pip" => python_pip_command(commands, &["uninstall", &package.package_id])?,
+            "pip" => python_pip_command(commands, &["uninstall", "--yes", &package.package_id])?,
             "pipx" => NativeCommand::new(command_path(self, commands, "pipx")?)
                 .args(["uninstall", &package.package_id]),
             "uv" => NativeCommand::new(command_path(self, commands, "uv")?).args([
@@ -195,13 +258,15 @@ impl Backend for PythonBackend {
                 )))
             }
         };
-        Ok(plan(
+        let mut removal = plan(
             self,
             OperationKind::Remove,
             "Remove Python package or tool",
             Some(package.package_id.clone()),
             command,
-        ))
+        );
+        removal.scope = Some(installer_scope(commands, installer)?);
+        Ok(removal)
     }
 
     fn plan_update(
@@ -251,7 +316,12 @@ fn python_inventory(
         .filter(|value| matches!(*value, "pip" | "pipx" | "uv"));
     let mut packages = Vec::new();
     if selected.is_none_or(|installer| installer == "pip") {
-        packages.extend(pip_inventory(backend, commands, runner)?);
+        packages.extend(pip_inventory(
+            backend,
+            commands,
+            runner,
+            selected == Some("pip"),
+        )?);
     }
     for installer in ["pipx", "uv"] {
         if selected.is_some_and(|selected| selected != installer) {
@@ -342,15 +412,22 @@ fn pip_inventory(
     backend: &PythonBackend,
     commands: &CommandMap,
     runner: &dyn ProcessRunner,
+    pip_required: bool,
 ) -> AllpResult<Vec<InstalledPackage>> {
-    let Some(output) =
-        python_pip_capture_if_available(commands, runner, &["list", "--format=freeze"])?
-    else {
+    let mut args = vec!["list", "--format=freeze"];
+    if python_environment(commands)?.is_some() {
+        args.push("--local");
+    }
+    let Some(output) = python_pip_capture_if_available(commands, runner, &args)? else {
+        if pip_required {
+            return Err(AllpError::InvalidInput(PIP_SETUP.to_owned()));
+        }
         // A Python runtime without pip has no pip-managed inventory for
         // this backend. It must not make an otherwise complete system
         // package profile impossible to save.
         return Ok(Vec::new());
     };
+    let scope = installer_scope(commands, "pip")?;
     Ok(output
         .lines()
         .filter_map(|line| {
@@ -366,7 +443,7 @@ fn pip_inventory(
                 version: Some(version.to_owned()),
                 description: None,
                 source: Some("PyPI / current Python environment".to_owned()),
-                scope: Some(python_scope()),
+                scope: Some(scope.clone()),
             })
         })
         .collect())
@@ -384,7 +461,7 @@ fn python_maintenance(
     let target = target.unwrap_or(DeveloperTarget::All);
 
     if python_selector_allows(selector, "pip") && target.includes(DeveloperTarget::Environment) {
-        append_pip_environment_plan(backend, runner, operation, &mut output)?;
+        append_pip_environment_plan(backend, commands, runner, operation, &mut output)?;
     }
     if python_selector_allows(selector, "pipx") && target.includes(DeveloperTarget::Tools) {
         append_pipx_plan(backend, commands, runner, operation, &mut output)?;
@@ -407,39 +484,32 @@ fn python_maintenance(
 
 fn append_pip_environment_plan(
     backend: &PythonBackend,
+    commands: &CommandMap,
     runner: &dyn ProcessRunner,
     operation: OperationKind,
     output: &mut MaintenancePlan,
 ) -> AllpResult<()> {
-    let Some(venv) = env::var_os("VIRTUAL_ENV") else {
-        output.records.push(python_record(
-            backend,
-            "pip environment",
-            crate::domain::OperationStatus::Protected,
-            "no active Python environment; refusing to modify system Python",
-        ));
-        return Ok(());
-    };
-
-    let venv = Path::new(&venv);
-    let interpreters = if cfg!(windows) {
-        ["Scripts/python.exe", "Scripts/python3.exe"]
-    } else {
-        ["bin/python3", "bin/python"]
-    };
-    let python = interpreters
-        .map(|name| venv.join(name))
-        .into_iter()
-        .find(|path| path.is_file());
-    let Some(python) = python.filter(|_| venv.is_absolute() && venv.join("pyvenv.cfg").is_file())
-    else {
-        output.records.push(python_record(
-            backend,
-            "pip environment",
-            crate::domain::OperationStatus::Protected,
-            "VIRTUAL_ENV does not point to a virtual environment with a Python interpreter",
-        ));
-        return Ok(());
+    let (venv, python) = match python_environment(commands) {
+        Ok(Some(environment)) => environment,
+        Ok(None) => {
+            output.records.push(python_record(
+                backend,
+                "pip environment",
+                crate::domain::OperationStatus::Protected,
+                "no active Python environment or project .venv; activate an environment or create one with python3 -m venv .venv (Windows: python -m venv .venv)",
+            ));
+            return Ok(());
+        }
+        Err(AllpError::InvalidInput(message)) => {
+            output.records.push(python_record(
+                backend,
+                "pip environment",
+                crate::domain::OperationStatus::Protected,
+                &message,
+            ));
+            return Ok(());
+        }
+        Err(error) => return Err(error),
     };
 
     let outdated = match pip_outdated(backend, &python, runner) {
@@ -453,6 +523,15 @@ fn append_pip_environment_plan(
             ));
             return Ok(());
         }
+        Err(AllpError::CommandFailed { stderr, .. }) if is_missing_pip_error(&stderr) => {
+            output.records.push(python_record(
+                backend,
+                "pip environment",
+                crate::domain::OperationStatus::Unavailable,
+                &format!("pip is missing in {}; run its Python with `-m ensurepip --upgrade` or recreate the environment with pip", venv.display()),
+            ));
+            return Ok(());
+        }
         Err(error) => return Err(error),
     };
     if outdated.is_empty() {
@@ -460,7 +539,7 @@ fn append_pip_environment_plan(
             backend,
             "pip environment",
             crate::domain::OperationStatus::UpToDate,
-            "no outdated pip packages found in the active environment",
+            "no outdated pip packages found in the selected environment",
         ));
         return Ok(());
     }
@@ -486,10 +565,10 @@ fn append_pip_environment_plan(
         backend,
         "pip environment",
         operation,
-        "Upgrade selected outdated pip packages in the active environment",
+        "Upgrade selected outdated pip packages in the selected environment",
         Some("PyPI".to_owned()),
         Some(format!(
-            "active virtual environment · {} · pip uses the same native operation for update and upgrade · {versions}",
+            "virtual environment · {} · pip uses the same native operation for update and upgrade · {versions}",
             venv.display()
         )),
         command,
@@ -514,10 +593,11 @@ fn append_pipx_plan(
         return Ok(());
     };
 
-    let tools = capture_checked(
+    let tools = capture_checked_with_privilege(
         backend,
         runner,
         NativeCommand::new(pipx).args(["list", "--json"]),
+        PrivilegeRequirement::OriginalUserRequired,
     )?;
     let tools = serde_json::from_str::<Value>(&tools)
         .ok()
@@ -570,10 +650,11 @@ fn append_uv_tool_plan(
         return Ok(());
     };
 
-    let tools = capture_checked(
+    let tools = capture_checked_with_privilege(
         backend,
         runner,
         NativeCommand::new(uv).args(["tool", "list"]),
+        PrivilegeRequirement::OriginalUserRequired,
     )?;
     if tools.trim().is_empty() {
         output.records.push(python_record(
@@ -597,9 +678,10 @@ fn append_uv_tool_plan(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Deserialize)]
 struct PipOutdatedPackage {
     name: String,
+    #[serde(rename = "version")]
     current_version: String,
     latest_version: String,
 }
@@ -609,10 +691,17 @@ fn pip_outdated(
     python: &Path,
     runner: &dyn ProcessRunner,
 ) -> AllpResult<Vec<PipOutdatedPackage>> {
-    let command =
-        NativeCommand::new(python).args(["-m", "pip", "list", "--outdated", "--format=json"]);
+    let command = NativeCommand::new(python).args([
+        "-m",
+        "pip",
+        "list",
+        "--outdated",
+        "--format=json",
+        "--local",
+    ]);
     let rendered = render_native_command(&command);
-    let output = runner.capture(&command)?;
+    let output =
+        runner.capture_with_privilege(&command, PrivilegeRequirement::OriginalUserRequired)?;
     if !output.success {
         if output.stderr.contains("externally-managed-environment") {
             return Err(AllpError::InvalidInput(
@@ -634,31 +723,22 @@ fn parse_pip_outdated_json(
     backend: &PythonBackend,
     output: &str,
 ) -> AllpResult<Vec<PipOutdatedPackage>> {
-    let value = serde_json::from_str::<Value>(output.trim()).map_err(|error| AllpError::Parse {
-        backend: backend.display_name().to_owned(),
-        message: format!("invalid pip outdated JSON: {error}"),
-    })?;
-    let Some(items) = value.as_array() else {
-        return Ok(Vec::new());
-    };
-    Ok(items
-        .iter()
-        .filter_map(|item| {
-            Some(PipOutdatedPackage {
-                name: item.get("name")?.as_str()?.to_owned(),
-                current_version: item
-                    .get("version")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_owned(),
-                latest_version: item
-                    .get("latest_version")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_owned(),
-            })
-        })
-        .collect())
+    let items: Vec<PipOutdatedPackage> =
+        serde_json::from_str(output).map_err(|error| AllpError::Parse {
+            backend: backend.display_name().to_owned(),
+            message: format!("invalid pip outdated JSON: {error}"),
+        })?;
+    if items.iter().any(|item| {
+        normalized_pypi_name(&item.name).is_none()
+            || item.current_version.is_empty()
+            || item.latest_version.is_empty()
+    }) {
+        return Err(AllpError::Parse {
+            backend: backend.display_name().to_owned(),
+            message: "pip outdated returned an invalid package row".to_owned(),
+        });
+    }
+    Ok(items)
 }
 
 fn python_selector_allows(selector: Option<&str>, installer: &str) -> bool {
@@ -703,17 +783,19 @@ fn python_plan(
     }
 }
 
-fn python_pip_capture(
+fn installed_pip_info(
     commands: &CommandMap,
     runner: &dyn ProcessRunner,
-    args: &[&str],
-) -> AllpResult<String> {
-    python_pip_capture_if_available(commands, runner, args)?.ok_or_else(|| {
-        AllpError::InvalidInput(
-            "Python was detected, but pip is not available for this interpreter. Install pip for the active Python, use a virtual environment, or choose pipx/uv when appropriate."
-                .to_owned(),
-        )
-    })
+    package_id: &str,
+) -> AllpResult<Option<String>> {
+    match python_pip_capture_if_available(commands, runner, &["show", package_id]) {
+        Err(AllpError::CommandFailed { stderr, .. })
+            if stderr.contains("Package(s) not found:") =>
+        {
+            Ok(None)
+        }
+        result => result,
+    }
 }
 
 fn python_pip_capture_if_available(
@@ -723,7 +805,12 @@ fn python_pip_capture_if_available(
 ) -> AllpResult<Option<String>> {
     let command = python_pip_command(commands, args)?;
     let backend = PythonBackend;
-    match capture_checked(&backend, runner, command) {
+    match capture_checked_with_privilege(
+        &backend,
+        runner,
+        command,
+        PrivilegeRequirement::OriginalUserRequired,
+    ) {
         Err(AllpError::CommandFailed { stderr, .. }) if is_missing_pip_error(&stderr) => Ok(None),
         result => result.map(Some),
     }
@@ -735,6 +822,11 @@ fn is_missing_pip_error(stderr: &str) -> bool {
 }
 
 fn python_pip_command(commands: &CommandMap, args: &[&str]) -> AllpResult<NativeCommand> {
+    if let Some((_, python)) = python_environment(commands)? {
+        return Ok(NativeCommand::new(python)
+            .args(["-m", "pip"])
+            .args(args.iter().copied()));
+    }
     if let Some(pip) = commands.get("pip") {
         return Ok(NativeCommand::new(pip).args(args.iter().copied()));
     }
@@ -744,6 +836,138 @@ fn python_pip_command(commands: &CommandMap, args: &[&str]) -> AllpResult<Native
     Ok(NativeCommand::new(python)
         .args(["-m", "pip"])
         .args(args.iter().copied()))
+}
+
+fn installer_scope(commands: &CommandMap, installer: &str) -> AllpResult<String> {
+    if installer != "pip" {
+        return Ok(format!("isolated user tool via {installer}"));
+    }
+    Ok(match python_environment(commands)? {
+        Some((root, _)) => format!("virtual environment · {}", root.display()),
+        None => python_scope(),
+    })
+}
+
+fn python_environment(commands: &CommandMap) -> AllpResult<Option<(PathBuf, PathBuf)>> {
+    if let Some(active) = env::var_os("VIRTUAL_ENV") {
+        return resolve_python_environment(PathBuf::from(active)).map(Some);
+    }
+    if let Some(root) = commands
+        .get("python")
+        .and_then(|path| path.parent()?.parent())
+    {
+        if root.join("pyvenv.cfg").is_file() {
+            return resolve_python_environment(root.to_owned()).map(Some);
+        }
+    }
+    let current = env::current_dir()?;
+    for directory in current.ancestors() {
+        let project = ["pyproject.toml", "setup.py", "setup.cfg"]
+            .iter()
+            .any(|marker| directory.join(marker).is_file());
+        if directory == current || project {
+            let local = directory.join(".venv");
+            if local.join("pyvenv.cfg").is_file() {
+                return resolve_python_environment(local).map(Some);
+            }
+        }
+        if project || directory.join(".git").exists() {
+            break;
+        }
+    }
+    Ok(None)
+}
+
+fn resolve_python_environment(root: PathBuf) -> AllpResult<(PathBuf, PathBuf)> {
+    let interpreters = if cfg!(windows) {
+        ["Scripts/python.exe", "Scripts/python3.exe"]
+    } else {
+        ["bin/python3", "bin/python"]
+    };
+    if root.is_absolute() && root.join("pyvenv.cfg").is_file() {
+        for interpreter in interpreters {
+            let python = root.join(interpreter);
+            if python.is_file() {
+                return Ok((root, python));
+            }
+        }
+    }
+    Err(AllpError::InvalidInput(format!(
+        "{} does not point to a valid Python virtual environment; activate the correct environment or recreate it",
+        root.display()
+    )))
+}
+
+#[derive(Deserialize, Serialize)]
+struct PyPiProject {
+    name: String,
+    version: String,
+    summary: Option<String>,
+}
+
+fn pypi_project(
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    package_id: &str,
+) -> AllpResult<Option<PyPiProject>> {
+    let Some(name) = normalized_pypi_name(package_id) else {
+        return Ok(None);
+    };
+    let command = NativeCommand::new(command_path(&PythonBackend, commands, "python")?)
+        .args(["-I", "-c", PYPI_LOOKUP, &name])
+        .timeout(Duration::from_secs(15));
+    let output = capture_checked_with_privilege(
+        &PythonBackend,
+        runner,
+        command,
+        PrivilegeRequirement::OriginalUserRequired,
+    )?;
+    let project: Option<PyPiProject> =
+        serde_json::from_str(&output).map_err(|error| pypi_parse_error(error.to_string()))?;
+    if let Some(project) = &project {
+        if normalized_pypi_name(&project.name).as_deref() != Some(&name)
+            || project.version.is_empty()
+        {
+            return Err(pypi_parse_error(
+                "project metadata did not match the requested package",
+            ));
+        }
+    }
+    Ok(project)
+}
+
+fn require_pypi_project(
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    package_id: &str,
+) -> AllpResult<PyPiProject> {
+    pypi_project(commands, runner, package_id)?
+        .ok_or_else(|| AllpError::PackageNotFound(package_id.to_owned()))
+}
+
+fn pypi_parse_error(message: impl Into<String>) -> AllpError {
+    AllpError::Parse {
+        backend: "PyPI".to_owned(),
+        message: message.into(),
+    }
+}
+
+fn normalized_pypi_name(name: &str) -> Option<String> {
+    let mut normalized = String::new();
+    for byte in name.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => {
+                normalized.push(byte.to_ascii_lowercase() as char)
+            }
+            b'-' | b'_' | b'.' if !normalized.is_empty() => {
+                if !normalized.ends_with('-') {
+                    normalized.push('-');
+                }
+            }
+            _ => return None,
+        }
+    }
+    (!normalized.is_empty() && !normalized.ends_with('-')).then_some(normalized)
 }
 
 fn parse_pypi_candidates(
@@ -817,9 +1041,9 @@ fn candidate(
     }
 }
 
-fn installer_choices(commands: &CommandMap) -> Vec<String> {
+fn installer_choices(commands: &CommandMap, pip_available: bool) -> Vec<String> {
     let mut choices = Vec::new();
-    if commands.contains_key("pip") || commands.contains_key("python") {
+    if pip_available {
         choices.push("pip".to_owned());
     }
     if commands.contains_key("pipx") {
@@ -829,15 +1053,6 @@ fn installer_choices(commands: &CommandMap) -> Vec<String> {
         choices.push("uv".to_owned());
     }
     choices
-}
-
-fn preferred_installer(candidate: &PackageCandidate, commands: &CommandMap) -> String {
-    candidate
-        .installers
-        .iter()
-        .find(|installer| commands.contains_key(installer.as_str()) || installer.as_str() == "pip")
-        .cloned()
-        .unwrap_or_else(|| "pip".to_owned())
 }
 
 fn plan(
@@ -854,7 +1069,7 @@ fn plan(
         action: action.to_owned(),
         package_id,
         source: Some("PyPI".to_owned()),
-        scope: Some(python_scope()),
+        scope: None,
         details: Vec::new(),
         command,
         privilege: PrivilegeRequirement::OriginalUserRequired,

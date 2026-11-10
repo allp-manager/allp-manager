@@ -4911,6 +4911,7 @@ if [ "$1" = "--recursive" ] && [ "$2" = "outdated" ] && [ -f pnpm-workspace.yaml
   printf '%s\n' '{"typescript":{"current":"5.0.0","latest":"5.2.0"}}'
   exit 1
 fi
+if [ "$1" = "outdated" ] && [ "$2" = "--global" ]; then echo '{}'; exit 0; fi
 printf 'unexpected pnpm command: %s\n' "$*" >&2
 exit 42
 "#,
@@ -5031,6 +5032,147 @@ fn python_update_targets_plan_pip_pipx_and_uv_without_sudo() {
         !marker.exists(),
         "dry run must not execute pip, pipx, or uv mutations"
     );
+}
+
+#[test]
+fn python_without_pip_can_search_pypi_and_select_an_available_installer() {
+    let dir = temp_dir("python-pypi-without-pip");
+    write_executable(
+        &dir,
+        "python3",
+        r#"#!/bin/sh
+case "$1" in
+  -m) printf '%s\n' 'No module named pip' >&2; exit 1 ;;
+  -I)
+    if [ "$4" = demo-tool ]; then
+      printf '%s\n' '{"name":"demo-tool","version":"1.2.3","summary":"Demo CLI"}'
+    else
+      printf '%s\n' null
+    fi ;;
+esac
+"#,
+    );
+    write_executable(&dir, "pipx", "#!/bin/sh\nexit 99\n");
+
+    let search = run_allp(&dir, &["search", "demo-tool", "--from", "python", "--json"]);
+    let report: Value = serde_json::from_slice(&search.stdout).unwrap();
+    assert_eq!(report["complete"], true);
+    assert_eq!(
+        report["results"]["candidates"][0]["installers"],
+        serde_json::json!(["pipx"])
+    );
+    let info = run_allp(&dir, &["info", "demo-tool", "--from", "python"]);
+    assert!(info.status.success(), "{}", stderr(&info));
+    assert!(stdout(&info).contains("Demo CLI"));
+    let tool = run_allp(
+        &dir,
+        &["install", "demo-tool", "--from", "pipx", "--dry-run"],
+    );
+    assert!(tool.status.success(), "{}", stderr(&tool));
+    assert!(stdout(&tool).contains("pipx install demo-tool"));
+    let missing = run_allp(
+        &dir,
+        &["install", "demo-tool", "--from", "pip", "--dry-run"],
+    );
+    assert!(!missing.status.success());
+    assert!(stderr(&missing).contains("python3 -m venv .venv"));
+    let list = run_allp(&dir, &["list", "--from", "pip", "--json"]);
+    let report: Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(report["complete"], false);
+    assert!(report["issues"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("python3 -m venv .venv"));
+}
+
+#[test]
+fn project_venv_uses_one_interpreter_for_all_pip_operations() {
+    let bin = temp_dir("python-outside-venv");
+    write_executable(&bin, "python3", "#!/bin/sh\nexit 99\n");
+    write_executable(&bin, "pip", "#!/bin/sh\nexit 99\n");
+    let project = temp_dir("python-project-venv");
+    fs::write(project.join("pyproject.toml"), "[project]\nname = 'demo'\n").unwrap();
+    let subdir = project.join("src");
+    fs::create_dir(&subdir).unwrap();
+    let venv = project.join(".venv");
+    fs::create_dir_all(venv.join("bin")).unwrap();
+    fs::write(venv.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+    write_executable(
+        &venv.join("bin"),
+        "python3",
+        r#"#!/bin/sh
+[ "$1" = -m ] && [ "$2" = pip ] || exit 99
+shift 2
+case "$1 $2" in
+  'index versions') printf '%s\n' 'demo (2.0.0)' ;;
+  'list --format=freeze') printf '%s\n' 'demo==1.0.0' ;;
+  'list --outdated') printf '%s\n' '[{"name":"demo","version":"1.0.0","latest_version":"2.0.0"}]' ;;
+  *) exit 99 ;;
+esac
+"#,
+    );
+    let list = run_allp_in(&bin, &subdir, &["list", "--from", "pip", "--json"]);
+    let report: Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(report["complete"], true);
+    assert_eq!(report["results"][0]["version"], "1.0.0");
+    for (args, suffix) in [
+        (vec!["install", "demo"], "install demo"),
+        (vec!["remove", "demo"], "uninstall --yes demo"),
+        (vec!["upgrade"], "install --upgrade demo"),
+    ] {
+        let args = [args, vec!["--from", "pip", "--dry-run"]].concat();
+        let output = run_allp_in(&bin, &subdir, &args);
+        assert!(
+            output.status.success(),
+            "{} {}",
+            stdout(&output),
+            stderr(&output)
+        );
+        assert!(stdout(&output).contains(&format!(".venv/bin/python3 -m pip {suffix}")));
+    }
+}
+
+#[test]
+fn explicitly_selected_cargo_shows_a_missing_upgrade_helper() {
+    let dir = temp_dir("cargo-upgrade-helper-missing");
+    install_fake_rust(&dir, &dir.join("executed"));
+    fs::remove_file(dir.join("cargo-install-update")).unwrap();
+    let output = run_allp(&dir, &["upgrade", "--from", "cargo", "--dry-run"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Unavailable · upgrading installed Cargo binaries requires"));
+}
+
+#[test]
+fn pnpm_global_maintenance_reports_an_unconfigured_global_directory() {
+    let dir = temp_dir("pnpm-global-unconfigured");
+    install_fake_node_up_to_date(&dir);
+    write_executable(&dir, "node", "#!/bin/sh\necho v24.19.0\n");
+    write_executable(
+        &dir,
+        "pnpm",
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 11.25.0; exit 0; fi\necho '[ERROR] ERR_PNPM_NO_GLOBAL_BIN_DIR' >&2\nexit 1\n",
+    );
+    let output = run_allp(
+        &dir,
+        &[
+            "upgrade",
+            "--from",
+            "pnpm",
+            "--target",
+            "global",
+            "--dry-run",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("Unavailable · pnpm global package directory is not configured")
+    );
+    assert!(!stdout(&output).contains("pnpm update --global"));
 }
 
 #[test]

@@ -832,7 +832,12 @@ fn append_pnpm_plans(
         } else {
             "pnpm project"
         };
-        if inspect_pnpm(backend, runner, pnpm, root, recursive)? {
+        let probe: &[&str] = if recursive {
+            &["--recursive", "outdated"]
+        } else {
+            &["outdated"]
+        };
+        if inspect_pnpm(backend, runner, pnpm, Some(root), probe)? {
             let mut command = NativeCommand::new(pnpm);
             if recursive {
                 command = command.arg("--recursive");
@@ -876,6 +881,28 @@ fn append_pnpm_plans(
     }
 
     if target.includes(DeveloperTarget::Global) {
+        match inspect_pnpm(backend, runner, pnpm, None, &["outdated", "--global"]) {
+            Ok(true) => {}
+            Ok(false) => {
+                output.records.push(node_record(
+                    backend,
+                    "pnpm global",
+                    OperationStatus::UpToDate,
+                    "pnpm reported no outdated global packages",
+                ));
+                return Ok(());
+            }
+            Err(AllpError::CommandFailed { stderr, .. }) if pnpm_global_unconfigured(&stderr) => {
+                output.records.push(node_record(
+                    backend,
+                    "pnpm global",
+                    OperationStatus::Unavailable,
+                    "pnpm global package directory is not configured",
+                ));
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        }
         let mut command = NativeCommand::new(pnpm).args(["update", "--global"]);
         if operation == OperationKind::Upgrade {
             command = command.arg("--latest");
@@ -1069,17 +1096,16 @@ fn inspect_pnpm(
     backend: &NodeBackend,
     runner: &dyn ProcessRunner,
     pnpm: &Path,
-    root: &Path,
-    recursive: bool,
+    root: Option<&Path>,
+    probe: &[&str],
 ) -> AllpResult<bool> {
-    let mut command = NativeCommand::new(pnpm);
-    if recursive {
-        command = command.arg("--recursive");
-    }
-    command = command.args(["outdated", "--format", "json"]);
-    command.current_dir = Some(root.to_path_buf());
+    let mut command = NativeCommand::new(pnpm)
+        .args(probe.iter().copied())
+        .args(["--format", "json"]);
+    command.current_dir = root.map(Path::to_path_buf);
     let rendered = render_native_command(&command);
-    let output = runner.capture(&command)?;
+    let output =
+        runner.capture_with_privilege(&command, PrivilegeRequirement::OriginalUserRequired)?;
     let report = serde_json::from_str::<Value>(&output.stdout)
         .ok()
         .and_then(|value| {

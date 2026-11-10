@@ -224,12 +224,22 @@ fn run_with_selection(
             confirm_fuzzy_candidate(context.no_interactive)?;
         }
         if let Some(filter) = active_backend_filter {
+            let filter_id = filter.to_ascii_lowercase();
             if candidate
                 .installers
                 .iter()
                 .any(|installer| installer.eq_ignore_ascii_case(filter))
             {
-                candidate.installers = vec![filter.to_ascii_lowercase()];
+                candidate.installers = vec![filter_id];
+            } else if candidate.domain == PackageDomain::Python
+                && matches!(filter_id.as_str(), "pip" | "pipx" | "uv")
+            {
+                let message = if filter_id == "pip" {
+                    crate::backends::development::python::PIP_SETUP.to_owned()
+                } else {
+                    format!("Python installer {filter_id} is not available on PATH")
+                };
+                return Err(AllpError::InvalidInput(message));
             }
         }
         if let Some(installer) = select_installer(&candidate, context.no_interactive)? {
