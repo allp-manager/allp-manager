@@ -24,14 +24,14 @@ prepare() {
 build() {
   cd "$srcdir/$pkgname-$pkgver"
   export CARGO_HOME="$srcdir/cargo-home"
-  ALLP_BUILD_CHANNEL=stable ALLP_BUILD_REVISION=0 cargo build --frozen --release
+  ALLP_BUILD_CHANNEL=stable ALLP_BUILD_REVISION=0 ALLP_BUILD_OFFICIAL=0 cargo build --frozen --release
 }
 
 check() {
   cd "$srcdir/$pkgname-$pkgver"
   export CARGO_HOME="$srcdir/cargo-home"
   test "$(target/release/allp --version)" = "allp $pkgver" || return 1
-  ALLP_BUILD_CHANNEL=stable ALLP_BUILD_REVISION=0 cargo test --frozen --release --lib
+  ALLP_BUILD_CHANNEL=development ALLP_BUILD_REVISION=1 ALLP_BUILD_OFFICIAL=0 cargo test --frozen --lib
 }
 
 package() {

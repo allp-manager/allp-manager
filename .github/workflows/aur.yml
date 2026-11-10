@@ -57,6 +57,12 @@ jobs:
           chown -R builder:builder "$build_dir"
           cd "$build_dir"
           runuser -u builder -- makepkg --noconfirm
+          package_file="$(runuser -u builder -- makepkg --packagelist)"
+          pacman -U --noconfirm -- "$package_file"
+          pacman -Q allp-manager
+          test "$(/usr/bin/allp --version)" = "allp $version"
+          runuser -u builder -- /usr/bin/allp upgrade --dry-run --no-interactive --no-color |
+            grep -F -e ' -Syu'
           mkdir -p "$GITHUB_WORKSPACE/aur-package"
           cp PKGBUILD "$GITHUB_WORKSPACE/aur-package/"
           runuser -u builder -- makepkg --printsrcinfo > "$GITHUB_WORKSPACE/aur-package/.SRCINFO"

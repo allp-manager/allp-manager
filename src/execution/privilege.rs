@@ -24,7 +24,7 @@ const AUTHENTICATION_STOP_GRACE: Duration = Duration::from_secs(1);
 const MAX_PRIVILEGE_DIAGNOSTIC_BYTES: usize = 32 * 1024;
 
 fn authentication_timeout() -> Duration {
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     if let Some(milliseconds) = env::var("ALLP_TEST_SUDO_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())

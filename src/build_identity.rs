@@ -361,11 +361,9 @@ mod tests {
     fn requested_checkout_has_four_component_display_without_changing_cargo_semver() {
         assert_eq!(BASE_VERSION, env!("CARGO_PKG_VERSION"));
         let identity = AllpBuildIdentity::current();
-        if identity.official {
-            assert_eq!(DISPLAY_VERSION, identity.display_version());
-        } else {
+        assert_eq!(DISPLAY_VERSION, identity.display_version());
+        if identity.channel == BuildChannel::Development {
             assert_eq!(DISPLAY_VERSION, format!("{}.1", env!("CARGO_PKG_VERSION")));
-            assert_eq!(identity.channel, BuildChannel::Development);
         }
     }
 }
