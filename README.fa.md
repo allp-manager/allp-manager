@@ -525,12 +525,10 @@ release: Allp v0.5.0
 
 وقتی tag محلی release آماده شد، `make release-push` را به صورت صریح اجرا کنید.
 این target commit انتشار، annotated tag، و اشاره tag به همان commit را بررسی
-می کند و بعد branch فعلی و tag همخوان را push می کند. workflow GitHub Actions
-فقط با tag نسخه ای اجرا می شود و GitHub Release را از title و notes آماده شده
-می سازد. Binaryهای Linux x86_64/aarch64، macOS x86_64/aarch64 و Windows
-x86_64 build و test می شوند؛ archive و checksum آنها، source archive دقیق tag
-و `allp-release-manifest.json` تولید و verify و upload می شوند. Release موجود
-هیچ وقت بی صدا overwrite نمی شود.
+می‌کند و بعد شاخهٔ فعلی و تگ همخوان را می‌فرستد. شاخهٔ `release-candidate-*`
+برای ساخت فایل‌های کاندید است. گردش‌کار تگ پس از تأیید تست‌های همان کامیت Stable،
+باینری‌های Linux، macOS، Windows و Android را همراه آرشیو سورس، checksumها و
+manifest به‌روزرسانی منتشر می‌کند.
 
 ## عیب یابی
 

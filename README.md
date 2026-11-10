@@ -531,12 +531,10 @@ tests. VS Code task examples live in `contrib/vscode/tasks.json` because
 
 When the local release tag is ready, run `make release-push` explicitly. It
 verifies the release commit, annotated tag, and tag target, then pushes the
-current branch and matching tag. The tag-only GitHub Actions workflow creates
-the GitHub Release from the prepared title and notes. It builds and tests
-Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64 binaries;
-uploads their archives and checksums; creates the exact-tag source archive; and
-generates and verifies `allp-release-manifest.json`. It refuses an existing
-conflicting release.
+current branch and matching tag. A `release-candidate-*` branch can build the
+archives without publishing. The tag workflow requires successful tests for
+the exact Stable source and publishes the Linux, macOS, Windows, and Android
+binaries, the source archive, checksums, and the verified update manifest.
 
 ## Troubleshooting
 

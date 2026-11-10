@@ -35,7 +35,8 @@ adb root
 adb wait-for-device
 adb shell 'test "$(id -u)" = 0 && setenforce 0'
 adb push "$work/prefix.tar" /data/local/tmp/allp-termux-prefix.tar
-adb shell "mkdir -p '$prefix' && tar -xf /data/local/tmp/allp-termux-prefix.tar -C '$prefix' && chown -R 2000:2000 /data/data/com.termux && chmod 0755 /data/data/com.termux /data/data/com.termux/files"
+# The app creates its cache directory outside the extracted package prefix.
+adb shell "mkdir -p '$prefix' /data/data/com.termux/cache/apt/archives/partial && tar -xf /data/local/tmp/allp-termux-prefix.tar -C '$prefix' && chown -R 2000:2000 /data/data/com.termux && chmod 0755 /data/data/com.termux /data/data/com.termux/files"
 adb shell "export PREFIX='$prefix'; export PATH='$prefix/bin:/system/bin'; '$prefix/bin/allp' doctor --json" > "$report/root-doctor.json"
 adb shell "export PREFIX='$prefix'; export PATH='$prefix/bin:/system/bin'; '$prefix/bin/allp' detect --json" > "$report/root-detect.json"
 

@@ -478,6 +478,9 @@ fn parse_table(output: &str) -> Option<PackageTable> {
     let mut separator_seen = false;
     for line in lines.by_ref() {
         let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
         if matches!(
             line.trim(),
             "No package found matching input criteria."
@@ -696,6 +699,22 @@ mod tests {
         assert_eq!(table.rows[0].version.as_deref(), Some("25.01"));
         assert_eq!(table.rows[1].name, "資料庫");
         assert_eq!(table.rows[1].id, "Example.Database");
+    }
+
+    #[test]
+    fn parses_the_native_windows_crlf_search_table() {
+        let output = "\r\n   - \r\n    \r\nName Id         Version\r\n-----------------------\r\nfd   sharkdp.fd 10.5.0\r\n";
+        let result = WinGetBackend
+            .search(
+                &commands(),
+                &ScriptedRunner::new(&[(0, output)]),
+                "sharkdp.fd",
+            )
+            .unwrap();
+        assert!(result.issues.is_empty());
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].package_id, "sharkdp.fd");
+        assert_eq!(result.candidates[0].version.as_deref(), Some("10.5.0"));
     }
 
     #[test]

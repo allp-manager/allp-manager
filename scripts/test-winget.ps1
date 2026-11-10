@@ -62,6 +62,8 @@ if ($LiveLifecycle) {
     # Accept the public community source agreement only on the explicitly selected test runner.
     Invoke-Logged 'native-source-search' $winget @('search', '--id', $package, '--exact', '--source', 'winget', '--accept-source-agreements', '--disable-interactivity')
     # Keep native output to diagnose parser failures on a new App Installer version.
+    Invoke-Logged 'native-query-search' $winget @('search', '--query', $package, '--count', '30', '--source', 'winget', '--disable-interactivity')
+    Invoke-Logged 'native-show' $winget @('show', '--id', $package, '--exact', '--source', 'winget', '--disable-interactivity')
     Invoke-Logged 'native-list-before' $winget @('list', '--source', 'winget', '--disable-interactivity') -ExpectedExitCodes @(0, $noApplicationsFound)
     Invoke-Logged 'native-upgrade-preview' $winget @('upgrade', '--source', 'winget', '--disable-interactivity') -ExpectedExitCodes @(0, $noApplicationsFound, $upgradeNotApplicable)
 }
