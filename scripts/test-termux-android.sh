@@ -2,7 +2,8 @@
 # Run only on a disposable AOSP emulator. It uses a pinned official Termux rootfs.
 set -euo pipefail
 
-binary="$1"
+binary="$(realpath -- "$1")"
+test -x "$binary"
 report="$2"
 expected_version="$3"
 expected_commit="$4"

@@ -5147,10 +5147,7 @@ fn info_with_an_explicit_backend_prefers_a_unique_exact_package_id() {
     let dir = temp_dir("info-exact-backend");
     install_fake_apt(&dir, &dir.join("executed"), 0, 0);
     write_executable(&dir, "dpkg-query", "#!/bin/sh\nexit 0\n");
-    let result = run_allp(
-        &dir,
-        &["info", "git", "--from", "apt", "--no-interactive", "--json"],
-    );
+    let result = run_allp(&dir, &["info", "git", "--from", "apt", "--json"]);
     assert!(result.status.success(), "{}", stderr(&result));
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(report["results"]["package_id"], "git");
