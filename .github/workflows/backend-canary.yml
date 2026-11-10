@@ -36,7 +36,11 @@ jobs:
             image: ubuntu:24.04
             backend: flatpak
             query: firefox
-            setup: apt-get update && apt-get install -y ca-certificates curl build-essential flatpak && flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+            setup: |
+              apt-get update
+              apt-get install -y ca-certificates curl build-essential flatpak passwd
+              useradd -m allp-canary
+              runuser -u allp-canary -- flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
     steps:
       - uses: actions/checkout@v4
       - name: Install native prerequisites
@@ -46,13 +50,34 @@ jobs:
       - name: Build canary binary
         run: cargo build --locked
       - name: Exercise native search parser
-        run: target/debug/allp search "${{ matrix.query }}" --from "${{ matrix.backend }}" --json >canary.json
+        shell: bash
+        run: |
+          command=(target/debug/allp search "${{ matrix.query }}" --from "${{ matrix.backend }}" --json)
+          if [[ '${{ matrix.backend }}' == flatpak ]]; then
+            command=(runuser -u allp-canary -- "${command[@]}")
+          fi
+          "${command[@]}" >canary.json
       - name: Require complete search output
         shell: bash
         run: |
           grep -q '"schema_version": 2' canary.json
           grep -q '"complete": true' canary.json
           grep -q '"package_id":' canary.json
+      - name: Report search failure
+        if: failure()
+        shell: bash
+        run: |
+          if [[ -s canary.json ]]; then cat canary.json; fi
+          case '${{ matrix.backend }}' in
+            dnf) dnf -q search '${{ matrix.query }}' || true ;;
+            flatpak) runuser -u allp-canary -- flatpak search '${{ matrix.query }}' --user --columns=application,name,description,version,branch,remotes || true ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-${{ matrix.backend }}
+          path: canary.json
+          if-no-files-found: ignore
 
   snap-search:
     name: Snap on Ubuntu
@@ -75,3 +100,9 @@ jobs:
           grep -q '"schema_version": 2' canary.json
           grep -q '"complete": true' canary.json
           grep -q '"package_id":' canary.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-snap
+          path: canary.json
+          if-no-files-found: ignore
