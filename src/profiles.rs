@@ -36,6 +36,8 @@ pub struct ProfilePackage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flatpak: Option<ProfileFlatpak>,
 }
 
@@ -94,6 +96,7 @@ impl Profile {
             let key = (
                 package.backend.to_ascii_lowercase(),
                 package.package.to_ascii_lowercase(),
+                package.installer.as_deref(),
                 package
                     .flatpak
                     .as_ref()
@@ -169,6 +172,7 @@ pub fn save_current(context: &OperationContext<'_>, name: &str) -> AllpResult<Pr
                 backend: package.backend_id,
                 package: package.package_id,
                 version: package.version,
+                installer: package.installer,
                 flatpak,
             })
         })
@@ -284,7 +288,11 @@ pub fn install(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
             Some(runtime) if !runtime.backend.has_capability(Capability::Install) => {
                 Some(format!("{} (install unsupported)", package.backend))
             }
-            Some(_) => None,
+            Some(runtime) => package.installer.as_ref().and_then(|installer| {
+                (!runtime.backend.aliases().contains(&installer.as_str())
+                    || (installer != "pip" && !runtime.commands.contains_key(installer)))
+                .then(|| format!("{} installer {}", package.backend, installer))
+            }),
         })
         .collect::<BTreeSet<_>>();
     if !unavailable.is_empty() {
@@ -306,9 +314,11 @@ pub fn install(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
             .renderer
             .info_message(&format!("Profile package: {}", package.description()));
 
-        let package_context = context.with_backend_filter(Some(package.backend.as_str()));
+        let package_context = context.with_backend_filter(Some(
+            package.installer.as_deref().unwrap_or(&package.backend),
+        ));
 
-        let exact = package
+        let mut exact = package
             .flatpak
             .as_ref()
             .map_or_else(ExactInstall::default, |app| ExactInstall {
@@ -318,7 +328,9 @@ pub fn install(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
                     .branch
                     .as_deref()
                     .map(|branch| ("flatpak.branch", branch)),
+                ..ExactInstall::default()
             });
+        exact.installer = package.installer.as_deref();
         operations::install::run_exact(&package_context, &package.package, exact)?;
     }
 
@@ -478,6 +490,9 @@ fn validate_backend_id(backend: &str) -> AllpResult<()> {
 }
 
 fn validate_package_entry(package: &ProfilePackage) -> AllpResult<()> {
+    if let Some(installer) = &package.installer {
+        validate_backend_id(installer)?;
+    }
     if package.package.len() > MAX_PACKAGE_ID_LEN
         || package.package.chars().any(char::is_whitespace)
         || package.package.chars().any(char::is_control)
@@ -528,6 +543,9 @@ impl ProfilePackage {
         if let Some(version) = &self.version {
             description.push_str(&format!(" ({version})"));
         }
+        if let Some(installer) = &self.installer {
+            description.push_str(&format!(" · {installer}"));
+        }
         if let Some(app) = &self.flatpak {
             description.push_str(&format!(" · {}", app.scope.label()));
             if let Some(branch) = &app.branch {
@@ -560,12 +578,14 @@ mod tests {
                     package: "git".to_owned(),
                     version: None,
                     flatpak: None,
+                    installer: None,
                 },
                 ProfilePackage {
                     backend: "apt".to_owned(),
                     package: "git".to_owned(),
                     version: None,
                     flatpak: None,
+                    installer: None,
                 },
             ],
         };
@@ -583,6 +603,7 @@ mod tests {
                 package: "ripgrep".to_owned(),
                 version: Some("14.1.0".to_owned()),
                 flatpak: None,
+                installer: None,
             }],
         };
 
@@ -603,6 +624,7 @@ mod tests {
                 package: "git\u{1b}[2J".to_owned(),
                 version: None,
                 flatpak: None,
+                installer: None,
             }],
         };
 

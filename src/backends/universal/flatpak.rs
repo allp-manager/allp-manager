@@ -263,6 +263,7 @@ impl Backend for FlatpakBackend {
                     return None;
                 }
                 Some(InstalledPackage {
+                    installer: None,
                     backend_id: self.id().to_owned(),
                     backend_name: self.display_name().to_owned(),
                     category: self.category(),

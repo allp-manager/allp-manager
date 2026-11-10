@@ -877,7 +877,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/stable: 1.0 2026-06-01 (10) 50MB strict'
       exit 0
@@ -894,7 +894,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 2.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/edge: 2.0 2026-06-01 (20) 50MB strict'
       exit 0
@@ -920,7 +920,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.1' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/stable: 1.1 2026-06-01 (11) 50MB strict'
       exit 0
@@ -933,7 +933,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/stable: 1.0 2026-06-01 (12) 50MB strict'
       exit 0
@@ -946,7 +946,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  1/stable: 1.0 2026-06-01 (13) 50MB strict' \
         '  2/stable: 2.0 2026-06-01 (14) 50MB strict'
@@ -961,7 +961,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/stable: 1.0 2026-06-01 (15) 50MB strict'
       exit 0
@@ -5362,6 +5362,89 @@ fn internal_replacement_version_is_a_subcommand_argument() {
     let helper = run_allp(&dir, &["internal-replace", "--version", "9.8.7"]);
     assert_eq!(helper.status.code(), Some(2));
     assert!(stderr(&helper).contains("--staged"));
+}
+
+#[test]
+fn node_tool_inventory_and_removal_keep_the_native_installer() {
+    let dir = temp_dir("node-tool-ownership");
+    write_executable(
+        &dir,
+        "npm",
+        "#!/bin/sh\necho '{\"dependencies\":{\"shared-tool\":{\"version\":\"1.0.0\"}}}'\n",
+    );
+    write_executable(
+        &dir,
+        "pnpm",
+        "#!/bin/sh\necho '[{\"dependencies\":{\"shared-tool\":{\"version\":\"2.0.0\"}}}]'\n",
+    );
+    let yarn_global = dir.join("yarn-global");
+    fs::create_dir_all(&yarn_global).unwrap();
+    fs::write(yarn_global.join("package.json"), "{}").unwrap();
+    write_executable(
+        &dir,
+        "yarn",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n --version) echo '1.22.22' ;;\n global) printf '%s\\n' '{}' ;;\n list) printf '%s\\n' '{{\"type\":\"tree\",\"data\":{{\"trees\":[{{\"name\":\"@example/tool@3.0.0\"}}]}}}}' ;;\nesac\n",
+            yarn_global.display()
+        ),
+    );
+    let inventory = run_allp(&dir, &["list", "--from", "node", "--json"]);
+    assert!(inventory.status.success(), "{}", stderr(&inventory));
+    let report: Value = serde_json::from_slice(&inventory.stdout).unwrap();
+    let rows = report["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(rows
+        .iter()
+        .any(|row| row["installer"] == "yarn" && row["package_id"] == "@example/tool"));
+
+    let ambiguous = run_allp(
+        &dir,
+        &["remove", "shared-tool", "--dry-run", "--no-interactive"],
+    );
+    assert_eq!(ambiguous.status.code(), Some(4));
+    assert!(stderr(&ambiguous).contains("allp remove shared-tool --from pnpm"));
+    assert!(stderr(&ambiguous).contains("allp remove shared-tool --from npm"));
+
+    let removal = run_allp(
+        &dir,
+        &["remove", "shared-tool", "--from", "pnpm", "--dry-run"],
+    );
+    assert!(removal.status.success(), "{}", stderr(&removal));
+    assert!(stdout(&removal).contains("pnpm remove --global shared-tool"));
+    let yarn = run_allp(
+        &dir,
+        &["remove", "@example/tool", "--from", "yarn", "--dry-run"],
+    );
+    assert!(yarn.status.success(), "{}", stderr(&yarn));
+    assert!(stdout(&yarn).contains("yarn global remove @example/tool"));
+}
+
+#[test]
+fn python_tools_are_listed_and_removed_by_their_installer() {
+    let dir = temp_dir("python-tool-ownership");
+    install_fake_python(&dir, &dir.join("executed"));
+    let list = run_allp(&dir, &["list", "--from", "uv", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let report: Value = serde_json::from_slice(&list.stdout).unwrap();
+    let rows = report["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["installer"], "uv");
+    assert_eq!(rows[0]["package_id"], "ruff");
+    for (package, installer, command) in [
+        ("black", "pipx", "pipx uninstall black"),
+        ("ruff", "uv", "uv tool uninstall ruff"),
+    ] {
+        let removal = run_allp(&dir, &["remove", package, "--from", installer, "--dry-run"]);
+        assert!(removal.status.success(), "{}", stderr(&removal));
+        assert!(stdout(&removal).contains(command));
+    }
+    let save = run_allp(&dir, &["profile", "save", "python-tools"]);
+    assert!(save.status.success(), "{}", stderr(&save));
+    let profile =
+        fs::read_to_string(dir.join("xdg-config/allp/profiles/python-tools.toml")).unwrap();
+    assert!(profile.contains("installer = \"uv\""));
+    assert!(profile.contains("installer = \"pipx\""));
+    assert!(!dir.join("executed").exists());
 }
 
 #[test]

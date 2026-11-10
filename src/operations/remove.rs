@@ -77,6 +77,10 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
 
     let runtime = context.backend(&installed.backend_id)?;
     let plan = runtime.backend.plan_remove(&runtime.commands, installed)?;
+    let selector = installed
+        .installer
+        .as_deref()
+        .unwrap_or(&installed.backend_id);
 
     if context.renderer.json() {
         context.renderer.plan(&plan, context.privilege_context);
@@ -107,9 +111,9 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
             non_interactive_hint: format!(
                 "Review with:\n  allp remove {} --from {} --dry-run\n\nExecute explicitly with:\n  allp remove {} --from {} --yes",
                 installed.package_id,
-                installed.backend_id,
+                selector,
                 installed.package_id,
-                installed.backend_id
+                selector
             ),
         },
     )?;
@@ -179,7 +183,11 @@ fn remove_ambiguity_message(package: &str, matches: &[crate::domain::InstalledPa
     for installed in matches.iter().take(8) {
         message.push_str(&format!(
             "\n  allp remove {} --from {}",
-            installed.package_id, installed.backend_id
+            installed.package_id,
+            installed
+                .installer
+                .as_deref()
+                .unwrap_or(&installed.backend_id)
         ));
     }
     message
@@ -205,6 +213,7 @@ mod tests {
 
     fn installed(backend_id: &str, package_id: &str) -> InstalledPackage {
         InstalledPackage {
+            installer: None,
             backend_id: backend_id.to_owned(),
             backend_name: backend_id.to_ascii_uppercase(),
             category: BackendCategory::System,

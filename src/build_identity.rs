@@ -10,6 +10,7 @@ pub const DISPLAY_VERSION: &str = env!("ALLP_DISPLAY_VERSION");
 #[serde(rename_all = "snake_case")]
 pub enum BuildChannel {
     Stable,
+    Prerelease,
     Continuous,
     Development,
 }
@@ -18,6 +19,7 @@ impl BuildChannel {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Stable => "stable",
+            Self::Prerelease => "prerelease",
             Self::Continuous => "continuous",
             Self::Development => "development",
         }
@@ -36,6 +38,7 @@ impl FromStr for BuildChannel {
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         match raw {
             "stable" => Ok(Self::Stable),
+            "prerelease" => Ok(Self::Prerelease),
             "continuous" => Ok(Self::Continuous),
             "development" | "dev" | "local" => Ok(Self::Development),
             _ => Err(format!("invalid Allp build channel: {raw}")),
@@ -76,7 +79,11 @@ impl AllpBuildIdentity {
     }
 
     pub fn display_version(&self) -> String {
-        if self.channel == BuildChannel::Stable && self.build_revision == 0 {
+        if matches!(
+            self.channel,
+            BuildChannel::Stable | BuildChannel::Prerelease
+        ) && self.build_revision == 0
+        {
             self.base_version.to_string()
         } else {
             format!("{}.{}", self.base_version, self.build_revision)

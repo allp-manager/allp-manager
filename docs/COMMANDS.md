@@ -262,6 +262,8 @@ before being moved to another host.
 New Flatpak entries record the user or default system installation, remote,
 and branch when available. Existing profiles without these fields can still
 be loaded. Profile restore requires the saved package ID in the chosen backend.
+Python and Node tool entries also record their installer so a saved pipx, uv,
+pnpm, or Yarn Classic tool uses the same manager when restored.
 
 ## `self-update`
 

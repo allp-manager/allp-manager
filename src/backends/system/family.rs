@@ -415,6 +415,7 @@ fn parse_installed(backend: &SystemFamilyBackend, output: &str) -> Vec<Installed
                 )
             };
             Some(InstalledPackage {
+                installer: None,
                 backend_id: backend.id().to_owned(),
                 backend_name: backend.display_name().to_owned(),
                 category: backend.category(),

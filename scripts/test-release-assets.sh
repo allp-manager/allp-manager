@@ -28,9 +28,19 @@ import sys
 
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 assert manifest["version"] == "9.8.7"
+assert manifest["channel"] == "stable"
 assert manifest["assets"][0]["target"] == "x86_64-unknown-linux-gnu"
 assert manifest["assets"][0]["libc"] == "glibc"
 assert len(manifest["assets"][0]["sha256"]) == 64
 PY
+
+python3 "$root/scripts/generate-release-manifest.py" \
+    --version "$version" --channel prerelease \
+    --minimum-updater-version "0.3.3" \
+    --dist "$fixture" --output "$fixture/allp-release-manifest.json"
+python3 "$root/scripts/generate-release-manifest.py" \
+    --verify "$fixture/allp-release-manifest.json" --dist "$fixture"
+python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["channel"] == "prerelease"' \
+    "$fixture/allp-release-manifest.json"
 
 printf '%s\n' 'Release asset workflow tests passed.'

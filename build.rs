@@ -56,11 +56,12 @@ fn main() {
     let build_id = env::var("ALLP_BUILD_ID").unwrap_or_else(|_| "local".to_owned());
     let built_at = env::var("ALLP_BUILD_TIMESTAMP").unwrap_or_default();
     let target = required_env("TARGET");
-    let display_version = if channel == "stable" && parsed_revision == 0 {
-        base_version.clone()
-    } else {
-        format!("{base_version}.{parsed_revision}")
-    };
+    let display_version =
+        if matches!(channel.as_str(), "stable" | "prerelease") && parsed_revision == 0 {
+            base_version.clone()
+        } else {
+            format!("{base_version}.{parsed_revision}")
+        };
 
     emit("ALLP_BASE_VERSION", &base_version);
     emit("ALLP_BUILD_REVISION", &revision);

@@ -232,6 +232,7 @@ impl Backend for SnapBackend {
                 let columns: Vec<&str> = line.split_whitespace().collect();
                 let package_id = columns.first()?;
                 Some(InstalledPackage {
+                    installer: None,
                     backend_id: self.id().to_owned(),
                     backend_name: self.display_name().to_owned(),
                     category: self.category(),

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="نسخه 0.6.4" src="https://img.shields.io/badge/version-0.6.4-7c3aed">
+  <img alt="نسخه 0.6.5" src="https://img.shields.io/badge/version-0.6.5-7c3aed">
   <img alt="آلفای عمومی" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
   <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-dea584">
   <a href="LICENSE"><img alt="مجوز MIT" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
@@ -24,7 +24,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخه Build فعلی: **0.6.4.1** (نسخه پایه Cargo: **0.6.4**)
+نسخه Build فعلی: **0.6.5.1** (نسخه پایه Cargo: **0.6.5**)
 سطح بلوغ: **Public Alpha**
 
 ## از اینجا شروع کنید
@@ -594,9 +594,9 @@ RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 
 ## Changelog
 
-نسخهٔ `0.6.4` نسخه منتشرشده فعلی است و مدیریت ابزارهای binary در Rust/Cargo و پشتیبانی
-Bazzite/rpm-ostree را با حفظ مرزهای user-scope مربوط به Homebrew، Node و Python
-اضافه می‌کند. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
+نسخهٔ `0.6.5` یک پیش‌انتشار اختیاری است که ایرادهای نگه‌داری بسته‌ها را رفع می‌کند،
+مدیر نصب ابزارهای Node و Python را حفظ می‌کند و بعد از خودبه‌روزرسانی نسخهٔ قبلی را
+در بک‌آپ نگه می‌دارد. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 
 ## محدودیت های شناخته شده
 

@@ -109,32 +109,16 @@ impl Backend for PythonBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
     ) -> AllpResult<Vec<InstalledPackage>> {
-        let Some(output) =
-            python_pip_capture_if_available(commands, runner, &["list", "--format=freeze"])?
-        else {
-            // A Python runtime without pip has no pip-managed inventory for
-            // this backend. It must not make an otherwise complete system
-            // package profile impossible to save.
-            return Ok(Vec::new());
-        };
-        Ok(output
-            .lines()
-            .filter_map(|line| {
-                let (package_id, version) = line.split_once("==")?;
-                Some(InstalledPackage {
-                    backend_id: self.id().to_owned(),
-                    backend_name: self.display_name().to_owned(),
-                    category: self.category(),
-                    domain: PackageDomain::Python,
-                    package_id: package_id.to_owned(),
-                    display_name: package_id.to_owned(),
-                    version: Some(version.to_owned()),
-                    description: None,
-                    source: Some("PyPI / current Python environment".to_owned()),
-                    scope: Some(python_scope()),
-                })
-            })
-            .collect())
+        python_inventory(self, commands, runner, None)
+    }
+
+    fn list_installed_with_selector(
+        &self,
+        commands: &CommandMap,
+        runner: &dyn ProcessRunner,
+        selector: Option<&str>,
+    ) -> AllpResult<Vec<InstalledPackage>> {
+        python_inventory(self, commands, runner, selector)
     }
 
     fn info(
@@ -195,12 +179,28 @@ impl Backend for PythonBackend {
         commands: &CommandMap,
         package: &InstalledPackage,
     ) -> AllpResult<ExecutionPlan> {
+        let installer = package.installer.as_deref().unwrap_or("pip");
+        let command = match installer {
+            "pip" => python_pip_command(commands, &["uninstall", &package.package_id])?,
+            "pipx" => NativeCommand::new(command_path(self, commands, "pipx")?)
+                .args(["uninstall", &package.package_id]),
+            "uv" => NativeCommand::new(command_path(self, commands, "uv")?).args([
+                "tool",
+                "uninstall",
+                &package.package_id,
+            ]),
+            _ => {
+                return Err(AllpError::InvalidInput(format!(
+                    "unknown Python installer {installer}"
+                )))
+            }
+        };
         Ok(plan(
             self,
             OperationKind::Remove,
-            "Remove Python package",
+            "Remove Python package or tool",
             Some(package.package_id.clone()),
-            python_pip_command(commands, &["uninstall", package.package_id.as_str()])?,
+            command,
         ))
     }
 
@@ -237,6 +237,139 @@ impl Backend for PythonBackend {
             OperationKind::Upgrade,
         )
     }
+}
+
+fn python_inventory(
+    backend: &PythonBackend,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    selector: Option<&str>,
+) -> AllpResult<Vec<InstalledPackage>> {
+    let selector = selector.map(str::to_ascii_lowercase);
+    let selected = selector
+        .as_deref()
+        .filter(|value| matches!(*value, "pip" | "pipx" | "uv"));
+    let mut packages = Vec::new();
+    if selected.is_none_or(|installer| installer == "pip") {
+        packages.extend(pip_inventory(backend, commands, runner)?);
+    }
+    for installer in ["pipx", "uv"] {
+        if selected.is_some_and(|selected| selected != installer) {
+            continue;
+        }
+        let Some(program) = commands.get(installer) else {
+            if selected == Some(installer) {
+                return Err(AllpError::BackendNotDetected(installer.to_owned()));
+            }
+            continue;
+        };
+        let command = if installer == "pipx" {
+            NativeCommand::new(program).args(["list", "--json"])
+        } else {
+            NativeCommand::new(program).args(["tool", "list"])
+        };
+        let output = crate::backends::util::capture_checked_with_privilege(
+            backend,
+            runner,
+            command,
+            PrivilegeRequirement::OriginalUserRequired,
+        )?;
+        if installer == "pipx" {
+            let report =
+                serde_json::from_str::<Value>(&output).map_err(|error| AllpError::Parse {
+                    backend: backend.display_name().to_owned(),
+                    message: format!("invalid pipx inventory: {error}"),
+                })?;
+            let tools = report
+                .get("venvs")
+                .and_then(Value::as_object)
+                .ok_or_else(|| AllpError::Parse {
+                    backend: backend.display_name().to_owned(),
+                    message: "pipx list did not return a venv inventory".to_owned(),
+                })?;
+            for (name, tool) in tools {
+                let version = tool
+                    .pointer("/metadata/main_package/package_version")
+                    .and_then(Value::as_str);
+                packages.push(python_tool(backend, installer, name, version));
+            }
+        } else {
+            for line in output
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('-'))
+            {
+                let mut columns = line.split_whitespace();
+                let name = columns.next().unwrap_or_default();
+                let version = columns
+                    .next()
+                    .and_then(|value| value.strip_prefix('v'))
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| AllpError::Parse {
+                        backend: backend.display_name().to_owned(),
+                        message: "uv tool list did not return a recognizable tool inventory"
+                            .to_owned(),
+                    })?;
+                packages.push(python_tool(backend, installer, name, Some(version)));
+            }
+        }
+    }
+    Ok(packages)
+}
+
+fn python_tool(
+    backend: &PythonBackend,
+    installer: &str,
+    name: &str,
+    version: Option<&str>,
+) -> InstalledPackage {
+    InstalledPackage {
+        installer: Some(installer.to_owned()),
+        backend_id: backend.id().to_owned(),
+        backend_name: backend.display_name().to_owned(),
+        category: backend.category(),
+        domain: PackageDomain::Python,
+        package_id: name.to_owned(),
+        display_name: name.to_owned(),
+        version: version.map(str::to_owned),
+        description: None,
+        source: Some("PyPI".to_owned()),
+        scope: Some(format!("isolated user tool via {installer}")),
+    }
+}
+
+fn pip_inventory(
+    backend: &PythonBackend,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+) -> AllpResult<Vec<InstalledPackage>> {
+    let Some(output) =
+        python_pip_capture_if_available(commands, runner, &["list", "--format=freeze"])?
+    else {
+        // A Python runtime without pip has no pip-managed inventory for
+        // this backend. It must not make an otherwise complete system
+        // package profile impossible to save.
+        return Ok(Vec::new());
+    };
+    Ok(output
+        .lines()
+        .filter_map(|line| {
+            let (package_id, version) = line.split_once("==")?;
+            Some(InstalledPackage {
+                installer: Some("pip".to_owned()),
+                backend_id: backend.id().to_owned(),
+                backend_name: backend.display_name().to_owned(),
+                category: backend.category(),
+                domain: PackageDomain::Python,
+                package_id: package_id.to_owned(),
+                display_name: package_id.to_owned(),
+                version: Some(version.to_owned()),
+                description: None,
+                source: Some("PyPI / current Python environment".to_owned()),
+                scope: Some(python_scope()),
+            })
+        })
+        .collect())
 }
 
 fn python_maintenance(

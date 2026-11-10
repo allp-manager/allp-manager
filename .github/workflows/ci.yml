@@ -80,6 +80,9 @@ jobs:
           TEST_OUTCOME: ${{ steps.tests.outcome }}
         run: |
           printf '### %s\n\nCargo tests completed with outcome %s.\n' "$PLATFORM_NAME" "$TEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$TEST_OUTCOME" == failure && -f native-tests.log ]]; then
+            awk '/^test .* \.\.\. FAILED$/ {print "- `" $2 "`"}' native-tests.log >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

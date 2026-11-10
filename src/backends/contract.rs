@@ -187,6 +187,15 @@ pub trait Backend: Send + Sync {
         Err(self.unsupported("list"))
     }
 
+    fn list_installed_with_selector(
+        &self,
+        commands: &CommandMap,
+        runner: &dyn ProcessRunner,
+        _selector: Option<&str>,
+    ) -> AllpResult<Vec<InstalledPackage>> {
+        self.list_installed(commands, runner)
+    }
+
     fn info(
         &self,
         _commands: &CommandMap,

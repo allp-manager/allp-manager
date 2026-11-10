@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.6.4" src="https://img.shields.io/badge/version-0.6.4-7c3aed">
+  <img alt="Version 0.6.5" src="https://img.shields.io/badge/version-0.6.5-7c3aed">
   <img alt="Public alpha" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
   <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-dea584">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
@@ -25,7 +25,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, rpm-ostree on Bazzite/Atomic hosts, Flatpak, Snap, Homebrew/Linuxbrew, Python and Node installers, and Rust/Cargo, then shows the exact native command or local API request before anything mutates the system.
 
-Current build version: **0.6.4.1** (Cargo base version **0.6.4**)
+Current build version: **0.6.5.1** (Cargo base version **0.6.5**)
 Maturity: **public alpha**
 
 ## Start Here
@@ -591,7 +591,7 @@ Keep backend-specific parsing and flags inside backend modules. Add fixtures for
 
 Near-term work is broader real-distro validation, richer parser fixtures, an
 interactive Snap channel chooser, deeper signal/trusted-path testing, and
-real-host Homebrew, Cargo, and Bazzite validation. Version 0.6.4 includes Rust/Cargo
+real-host Homebrew, Cargo, and Bazzite validation. Version 0.6.5 includes Rust/Cargo
 binary-tool management and transactional rpm-ostree support for Bazzite; a
 broader full-screen TUI and GUI remain later work, alongside future ecosystems
 such as Composer, Go, RubyGems, and Maven/Gradle.
@@ -600,9 +600,8 @@ See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-Version `0.6.4` is the current published release. It includes Rust/Cargo
-binary-tool management and Bazzite/rpm-ostree support while retaining the
-Homebrew, Node, and Python user-scope boundaries.
+Version `0.6.5` is an opt-in prerelease with package maintenance fixes,
+installer-aware Node and Python tools, and retained self-update backups.
 See [CHANGELOG.md](CHANGELOG.md).
 
 ## Known Limitations

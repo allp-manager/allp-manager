@@ -22,6 +22,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
 
 #[derive(Default)]
 pub(crate) struct ExactInstall<'a> {
+    pub installer: Option<&'a str>,
     pub scope: Option<&'a str>,
     pub source: Option<&'a str>,
     pub metadata: Option<(&'a str, &'a str)>,
@@ -83,6 +84,12 @@ fn run_with_selection(
         if let Some(exact) = &exact {
             report.candidates.retain(|candidate| {
                 candidate.package_id.eq_ignore_ascii_case(package)
+                    && exact.installer.is_none_or(|installer| {
+                        candidate
+                            .installers
+                            .iter()
+                            .any(|choice| choice.eq_ignore_ascii_case(installer))
+                    })
                     && exact.scope.is_none_or(|scope| {
                         candidate
                             .scope

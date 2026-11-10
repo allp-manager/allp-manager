@@ -112,13 +112,16 @@ impl Backend for NodeBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
     ) -> AllpResult<Vec<InstalledPackage>> {
-        let npm = command_path(self, commands, "npm")?;
-        let output = capture_checked(
-            self,
-            runner,
-            NativeCommand::new(npm).args(["list", "--global", "--depth=0", "--json"]),
-        )?;
-        parse_npm_list(self, &output)
+        node_inventory(self, commands, runner, None)
+    }
+
+    fn list_installed_with_selector(
+        &self,
+        commands: &CommandMap,
+        runner: &dyn ProcessRunner,
+        selector: Option<&str>,
+    ) -> AllpResult<Vec<InstalledPackage>> {
+        node_inventory(self, commands, runner, selector)
     }
 
     fn info(
@@ -203,16 +206,35 @@ impl Backend for NodeBackend {
         commands: &CommandMap,
         package: &InstalledPackage,
     ) -> AllpResult<ExecutionPlan> {
+        let installer = package.installer.as_deref().unwrap_or("npm");
+        let command = match installer {
+            "npm" => NativeCommand::new(command_path(self, commands, "npm")?).args([
+                "uninstall",
+                "--global",
+                &package.package_id,
+            ]),
+            "pnpm" => NativeCommand::new(command_path(self, commands, "pnpm")?).args([
+                "remove",
+                "--global",
+                &package.package_id,
+            ]),
+            "yarn" => NativeCommand::new(command_path(self, commands, "yarn")?).args([
+                "global",
+                "remove",
+                &package.package_id,
+            ]),
+            _ => {
+                return Err(AllpError::InvalidInput(format!(
+                    "unknown Node installer {installer}"
+                )))
+            }
+        };
         Ok(plan(
             self,
             OperationKind::Remove,
             "Remove global Node package",
             Some(package.package_id.clone()),
-            NativeCommand::new(command_path(self, commands, "npm")?).args([
-                "uninstall",
-                "--global",
-                package.package_id.as_str(),
-            ]),
+            command,
         ))
     }
 
@@ -1290,37 +1312,160 @@ fn parse_npm_search(
     report
 }
 
-fn parse_npm_list(backend: &NodeBackend, output: &str) -> AllpResult<Vec<InstalledPackage>> {
-    let invalid = || AllpError::Parse {
-        backend: backend.display_name().to_owned(),
-        message: "npm list did not return a valid installed-package inventory".to_owned(),
-    };
-    let json = serde_json::from_str::<Value>(output).map_err(|_| invalid())?;
-    if !json.is_object() || json.get("error").is_some() {
-        return Err(invalid());
+fn node_inventory(
+    backend: &NodeBackend,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    selector: Option<&str>,
+) -> AllpResult<Vec<InstalledPackage>> {
+    let selector = selector.map(str::to_ascii_lowercase);
+    let selected = selector
+        .as_deref()
+        .filter(|value| matches!(*value, "npm" | "pnpm" | "yarn"));
+    let mut packages = Vec::new();
+    for installer in ["npm", "pnpm", "yarn"] {
+        if selected.is_some_and(|selected| selected != installer) {
+            continue;
+        }
+        let Some(program) = commands.get(installer) else {
+            if selected == Some(installer) {
+                return Err(AllpError::BackendNotDetected(installer.to_owned()));
+            }
+            continue;
+        };
+        if installer == "yarn" {
+            if yarn_major_version(backend, runner, program)? != Some(1) {
+                if selected == Some("yarn") {
+                    return Err(backend.unsupported("global inventory for Yarn 2 or newer"));
+                }
+                continue;
+            }
+            let global_dir = crate::backends::util::capture_checked_with_privilege(
+                backend,
+                runner,
+                NativeCommand::new(program).args(["global", "dir"]),
+                PrivilegeRequirement::OriginalUserRequired,
+            )?;
+            let global_dir = Path::new(global_dir.trim());
+            if !global_dir.is_absolute() {
+                return Err(invalid_node_inventory(backend, installer));
+            }
+            if !global_dir.join("package.json").is_file() {
+                continue;
+            }
+            let mut command = NativeCommand::new(program).args(["list", "--depth=0", "--json"]);
+            command.current_dir = Some(global_dir.to_owned());
+            let output = crate::backends::util::capture_checked_with_privilege(
+                backend,
+                runner,
+                command,
+                PrivilegeRequirement::OriginalUserRequired,
+            )?;
+            for line in output.lines().filter(|line| !line.trim().is_empty()) {
+                let record =
+                    serde_json::from_str::<Value>(line).map_err(|error| AllpError::Parse {
+                        backend: backend.display_name().to_owned(),
+                        message: format!("invalid Yarn inventory: {error}"),
+                    })?;
+                if record.get("type").and_then(Value::as_str) != Some("tree") {
+                    continue;
+                }
+                let entries = record
+                    .pointer("/data/trees")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| invalid_node_inventory(backend, installer))?;
+                for entry in entries {
+                    let (name, version) = entry
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .and_then(|name| name.rsplit_once('@'))
+                        .ok_or_else(|| invalid_node_inventory(backend, installer))?;
+                    packages.push(node_installed(backend, installer, name, Some(version)));
+                }
+            }
+            continue;
+        }
+        let output = crate::backends::util::capture_checked_with_privilege(
+            backend,
+            runner,
+            NativeCommand::new(program).args(["list", "--global", "--depth=0", "--json"]),
+            PrivilegeRequirement::OriginalUserRequired,
+        );
+        let output = match output {
+            Ok(output) => output,
+            Err(AllpError::CommandFailed { stderr, .. })
+                if selected.is_none()
+                    && installer == "pnpm"
+                    && pnpm_global_unconfigured(&stderr) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let report = serde_json::from_str::<Value>(&output)
+            .map_err(|_| invalid_node_inventory(backend, installer))?;
+        let roots = match (installer, report.as_array()) {
+            ("pnpm", Some(roots)) => roots.as_slice(),
+            _ => std::slice::from_ref(&report),
+        };
+        for root in roots {
+            if !root.is_object() || root.get("error").is_some() {
+                return Err(invalid_node_inventory(backend, installer));
+            }
+            let Some(entries) = root.get("dependencies") else {
+                continue;
+            };
+            let entries = entries
+                .as_object()
+                .ok_or_else(|| invalid_node_inventory(backend, installer))?;
+            for (name, package) in entries {
+                packages.push(node_installed(
+                    backend,
+                    installer,
+                    name,
+                    package.get("version").and_then(Value::as_str),
+                ));
+            }
+        }
     }
-    let Some(dependencies) = json.get("dependencies") else {
-        return Ok(Vec::new());
-    };
-    let dependencies = dependencies.as_object().ok_or_else(invalid)?;
-    Ok(dependencies
-        .iter()
-        .map(|(package_id, value)| InstalledPackage {
-            backend_id: backend.id().to_owned(),
-            backend_name: backend.display_name().to_owned(),
-            category: backend.category(),
-            domain: PackageDomain::Node,
-            package_id: package_id.clone(),
-            display_name: package_id.clone(),
-            version: value
-                .get("version")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            description: None,
-            source: Some("npm registry".to_owned()),
-            scope: Some("global user tool".to_owned()),
+    Ok(packages)
+}
+
+fn pnpm_global_unconfigured(stderr: &str) -> bool {
+    stderr.contains("ERR_PNPM_NO_GLOBAL_BIN_DIR")
+        || (stderr.contains("configured global bin directory") && stderr.contains("is not in PATH"))
+        || stderr.lines().any(|line| {
+            line.contains("ENOENT: no such file or directory, mkdir ")
+                && (line.ends_with("/pnpm/bin'") || line.ends_with("\\pnpm\\bin'"))
         })
-        .collect())
+}
+
+fn invalid_node_inventory(backend: &NodeBackend, installer: &str) -> AllpError {
+    AllpError::Parse {
+        backend: backend.display_name().to_owned(),
+        message: format!("{installer} list did not return a valid installed-package inventory"),
+    }
+}
+
+fn node_installed(
+    backend: &NodeBackend,
+    installer: &str,
+    name: &str,
+    version: Option<&str>,
+) -> InstalledPackage {
+    InstalledPackage {
+        installer: Some(installer.to_owned()),
+        backend_id: backend.id().to_owned(),
+        backend_name: backend.display_name().to_owned(),
+        category: backend.category(),
+        domain: PackageDomain::Node,
+        package_id: name.to_owned(),
+        display_name: name.to_owned(),
+        version: version.map(str::to_owned),
+        description: None,
+        source: Some("npm registry".to_owned()),
+        scope: Some(format!("global user tool via {installer}")),
+    }
 }
 
 fn info_from_npm_view(backend: &NodeBackend, package_id: &str, output: &str) -> PackageInfo {

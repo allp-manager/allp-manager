@@ -101,6 +101,7 @@ impl Backend for DnfBackend {
                 let version = parts.next().map(str::to_owned);
                 let source = parts.next().map(str::to_owned);
                 Some(InstalledPackage {
+                    installer: None,
                     backend_id: self.id().to_owned(),
                     backend_name: self.display_name().to_owned(),
                     category: self.category(),

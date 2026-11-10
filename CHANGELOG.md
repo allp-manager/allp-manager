@@ -4,7 +4,23 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-10
+
+### Release Title
+
+Allp v0.6.5 prerelease
+
+### Changed
+
+- Report native test results and retain per-platform logs for prerelease branches.
+- Keep pip, pipx, uv, npm, pnpm, and Yarn Classic inventories tied to their native
+  installer for removal and profile restore.
+
 ### Fixed
+
+- Resolve macOS account IDs from Directory Services using its tabular listing.
+- Run Snap CLI fixtures on ARM64 and parse macOS account records consistently in
+  Windows tests.
 
 - Report deferred APT packages even when only a count is available, exclude
   residual configuration entries from inventory, and fail metadata refreshes

@@ -257,6 +257,11 @@ impl GitHubReleaseSource<'_> {
                 backend: "GitHub release source".to_owned(),
                 message: error.to_string(),
             })?;
+        if release.get("prerelease").and_then(Value::as_bool) == Some(true)
+            || release.get("draft").and_then(Value::as_bool) == Some(true)
+        {
+            return self.latest_tagged_release(current, UpdateChannel::Stable);
+        }
         let version = release
             .get("tag_name")
             .and_then(Value::as_str)

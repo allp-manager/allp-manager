@@ -674,6 +674,7 @@ fn append_installed(
             continue;
         };
         packages.push(InstalledPackage {
+            installer: None,
             backend_id: backend.id().to_owned(),
             backend_name: backend.display_name().to_owned(),
             category: backend.category(),
