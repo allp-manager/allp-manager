@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "codex/prerelease-*"]
+    branches: [main, "prerelease-*"]
   pull_request:
   workflow_dispatch:
 
