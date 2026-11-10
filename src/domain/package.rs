@@ -325,6 +325,8 @@ fn software_type_for(domain: PackageDomain, artifact_kind: &str) -> SoftwareType
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstalledPackage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installer: Option<String>,
     pub backend_id: String,
     pub backend_name: String,
     pub category: BackendCategory,

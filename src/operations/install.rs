@@ -9,6 +9,7 @@ use crate::{
     domain::{AllpError, AllpResult, Capability, MatchKind, PackageDomain, SearchBackendState},
     execution::{render_execution_plan_with_context, ProcessStatus},
     operations::{
+        incomplete_backend_error,
         search::{self, SearchPolicy},
         validate_package_id, OperationContext,
     },
@@ -16,6 +17,30 @@ use crate::{
 use std::time::Instant;
 
 pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
+    run_with_selection(context, package, None)
+}
+
+#[derive(Default)]
+pub(crate) struct ExactInstall<'a> {
+    pub installer: Option<&'a str>,
+    pub scope: Option<&'a str>,
+    pub source: Option<&'a str>,
+    pub metadata: Option<(&'a str, &'a str)>,
+}
+
+pub(crate) fn run_exact(
+    context: &OperationContext<'_>,
+    package: &str,
+    exact: ExactInstall<'_>,
+) -> AllpResult<()> {
+    run_with_selection(context, package, Some(exact))
+}
+
+fn run_with_selection(
+    context: &OperationContext<'_>,
+    package: &str,
+    exact: Option<ExactInstall<'_>>,
+) -> AllpResult<()> {
     let mut active_backend_filter = context.backend_filter;
     let mut current_query = package.to_owned();
     let mut alternative_request: Option<AlternativeSearchRequest> = None;
@@ -46,7 +71,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
             scope: context.effective_search_scope(),
             ..SearchPolicy::default()
         };
-        let report = if let Some(request) = &alternative_request {
+        let mut report = if let Some(request) = &alternative_request {
             search::gather_with_policy_excluding(
                 &search_context,
                 &current_query,
@@ -56,6 +81,36 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         } else {
             search::gather_with_policy(&search_context, &current_query, policy)?
         };
+        if let Some(exact) = &exact {
+            report.candidates.retain(|candidate| {
+                candidate.package_id.eq_ignore_ascii_case(package)
+                    && exact.installer.is_none_or(|installer| {
+                        candidate
+                            .installers
+                            .iter()
+                            .any(|choice| choice.eq_ignore_ascii_case(installer))
+                    })
+                    && exact.scope.is_none_or(|scope| {
+                        candidate
+                            .scope
+                            .as_deref()
+                            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(scope))
+                    })
+                    && exact
+                        .source
+                        .is_none_or(|source| candidate.source.as_deref() == Some(source))
+                    && exact.metadata.is_none_or(|(key, value)| {
+                        candidate.metadata.get(key).map(String::as_str) == Some(value)
+                    })
+            });
+        }
+        if exact.as_ref().is_none_or(|exact| exact.scope.is_none()) {
+            for runtime in search_context.eligible_backends()? {
+                runtime
+                    .backend
+                    .filter_default_install_candidates(&mut report.candidates);
+            }
+        }
 
         for issue in &report.issues {
             context
@@ -65,7 +120,14 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
 
         if report.candidates.is_empty() {
             if alternative_request.is_none() {
-                return Err(AllpError::PackageNotFound(current_query.clone()));
+                if !report.complete {
+                    return Err(incomplete_backend_error("Installation", &report.issues));
+                }
+                let target = exact.as_ref().and_then(|exact| exact.scope).map_or_else(
+                    || current_query.clone(),
+                    |scope| format!("{current_query} in the saved {scope} installation"),
+                );
+                return Err(AllpError::PackageNotFound(target));
             }
             context.renderer.search(&report);
             let can_configure_remote = report.backend_summaries.iter().any(|summary| {
@@ -120,10 +182,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
         };
 
         if selectable.len() == 1 && !report.complete {
-            return Err(AllpError::AmbiguousSelection(
-                "Search completed with incomplete coverage.\n\nAllp will not auto-select a unique result because one eligible backend failed.\nUse --from to choose explicitly."
-                    .to_owned(),
-            ));
+            return Err(incomplete_backend_error("Installation", &report.issues));
         }
 
         let scope = context.effective_search_scope();
@@ -230,6 +289,7 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
                         );
                         return Ok(());
                     }
+                    Err(error) if exact.is_some() => return Err(error),
                     Err(error) => {
                         match runtime.backend.recover_install_preflight_failure(
                             &runtime.commands,

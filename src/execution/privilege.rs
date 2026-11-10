@@ -1072,24 +1072,27 @@ fn macos_account_by_name(name: &str) -> Option<UserAccount> {
 
 #[cfg(target_os = "macos")]
 fn macos_account_by_uid(uid: u32) -> Option<UserAccount> {
-    let search_value = uid.to_string();
     let output = Command::new("/usr/bin/dscl")
-        .args([".", "-search", "/Users", "UniqueID", &search_value])
+        .args([".", "-list", "/Users", "UniqueID"])
         .output()
         .ok()
         .filter(|output| output.status.success())?;
     let output = String::from_utf8(output.stdout).ok()?;
-    let names = output
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        .filter(|name| macos_user_record_path(name).is_some())
-        .collect::<BTreeSet<_>>();
-    if names.len() != 1 {
-        return None;
-    }
-    let name = names.into_iter().next()?;
+    let name = macos_dscl_name_by_uid(&output, uid)?;
     let account = macos_account_by_name(name)?;
     (account.uid == uid).then_some(account)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_dscl_name_by_uid(output: &str, uid: u32) -> Option<&str> {
+    let mut matches = output.lines().filter_map(|line| {
+        let mut columns = line.split_whitespace();
+        let name = columns.next()?;
+        let account_uid = columns.next()?.parse::<u32>().ok()?;
+        (account_uid == uid && columns.next().is_none()).then_some(name)
+    });
+    let name = matches.next()?;
+    matches.next().is_none().then_some(name)
 }
 
 #[cfg(target_os = "macos")]
@@ -1166,8 +1169,8 @@ fn macos_dscl_number(value: &str) -> Option<u32> {
 
 #[cfg(any(target_os = "macos", test))]
 fn macos_dscl_path(value: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(value.trim());
-    path.is_absolute().then_some(path)
+    let value = value.trim();
+    value.starts_with('/').then(|| PathBuf::from(value))
 }
 
 #[cfg(unix)]
@@ -1193,7 +1196,7 @@ fn resolve_sudo() -> AllpResult<PathBuf> {
     resolve_trusted_root_helper("sudo")
 }
 
-fn resolve_root_required_executable(path: &Path) -> AllpResult<PathBuf> {
+pub(crate) fn resolve_root_required_executable(path: &Path) -> AllpResult<PathBuf> {
     // Integration tests exercise the full sudo command construction with isolated fake
     // executables. This escape hatch is absent from release builds and is coupled to the
     // already-explicit fake-sudo test boundary.
@@ -1491,9 +1494,14 @@ mod tests {
 
     #[cfg(unix)]
     fn non_root_account() -> super::UserAccount {
-        super::system_accounts()
-            .into_iter()
-            .find(|account| account.uid != 0)
+        super::effective_uid()
+            .filter(|uid| *uid != 0)
+            .and_then(super::user_account_by_uid)
+            .or_else(|| {
+                super::system_accounts()
+                    .into_iter()
+                    .find(|account| account.uid != 0)
+            })
             .expect("at least one non-root system account is required")
     }
 
@@ -1524,6 +1532,16 @@ mod tests {
         assert_eq!(account.gid, 20);
         assert_eq!(account.home, std::path::Path::new("/Users/wrench"));
         assert_eq!(account.shell, std::path::Path::new("/bin/zsh"));
+    }
+
+    #[test]
+    fn macos_directory_listing_selects_only_the_requested_uid() {
+        let records = "root\t0\nrunner\t501\nother 1501\n";
+        assert_eq!(super::macos_dscl_name_by_uid(records, 501), Some("runner"));
+        assert_eq!(
+            super::macos_dscl_name_by_uid("runner 501\nalias 501", 501),
+            None
+        );
     }
 
     #[test]
@@ -1611,7 +1629,7 @@ mod tests {
         };
         let context = crate::domain::RuntimePrivilegeContext::SudoRootWithOriginalUser(original);
         let native =
-            crate::domain::NativeCommand::new("/bin/true").env("HOMEBREW_NO_AUTO_UPDATE", "1");
+            crate::domain::NativeCommand::new("/usr/bin/true").env("HOMEBREW_NO_AUTO_UPDATE", "1");
 
         let command = super::prepare_command_with_context_for_effective_uid(
             &native,
@@ -1648,7 +1666,7 @@ mod tests {
         assert!(!arguments
             .iter()
             .any(|value| value.starts_with("HOMEBREW_PREFIX=")));
-        assert_eq!(arguments.last().map(String::as_str), Some("/bin/true"));
+        assert_eq!(arguments.last().map(String::as_str), Some("/usr/bin/true"));
     }
 
     #[cfg(unix)]

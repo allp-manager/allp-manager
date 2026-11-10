@@ -3,6 +3,7 @@ set -eu
 
 repository="allp-manager/allp-manager"
 release_base="https://github.com/${repository}/releases"
+api_base="https://api.github.com/repos/${repository}"
 install_dir="${ALLP_INSTALL_DIR:-${HOME}/.local/bin}"
 requested_version="latest"
 version_given=false
@@ -90,33 +91,86 @@ if [ "$os_target" = "darwin" ]; then
 fi
 
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/allp-install.XXXXXX")"
-rollback_needed=false
+transaction_state=preparing
 cleanup() {
-    if [ "$rollback_needed" = true ]; then
+    if [ "$transaction_state" = committing ]; then
         while IFS= read -r transaction; do
             # A failed rename has not changed the destination.
             [ ! -f "$transaction/new" ] || continue
             destination="$(sed -n '1p' "$transaction/destination")"
             if [ -f "$transaction/previous" ]; then
-                mv -f -- "$transaction/previous" "$destination" ||
+                if ! mv -f -- "$transaction/previous" "$destination"; then
+                    : > "$transaction/keep-backup"
                     printf 'error: restore %s manually from %s/previous\n' "$destination" "$transaction" >&2
+                fi
             else
                 rm -f -- "$destination"
             fi
         done < "$temporary_dir/committed"
+    fi
+    if [ "$transaction_state" != complete ] && [ -f "$temporary_dir/transactions" ]; then
+        while IFS= read -r transaction; do
+            [ -f "$transaction/keep-backup" ] || rm -rf -- "$transaction"
+        done < "$temporary_dir/transactions"
     fi
     rm -rf -- "$temporary_dir"
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
+latest_stable_tag_version() {
+    # GitHub can mark an unrelated or continuous release as latest. Only look
+    # at semantic release tags and check their publication status explicitly.
+    command -v python3 >/dev/null 2>&1 || return 1
+    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --max-time 20 \
+        --output "$temporary_dir/refs.json" "$api_base/git/matching-refs/tags/v" || return 1
+    python3 - "$temporary_dir/refs.json" > "$temporary_dir/versions" <<'PY' || return 1
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    refs = json.load(stream)
+pattern = re.compile(r"refs/tags/v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))")
+matches = (pattern.fullmatch(ref.get("ref", "")) for ref in refs)
+versions = {match[1] for match in matches if match}
+for version in sorted(versions, key=lambda value: tuple(map(int, value.split("."))), reverse=True):
+    print(version)
+PY
+    while IFS= read -r candidate_version; do
+        curl --fail --silent --location --proto '=https' --tlsv1.2 --max-time 20 \
+            --output "$temporary_dir/release.json" "$api_base/releases/tags/v$candidate_version" ||
+            continue
+        if python3 - "$temporary_dir/release.json" "v$candidate_version" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    release = json.load(stream)
+valid = (
+    release.get("tag_name") == sys.argv[2]
+    and release.get("draft") is False
+    and release.get("prerelease") is False
+    and any(asset.get("name") == "allp-release-manifest.json" for asset in release.get("assets", []))
+)
+sys.exit(0 if valid else 1)
+PY
+        then
+            printf '%s\n' "$candidate_version"
+            return 0
+        fi
+    done < "$temporary_dir/versions"
+    return 1
+}
+
 if [ "$requested_version" = "latest" ]; then
-    manifest_url="${release_base}/latest/download/allp-release-manifest.json"
-    curl --fail --location --proto '=https' --tlsv1.2 \
-        --output "${temporary_dir}/manifest.json" "$manifest_url"
-    requested_version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${temporary_dir}/manifest.json" | sed -n '1p')"
-    if [ -z "$requested_version" ]; then
-        printf 'error: release manifest did not contain a version\n' >&2
+    requested_version=""
+    if curl --fail --silent --location --proto '=https' --tlsv1.2 --max-time 20 \
+        --output "$temporary_dir/manifest.json" "$release_base/latest/download/allp-release-manifest.json"; then
+        requested_version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' "$temporary_dir/manifest.json" | sed -n '1p')"
+    fi
+    if [ -z "$requested_version" ] && ! requested_version="$(latest_stable_tag_version)"; then
+        printf 'error: could not find a stable release automatically; pass a published x.y.z version (fallback lookup uses Python 3)\n' >&2
         exit 1
     fi
 fi
@@ -311,7 +365,7 @@ while IFS= read -r destination; do
     fi
     install -m 0755 "$temporary_dir/allp" "$transaction/new"
 done < "$temporary_dir/targets"
-rollback_needed=true
+transaction_state=committing
 while IFS= read -r transaction; do
     destination="$(sed -n '1p' "$transaction/destination")"
     printf '%s\n' "$transaction" >> "$temporary_dir/committed"
@@ -321,7 +375,7 @@ while IFS= read -r transaction; do
         exit 1
     fi
 done < "$temporary_dir/transactions"
-rollback_needed=false
+transaction_state=complete
 while IFS= read -r transaction; do
     destination="$(sed -n '1p' "$transaction/destination")"
     if [ -f "$transaction/previous" ]; then

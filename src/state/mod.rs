@@ -16,6 +16,20 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> AllpResult<Option<T>> {
 }
 
 pub fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> AllpResult<()> {
+    write_file_atomically(path, |file| {
+        serde_json::to_writer_pretty(&mut *file, value).map_err(|error| AllpError::Parse {
+            backend: "Allp state".to_owned(),
+            message: error.to_string(),
+        })?;
+        file.write_all(b"\n")?;
+        Ok(())
+    })
+}
+
+pub(crate) fn write_file_atomically(
+    path: &Path,
+    write_contents: impl FnOnce(&mut fs::File) -> AllpResult<()>,
+) -> AllpResult<()> {
     let parent = path.parent().ok_or_else(|| {
         AllpError::InvalidInput(format!("state path has no parent: {}", path.display()))
     })?;
@@ -24,69 +38,40 @@ pub fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> AllpResult
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("state");
-    let temporary = allocate_temporary_path(parent, file_name, "tmp")?;
+    let (temporary, mut file) = create_temporary_file(parent, file_name)?;
     let result = (|| -> AllpResult<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
-        serde_json::to_writer_pretty(&mut file, value).map_err(|error| AllpError::Parse {
-            backend: "Allp state".to_owned(),
-            message: error.to_string(),
-        })?;
-        file.write_all(b"\n")?;
+        write_contents(&mut file)?;
         file.sync_all()?;
-        replace_state_file(&temporary, path, parent, file_name)?;
         Ok(())
     })();
+    drop(file);
+    let result = result.and_then(|()| fs::rename(&temporary, path).map_err(Into::into));
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
 }
 
-fn allocate_temporary_path(
+fn create_temporary_file(
     parent: &Path,
     file_name: &str,
-    label: &str,
-) -> AllpResult<std::path::PathBuf> {
+) -> AllpResult<(std::path::PathBuf, fs::File)> {
     for attempt in 0..100u32 {
-        let path = parent.join(format!(
-            ".{file_name}.{label}-{}-{attempt}",
-            std::process::id()
-        ));
-        if !path.exists() {
-            return Ok(path);
+        let path = parent.join(format!(".{file_name}.tmp-{}-{attempt}", std::process::id()));
+        match fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
         }
     }
     Err(AllpError::Io(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
         "could not allocate a unique state staging path",
     )))
-}
-
-fn replace_state_file(
-    temporary: &Path,
-    destination: &Path,
-    parent: &Path,
-    file_name: &str,
-) -> AllpResult<()> {
-    if !destination.exists() {
-        return fs::rename(temporary, destination).map_err(Into::into);
-    }
-    let backup = allocate_temporary_path(parent, file_name, "rollback")?;
-    fs::rename(destination, &backup)?;
-    if let Err(error) = fs::rename(temporary, destination) {
-        let rollback = fs::rename(&backup, destination);
-        return match rollback {
-            Ok(()) => Err(error.into()),
-            Err(rollback_error) => Err(AllpError::Io(std::io::Error::other(format!(
-                "state replacement failed ({error}); rollback also failed: {rollback_error}"
-            )))),
-        };
-    }
-    fs::remove_file(backup)?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -97,6 +82,28 @@ mod tests {
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
     struct Fixture {
         value: u8,
+    }
+
+    #[test]
+    fn failed_staging_preserves_the_previous_file() {
+        let root = std::env::temp_dir().join(format!(
+            "allp-state-failure-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let path = root.join("state.json");
+        write_json_atomically(&path, &Fixture { value: 1 }).unwrap();
+        let result = write_file_atomically(&path, |file| {
+            file.write_all(b"{")?;
+            Err(AllpError::InvalidInput("fixture write failed".to_owned()))
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            read_json::<Fixture>(&path).unwrap(),
+            Some(Fixture { value: 1 })
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

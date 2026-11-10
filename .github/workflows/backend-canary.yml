@@ -12,6 +12,7 @@ jobs:
   native-search:
     name: ${{ matrix.backend }} on ${{ matrix.name }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     container: ${{ matrix.image }}
     strategy:
       fail-fast: false
@@ -32,11 +33,6 @@ jobs:
             backend: pacman
             query: bash
             setup: pacman -Syu --noconfirm ca-certificates curl base-devel
-          - name: Ubuntu Flatpak
-            image: ubuntu:24.04
-            backend: flatpak
-            query: firefox
-            setup: apt-get update && apt-get install -y ca-certificates curl build-essential flatpak && flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
     steps:
       - uses: actions/checkout@v4
       - name: Install native prerequisites
@@ -53,6 +49,56 @@ jobs:
           grep -q '"schema_version": 2' canary.json
           grep -q '"complete": true' canary.json
           grep -q '"package_id":' canary.json
+      - name: Check Arch's default upgrade plan
+        if: matrix.backend == 'pacman'
+        shell: bash
+        run: |
+          target/debug/allp upgrade --dry-run --json >upgrade-plan.json
+          grep -q '"complete": true' upgrade-plan.json
+          grep -q '"backend_id": "pacman"' upgrade-plan.json
+          grep -q 'pacman -Syu' upgrade-plan.json
+      - name: Report search failure
+        if: failure()
+        shell: bash
+        run: |
+          if [[ -s canary.json ]]; then cat canary.json; fi
+          if [[ -s upgrade-plan.json ]]; then cat upgrade-plan.json; fi
+          if [[ '${{ matrix.backend }}' == dnf ]]; then dnf -q search '${{ matrix.query }}' || true; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-${{ matrix.backend }}
+          path: |
+            canary.json
+            upgrade-plan.json
+          if-no-files-found: ignore
+
+  flatpak-search:
+    name: Flatpak on Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure Flathub for the runner user
+        run: |
+          sudo apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=20
+          sudo apt-get install -y flatpak
+          timeout 60s flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - run: cargo build --locked
+      - name: Exercise user-scoped Flatpak search
+        shell: bash
+        run: |
+          timeout 90s target/debug/allp search firefox --from flatpak --json | tee canary.json
+          grep -Fq '"schema_version": 2' canary.json
+          grep -Fq '"complete": true' canary.json
+          grep -Fq '"package_id": "org.mozilla.firefox"' canary.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-flatpak
+          path: canary.json
+          if-no-files-found: ignore
 
   snap-search:
     name: Snap on Ubuntu
@@ -75,3 +121,9 @@ jobs:
           grep -q '"schema_version": 2' canary.json
           grep -q '"complete": true' canary.json
           grep -q '"package_id":' canary.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-snap
+          path: canary.json
+          if-no-files-found: ignore

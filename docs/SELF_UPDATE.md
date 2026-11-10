@@ -26,7 +26,12 @@ The updater validates the exact official repository/tag/asset URL, maximum size,
 
 Anonymous GitHub API limits still apply. `403` and `429` responses report the available remaining/reset/retry headers so the caller can distinguish a rate limit from malformed update metadata.
 
-Linux and macOS copy the verified binary to the installed binary's directory, preserve mode and ownership, create a rollback backup, rename atomically, verify again, and restore the backup on failure. A non-writable installation displays and elevates only the internal replacement helper.
+Linux and macOS stage the verified binary and save the previous executable in a
+private `allp.backup-*/previous` directory beside the installation. The updater
+preserves mode and ownership, renames the new binary atomically, and restores
+the previous binary if verification fails. On success it prints the retained
+backup path. A non-writable installation displays and elevates only the internal
+replacement helper.
 
 Before any release lookup or replacement, Linux checks whether dpkg, rpm, or
 Pacman owns the running executable. A native-package-owned binary is updated by
@@ -34,7 +39,10 @@ that package's source of authority; built-in binary replacement is disabled and
 reports `managed_externally`. Package ownership is separate from update-channel
 preference.
 
-Windows copies a verified helper into staging and defers replacement until the current process exits. The helper keeps rollback semantics, launches the new binary with a completion/version marker, and lets the new process clean staging.
+Windows copies a verified helper into staging and defers replacement until the
+current process exits. The helper keeps the previous binary beside the
+installation as `allp.exe.backup-*/previous` and launches the new binary with a
+completion/version marker so the new process can clean staging.
 
 After a successful `allp update` self-replacement, the new binary receives `ALLP_SELF_UPDATE_COMPLETED=1`, preserves the original CLI arguments and a small allowlist of environment variables, skips another self-check, and continues backend updates once.
 

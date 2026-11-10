@@ -93,7 +93,7 @@ def generate(args: argparse.Namespace) -> None:
         "schema_version": 1,
         "version": args.version,
         "tag": f"v{args.version}",
-        "channel": "stable",
+        "channel": args.channel,
         "published_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "minimum_updater_version": args.minimum_updater_version,
         "assets": assets_for(args.version, dist),
@@ -112,6 +112,8 @@ def verify(args: argparse.Namespace) -> None:
         fail("manifest version is invalid")
     if manifest.get("tag") != f"v{version}":
         fail("manifest tag does not match version")
+    if manifest.get("channel") not in ("stable", "prerelease"):
+        fail("manifest channel is invalid")
     expected = assets_for(version, Path(args.dist))
     if manifest.get("assets") != expected:
         fail("manifest assets do not match files in dist")
@@ -121,6 +123,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version")
     parser.add_argument("--minimum-updater-version")
+    parser.add_argument("--channel", choices=("stable", "prerelease"), default="stable")
     parser.add_argument("--dist", required=True)
     parser.add_argument("--output")
     parser.add_argument("--verify")

@@ -22,7 +22,8 @@ const DEFAULT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
 const FIRST_HEARTBEAT_AFTER: Duration = Duration::from_secs(12);
 const REPEAT_HEARTBEAT_AFTER: Duration = Duration::from_secs(15);
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(750);
-const MAX_CAPTURE_BYTES_PER_STREAM: usize = 1024 * 1024;
+const MAX_CAPTURE_BYTES_PER_STREAM: usize = 4 * 1024 * 1024;
+const STREAM_QUEUE_CAPACITY: usize = 64;
 const TUI_TICK_INTERVAL: Duration = Duration::from_secs(1);
 #[cfg(unix)]
 const PROCESS_TERMINATION_GRACE: Duration = Duration::from_millis(500);
@@ -267,24 +268,24 @@ impl StdProcessRunner {
         let stderr = child.stderr.take().ok_or_else(|| {
             AllpError::Io(std::io::Error::other("failed to capture child stderr"))
         })?;
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
         let _stdout_reader = read_stream(stdout, StreamKind::Stdout, sender.clone());
         let _stderr_reader = read_stream(stderr, StreamKind::Stderr, sender);
         let timeout = command.timeout.unwrap_or(DEFAULT_CAPTURE_TIMEOUT);
         let started = Instant::now();
-        let mut captured_stdout = Vec::new();
-        let mut captured_stderr = Vec::new();
+        let mut capture = CapturedOutput::default();
 
         let status = loop {
-            while let Ok(event) = receiver.try_recv() {
-                capture_event(event, &mut captured_stdout, &mut captured_stderr);
+            for event in receiver.try_iter().take(STREAM_QUEUE_CAPACITY) {
+                if let StreamEvent::Data(event) = event {
+                    capture.push(&event);
+                }
             }
             if let Some(status) = child.try_wait()? {
                 break status;
             }
             if started.elapsed() >= timeout {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_process_tree(&mut child, cfg!(unix))?;
                 return Err(AllpError::Timeout(format!(
                     "Native command timed out after {} second(s): {}",
                     timeout.as_secs(),
@@ -294,13 +295,14 @@ impl StdProcessRunner {
             thread::sleep(Duration::from_millis(20));
         };
 
-        let mut observer = None;
-        let (stdout_tail, stderr_tail) =
-            drain_output(&receiver, OUTPUT_DRAIN_GRACE, false, None, &mut observer)?;
-        append_bounded(&mut captured_stdout, stdout_tail.as_bytes());
-        append_bounded(&mut captured_stderr, stderr_tail.as_bytes());
-        let stdout = String::from_utf8_lossy(&captured_stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&captured_stderr).into_owned();
+        drain_output(&receiver, OUTPUT_DRAIN_GRACE, |event| capture.push(&event));
+        if capture.truncated {
+            return Err(AllpError::Parse {
+                backend: render_native_command(command),
+                message: format!("native command output exceeded {MAX_CAPTURE_BYTES_PER_STREAM} bytes per stream"),
+            });
+        }
+        let (stdout, stderr) = capture.into_strings();
 
         Ok(CommandOutput {
             success: status.success(),
@@ -439,7 +441,7 @@ impl StdProcessRunner {
         let stderr = child.stderr.take().ok_or_else(|| {
             AllpError::Io(std::io::Error::other("failed to capture child stderr"))
         })?;
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(STREAM_QUEUE_CAPACITY);
         let _stdout_reader = read_stream(stdout, StreamKind::Stdout, sender.clone());
         let _stderr_reader = read_stream(stderr, StreamKind::Stderr, sender);
         let started = Instant::now();
@@ -454,19 +456,14 @@ impl StdProcessRunner {
         let heartbeat_enabled = heartbeat_allowed && std::io::stderr().is_terminal();
         let mut last_tick = started;
         let mut observer = observer;
-        let mut captured_stdout = Vec::new();
-        let mut captured_stderr = Vec::new();
+        let mut capture = CapturedOutput::default();
 
         let status = loop {
-            while let Ok(event) = receiver.try_recv() {
+            for event in receiver.try_iter().take(STREAM_QUEUE_CAPACITY) {
                 if let StreamEvent::Data(event) = event {
                     last_output = Instant::now();
-                    let capture = match event.kind {
-                        StreamKind::Stdout => &mut captured_stdout,
-                        StreamKind::Stderr => &mut captured_stderr,
-                    };
-                    append_bounded(capture, &event.bytes);
-                    render_stream_event(plan, &mut observer, event)?;
+                    capture.push(&event);
+                    render_stream_event(plan, &mut observer, event);
                 }
             }
             if let Some(status) = child.try_wait()? {
@@ -505,17 +502,11 @@ impl StdProcessRunner {
 
         // The direct child status is authoritative. A detached descendant may
         // inherit these descriptors, so EOF must never own command completion.
-        let (stdout_tail, stderr_tail) = drain_output(
-            &receiver,
-            OUTPUT_DRAIN_GRACE,
-            true,
-            Some(plan),
-            &mut observer,
-        )?;
-        append_bounded(&mut captured_stdout, stdout_tail.as_bytes());
-        append_bounded(&mut captured_stderr, stderr_tail.as_bytes());
-        let stdout = String::from_utf8_lossy(&captured_stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&captured_stderr).into_owned();
+        drain_output(&receiver, OUTPUT_DRAIN_GRACE, |event| {
+            capture.push(&event);
+            render_stream_event(plan, &mut observer, event);
+        });
+        let (stdout, stderr) = capture.into_strings();
 
         Ok(ProcessStatus {
             success: status.success(),
@@ -559,7 +550,11 @@ fn terminate_process_tree(child: &mut Child, isolated_process_group: bool) -> Al
         let deadline = Instant::now() + PROCESS_TERMINATION_GRACE;
 
         loop {
-            if child.try_wait()?.is_some() {
+            // The leader may exit while another process in the group still runs.
+            if child.try_wait()?.is_some()
+                && unsafe { libc::kill(-(pid as libc::pid_t), 0) } != 0
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
                 return Ok(());
             }
 
@@ -652,7 +647,7 @@ enum StreamEvent {
 fn read_stream<R>(
     mut pipe: R,
     kind: StreamKind,
-    sender: mpsc::Sender<StreamEvent>,
+    sender: mpsc::SyncSender<StreamEvent>,
 ) -> thread::JoinHandle<()>
 where
     R: Read + Send + 'static,
@@ -698,7 +693,7 @@ fn render_stream_event(
     plan: &ExecutionPlan,
     observer: &mut Option<&mut dyn ExecutionObserver>,
     event: StreamData,
-) -> AllpResult<()> {
+) {
     if let Some(observer) = observer.as_deref_mut() {
         observer.observe(
             plan,
@@ -708,16 +703,11 @@ fn render_stream_event(
             },
         );
         if observer.handles_output() {
-            return Ok(());
+            return;
         }
-        // The observer has explicitly relinquished the stream, normally because
-        // presentation I/O failed. Do not turn that loss of presentation into a
-        // failure of an already-running package-manager command. The final raw
-        // ProcessStatus still retains this output for classification.
-        let _ = write_stream_bytes(event.kind, &event.bytes);
-        return Ok(());
     }
-    write_stream_bytes(event.kind, &event.bytes)
+    // A closed output pipe must not interrupt an already-running native command.
+    let _ = write_stream_bytes(event.kind, &event.bytes);
 }
 
 fn emit_progress_event(
@@ -743,13 +733,9 @@ fn emit_progress_event(
 fn drain_output(
     receiver: &mpsc::Receiver<StreamEvent>,
     grace: Duration,
-    render: bool,
-    plan: Option<&ExecutionPlan>,
-    observer: &mut Option<&mut dyn ExecutionObserver>,
-) -> AllpResult<(String, String)> {
+    mut on_data: impl FnMut(StreamData),
+) {
     let deadline = Instant::now() + grace;
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
     let mut stdout_closed = false;
     let mut stderr_closed = false;
 
@@ -759,54 +745,38 @@ fn drain_output(
             break;
         }
         match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
-            Ok(StreamEvent::Data(event)) => {
-                if render {
-                    if let Some(plan) = plan {
-                        render_stream_event(
-                            plan,
-                            observer,
-                            StreamData {
-                                kind: event.kind,
-                                bytes: event.bytes.clone(),
-                            },
-                        )?;
-                    } else {
-                        write_stream_bytes(event.kind, &event.bytes)?;
-                    }
-                }
-                let capture = match event.kind {
-                    StreamKind::Stdout => &mut stdout,
-                    StreamKind::Stderr => &mut stderr,
-                };
-                append_bounded(capture, &event.bytes);
-            }
+            Ok(StreamEvent::Data(event)) => on_data(event),
             Ok(StreamEvent::Closed(StreamKind::Stdout)) => stdout_closed = true,
             Ok(StreamEvent::Closed(StreamKind::Stderr)) => stderr_closed = true,
             Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-
-    Ok((
-        String::from_utf8_lossy(&stdout).into_owned(),
-        String::from_utf8_lossy(&stderr).into_owned(),
-    ))
 }
 
-fn capture_event(event: StreamEvent, stdout: &mut Vec<u8>, stderr: &mut Vec<u8>) {
-    if let StreamEvent::Data(event) = event {
-        append_bounded(
-            match event.kind {
-                StreamKind::Stdout => stdout,
-                StreamKind::Stderr => stderr,
-            },
-            &event.bytes,
-        );
+#[derive(Default)]
+struct CapturedOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    truncated: bool,
+}
+
+impl CapturedOutput {
+    fn push(&mut self, event: &StreamData) {
+        let stream = match event.kind {
+            StreamKind::Stdout => &mut self.stdout,
+            StreamKind::Stderr => &mut self.stderr,
+        };
+        let remaining = MAX_CAPTURE_BYTES_PER_STREAM - stream.len();
+        self.truncated |= event.bytes.len() > remaining;
+        stream.extend_from_slice(&event.bytes[..event.bytes.len().min(remaining)]);
     }
-}
 
-fn append_bounded(output: &mut Vec<u8>, bytes: &[u8]) {
-    let remaining = MAX_CAPTURE_BYTES_PER_STREAM.saturating_sub(output.len());
-    output.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+    fn into_strings(self) -> (String, String) {
+        (
+            String::from_utf8_lossy(&self.stdout).into_owned(),
+            String::from_utf8_lossy(&self.stderr).into_owned(),
+        )
+    }
 }
 
 fn format_elapsed(duration: Duration) -> String {
@@ -1029,20 +999,17 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn capture_drains_stdout_and_stderr_concurrently_with_bounded_diagnostics() {
+    fn capture_rejects_truncated_stdout_or_stderr() {
         let runner = StdProcessRunner;
         let command = NativeCommand::new("/bin/sh").args([
             "-c",
-            "(head -c 2097152 /dev/zero | tr '\\0' o) & (head -c 2097152 /dev/zero | tr '\\0' e >&2) & wait",
+            "(head -c 5000000 /dev/zero | tr '\\0' o) & (head -c 5000000 /dev/zero | tr '\\0' e >&2) & wait",
         ]);
 
-        let output = runner.capture(&command).expect("command should succeed");
-
-        assert!(output.success);
-        assert_eq!(output.stdout.len(), MAX_CAPTURE_BYTES_PER_STREAM);
-        assert_eq!(output.stderr.len(), MAX_CAPTURE_BYTES_PER_STREAM);
-        assert!(output.stdout.bytes().all(|byte| byte == b'o'));
-        assert!(output.stderr.bytes().all(|byte| byte == b'e'));
+        let error = runner
+            .capture(&command)
+            .expect_err("truncated output must not be parsed");
+        assert!(error.to_string().contains("native command output exceeded"));
     }
 
     #[cfg(unix)]

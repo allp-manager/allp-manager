@@ -2,12 +2,15 @@ use crate::{
     cli::{confirm_execution, select_installed, ConfirmationRequest},
     domain::{AllpError, AllpResult, OperationStatus},
     execution::render_execution_plan_with_context,
-    operations::{list, validate_package_id, OperationContext},
+    operations::{incomplete_backend_error, list, validate_package_id, OperationContext},
 };
 use std::time::Instant;
 
 pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
     let report = list::gather(context)?;
+    if !report.complete && context.no_interactive {
+        return Err(incomplete_backend_error("Removal", &report.issues));
+    }
     for issue in &report.issues {
         context
             .renderer
@@ -54,6 +57,9 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
     });
 
     if matches.is_empty() {
+        if !report.complete {
+            return Err(incomplete_backend_error("Removal", &report.issues));
+        }
         return Err(AllpError::PackageNotFound(package.to_owned()));
     }
 
@@ -71,6 +77,10 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
 
     let runtime = context.backend(&installed.backend_id)?;
     let plan = runtime.backend.plan_remove(&runtime.commands, installed)?;
+    let selector = installed
+        .installer
+        .as_deref()
+        .unwrap_or(&installed.backend_id);
 
     if context.renderer.json() {
         context.renderer.plan(&plan, context.privilege_context);
@@ -101,9 +111,9 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
             non_interactive_hint: format!(
                 "Review with:\n  allp remove {} --from {} --dry-run\n\nExecute explicitly with:\n  allp remove {} --from {} --yes",
                 installed.package_id,
-                installed.backend_id,
+                selector,
                 installed.package_id,
-                installed.backend_id
+                selector
             ),
         },
     )?;
@@ -173,7 +183,11 @@ fn remove_ambiguity_message(package: &str, matches: &[crate::domain::InstalledPa
     for installed in matches.iter().take(8) {
         message.push_str(&format!(
             "\n  allp remove {} --from {}",
-            installed.package_id, installed.backend_id
+            installed.package_id,
+            installed
+                .installer
+                .as_deref()
+                .unwrap_or(&installed.backend_id)
         ));
     }
     message
@@ -199,6 +213,7 @@ mod tests {
 
     fn installed(backend_id: &str, package_id: &str) -> InstalledPackage {
         InstalledPackage {
+            installer: None,
             backend_id: backend_id.to_owned(),
             backend_name: backend_id.to_ascii_uppercase(),
             category: BackendCategory::System,

@@ -1069,7 +1069,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(&root).expect("fixture root");
-        root
+        fs::canonicalize(root).expect("canonical fixture root")
     }
 
     #[cfg(unix)]

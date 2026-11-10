@@ -148,21 +148,6 @@ fn annotate_candidate(identity: &CanonicalIdentity, candidate: &mut PackageCandi
         return;
     }
 
-    if candidate.domain == PackageDomain::Homebrew {
-        candidate.identity = IdentityMetadata {
-            name_match,
-            confidence: IdentityConfidence::Verified,
-            distribution: DistributionRelationship::VerifiedThirdPartyPackage,
-            software_type: candidate.identity.software_type,
-            canonical_id: Some(identity.id.to_owned()),
-            canonical_name: Some(identity.display_name.to_owned()),
-            official_source: false,
-            confidence_source: Some("built-in Homebrew identity mapping".to_owned()),
-            warning: None,
-        };
-        return;
-    }
-
     if matches!(
         name_match,
         NameMatchKind::Exact | NameMatchKind::NormalizedExact | NameMatchKind::Alias
@@ -338,6 +323,15 @@ mod tests {
             "org.mozilla.firefox.beta",
             "org.mozilla.firefox"
         ));
+    }
+
+    #[test]
+    fn homebrew_catalog_matches_need_their_own_identity_evidence() {
+        let mut candidate = test_candidate("homebrew", "firefox-theme");
+        candidate.domain = PackageDomain::Homebrew;
+        annotate_candidates("Firefox", std::slice::from_mut(&mut candidate));
+        assert_ne!(candidate.identity.confidence, IdentityConfidence::Verified);
+        assert!(candidate.identity.canonical_id.is_none());
     }
 
     fn test_candidate(backend_id: &str, package_id: &str) -> PackageCandidate {

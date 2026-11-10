@@ -12,7 +12,9 @@ pub mod upgrade;
 use crate::{
     cli::Renderer,
     discovery::{DetectedBackend, DetectedBackendSet, DiscoveryReport},
-    domain::{AllpError, AllpResult, DeveloperTarget, RuntimePrivilegeContext, SearchScope},
+    domain::{
+        AllpError, AllpResult, BackendIssue, DeveloperTarget, RuntimePrivilegeContext, SearchScope,
+    },
     execution::ProcessRunner,
 };
 use std::path::Path;
@@ -95,6 +97,17 @@ impl<'a> OperationContext<'a> {
             .get(backend_id)
             .ok_or_else(|| AllpError::BackendNotDetected(backend_id.to_owned()))
     }
+}
+
+pub(crate) fn incomplete_backend_error(operation: &str, issues: &[BackendIssue]) -> AllpError {
+    let details = issues
+        .iter()
+        .map(|issue| format!("{}: {}", issue.backend_name, issue.message))
+        .collect::<Vec<_>>()
+        .join("\n");
+    AllpError::PartialFailure(format!(
+        "{operation} could not use an incomplete backend result.\n{details}\nUse --from to choose a working backend explicitly."
+    ))
 }
 
 pub fn validate_package_id(package_id: &str) -> AllpResult<()> {

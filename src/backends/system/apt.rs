@@ -131,18 +131,25 @@ impl Backend for AptBackend {
             runner,
             NativeCommand::new(dpkg_query)
                 .arg("-W")
-                .arg("-f=${binary:Package}\t${Version}\n"),
+                .arg("-f=${db:Status-Status}\t${binary:Package}\t${Version}\n"),
         )?;
 
         Ok(output
             .lines()
             .filter_map(|line| {
-                let mut columns = line.splitn(2, '\t');
+                let mut columns = line.splitn(3, '\t');
+                if !matches!(
+                    columns.next()?,
+                    "installed" | "triggers-awaited" | "triggers-pending"
+                ) {
+                    return None;
+                }
                 let package_id = columns.next()?.trim();
                 if package_id.is_empty() {
                     return None;
                 }
                 Some(InstalledPackage {
+                    installer: None,
                     backend_id: self.id().to_owned(),
                     backend_name: self.display_name().to_owned(),
                     category: self.category(),
@@ -302,7 +309,8 @@ impl Backend for AptBackend {
             source: Some("APT repositories".to_owned()),
             scope: Some("system".to_owned()),
             details: Vec::new(),
-            command: apt_mutation_command(apt_get, "update", &[]),
+            command: apt_mutation_command(apt_get, "update", &[])
+                .args(["-o", "APT::Update::Error-Mode=any"]),
             privilege: PrivilegeRequirement::RootRequired,
             requires_root: true,
             interactive: true,
@@ -382,10 +390,12 @@ impl Backend for AptBackend {
                 privilege_status: None,
             });
         }
+        let mut named_deferred = 0;
         for (label, packages) in parsed.deferred.categories() {
             if packages.is_empty() {
                 continue;
             }
+            named_deferred += packages.len();
             records.push(BackendOperationRecord {
                 backend_id: plan.backend_id.clone(),
                 backend_name: plan.backend_name.clone(),
@@ -399,6 +409,15 @@ impl Backend for AptBackend {
                 )),
                 privilege_status: None,
             });
+        }
+        let unnamed_deferred = parsed.not_upgraded.saturating_sub(named_deferred);
+        if unnamed_deferred > 0 {
+            records.push(MaintenancePlan::record(
+                &plan.backend_id,
+                &plan.backend_name,
+                OperationStatus::Deferred,
+                format!("{} not upgraded", package_count_message(unnamed_deferred)),
+            ));
         }
         if records.is_empty() && parsed.saw_summary {
             records.push(BackendOperationRecord {

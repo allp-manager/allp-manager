@@ -87,7 +87,11 @@ pub fn gather(context: &OperationContext<'_>) -> AllpResult<InstalledReport> {
                 scope.spawn(move || {
                     let backend_id = runtime.backend.id().to_owned();
                     let backend_name = runtime.backend.display_name().to_owned();
-                    let result = runtime.backend.list_installed(&runtime.commands, runner);
+                    let result = runtime.backend.list_installed_with_selector(
+                        &runtime.commands,
+                        runner,
+                        context.backend_filter,
+                    );
                     let _ = sender.send((backend_id, backend_name, result));
                 });
             }
@@ -275,6 +279,7 @@ mod tests {
 
     fn installed(package_id: &str) -> InstalledPackage {
         InstalledPackage {
+            installer: None,
             backend_id: "example".to_owned(),
             backend_name: "Example".to_owned(),
             category: BackendCategory::Development,

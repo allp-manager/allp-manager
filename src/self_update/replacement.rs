@@ -13,7 +13,6 @@ use crate::{
 use std::{
     ffi::OsString,
     fs,
-    io::Write,
     path::{Component, Path, PathBuf},
     process::{Command, Output, Stdio},
     time::{Duration, Instant},
@@ -164,7 +163,7 @@ fn replacement_verification_arguments(
 
 #[derive(Debug, Clone)]
 pub enum ReplacementOutcome {
-    Replaced,
+    Replaced { backup: PathBuf },
     RequiresElevation { command: NativeCommand },
     DeferredForWindows { staged_binary: PathBuf },
 }
@@ -329,14 +328,14 @@ fn apply_replacement_with_candidates(
         ));
         return Ok(ReplacementOutcome::RequiresElevation { command: helper });
     }
-    replace_binary_atomically_verified(
+    let backup = replace_binary_atomically_verified(
         &staged.binary_path,
         &platform.current_executable,
         &staged.display_version,
         &staged.expected_binary,
         staged.expected_identity.as_ref(),
     )?;
-    Ok(ReplacementOutcome::Replaced)
+    Ok(ReplacementOutcome::Replaced { backup })
 }
 
 pub fn schedule_deferred_replacement(
@@ -426,14 +425,11 @@ pub fn run_deferred_replacement_verified(
             expected_binary,
             expected_identity,
         ) {
-            Ok(()) => break,
+            Ok(_) => break,
             Err(AllpError::Io(error))
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::PermissionDenied
-                        | std::io::ErrorKind::WouldBlock
-                        | std::io::ErrorKind::AlreadyExists
-                ) && std::time::Instant::now() < deadline =>
+                if (transient_filesystem_error(&error)
+                    || error.kind() == std::io::ErrorKind::AlreadyExists)
+                    && std::time::Instant::now() < deadline =>
             {
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
@@ -464,6 +460,7 @@ pub fn replace_binary_atomically(
         &expected_binary,
         None,
     )
+    .map(|_| ())
 }
 
 pub fn replace_binary_atomically_verified(
@@ -472,7 +469,7 @@ pub fn replace_binary_atomically_verified(
     expected_display_version: &str,
     expected_binary: &ExpectedBinary,
     expected_identity: Option<&ExpectedBuildIdentity>,
-) -> AllpResult<()> {
+) -> AllpResult<PathBuf> {
     verify_binary_evidence(staged, expected_binary)?;
     let parent = destination.parent().ok_or_else(|| {
         AllpError::InvalidInput(format!(
@@ -484,35 +481,26 @@ pub fn replace_binary_atomically_verified(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("allp");
-    let replacement = parent.join(format!(".{name}.update-{}", std::process::id()));
-    let backup = parent.join(format!(".{name}.rollback-{}", std::process::id()));
-    if replacement.exists() || backup.exists() {
-        return Err(AllpError::InvalidInput(
-            "a previous Allp replacement staging file still exists".to_owned(),
-        ));
-    }
-
+    let _lock = lock_replacement(parent, name)?;
     let destination_metadata = fs::metadata(destination)?;
-    let current_permissions = destination_metadata.permissions();
-    fs::copy(staged, &replacement)?;
-    fs::set_permissions(&replacement, current_permissions)?;
-    preserve_destination_owner(&replacement, &destination_metadata)?;
-    sync_file(&replacement)?;
-    verify_staged_binary(
-        &replacement,
-        expected_display_version,
-        expected_binary,
-        expected_identity,
-    )?;
-
-    if let Err(error) = rename_with_transient_retry(destination, &backup) {
-        let _ = fs::remove_file(&replacement);
-        return Err(error.into());
-    }
-    if let Err(error) = rename_with_transient_retry(&replacement, destination) {
-        let _ = rename_with_transient_retry(&backup, destination);
-        let _ = fs::remove_file(&replacement);
-        return Err(error.into());
+    let transaction = create_private_directory(parent, &format!("{name}.backup"))?;
+    let replacement = transaction.join(format!("new-{name}"));
+    let backup = transaction.join("previous");
+    let preparation = (|| -> AllpResult<()> {
+        copy_binary(staged, &replacement, &destination_metadata)?;
+        verify_staged_binary(
+            &replacement,
+            expected_display_version,
+            expected_binary,
+            expected_identity,
+        )?;
+        copy_binary(destination, &backup, &destination_metadata)?;
+        rename_with_transient_retry(&replacement, destination)?;
+        Ok(())
+    })();
+    if let Err(error) = preparation {
+        let _ = fs::remove_dir_all(&transaction);
+        return Err(error);
     }
 
     if let Err(error) = verify_staged_binary(
@@ -521,53 +509,43 @@ pub fn replace_binary_atomically_verified(
         expected_binary,
         expected_identity,
     ) {
-        let failed = parent.join(format!(".{name}.failed-{}", std::process::id()));
-        let failed_cleanup = remove_or_move_failed_binary(destination, &failed);
-        let rollback = rename_with_transient_retry(&backup, destination);
-        let _ = fs::remove_file(&failed);
-        if let Err(rollback_error) = rollback {
-            let cleanup_context = failed_cleanup
-                .err()
-                .map(|cleanup_error| {
-                    format!("; failed binary cleanup also failed: {cleanup_error}")
-                })
-                .unwrap_or_default();
+        if let Err(rollback_error) = rename_with_transient_retry(&backup, destination) {
             return Err(AllpError::Io(std::io::Error::other(format!(
-                "post-install verification failed ({error}); rollback also failed: {rollback_error}{cleanup_context}"
+                "post-install verification failed ({error}); rollback also failed: {rollback_error}; previous binary is at {}",
+                backup.display()
             ))));
         }
+        let _ = fs::remove_dir_all(&transaction);
         return Err(AllpError::InvalidInput(format!(
             "post-install verification failed; the previous Allp binary was restored: {error}"
         )));
     }
-    fs::remove_file(backup)?;
-    Ok(())
+    Ok(backup)
 }
 
-fn remove_or_move_failed_binary(destination: &Path, failed: &Path) -> std::io::Result<()> {
-    match remove_file_with_transient_retry(destination) {
-        Ok(()) => Ok(()),
-        Err(remove_error) => {
-            rename_with_transient_retry(destination, failed).map_err(|rename_error| {
-                std::io::Error::other(format!(
-                    "remove failed: {remove_error}; rename failed: {rename_error}"
-                ))
-            })
+fn lock_replacement(parent: &Path, name: &str) -> AllpResult<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0);
+    }
+    let lock = options.open(parent.join(format!(".{name}.update-lock")))?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        // The file stays in place so concurrent updaters always lock the same inode.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
         }
     }
-}
-
-fn remove_file_with_transient_retry(path: &Path) -> std::io::Result<()> {
-    let deadline = Instant::now() + TRANSIENT_FS_RETRY_TIMEOUT;
-    loop {
-        match fs::remove_file(path) {
-            Ok(()) => return Ok(()),
-            Err(error) if transient_filesystem_error(&error) && Instant::now() < deadline => {
-                std::thread::sleep(TRANSIENT_FS_RETRY_DELAY);
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    Ok(lock)
 }
 
 fn rename_with_transient_retry(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -593,9 +571,14 @@ fn transient_filesystem_error(error: &std::io::Error) -> bool {
     #[cfg(unix)]
     {
         // Linux reports ETXTBSY when an interpreter still holds a newly verified file.
-        error.raw_os_error() == Some(26)
+        error.raw_os_error() == Some(libc::ETXTBSY)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION.
+        matches!(error.raw_os_error(), Some(32 | 33))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         false
     }
@@ -947,11 +930,12 @@ fn diagnostic_value<'a>(output: &'a str, label: &str) -> Option<&'a str> {
 
 fn create_staging_directory(root: &Path, version: Version) -> AllpResult<PathBuf> {
     fs::create_dir_all(root)?;
+    create_private_directory(root, &format!(".allp-update-{version}"))
+}
+
+fn create_private_directory(root: &Path, prefix: &str) -> AllpResult<PathBuf> {
     for attempt in 0..100u32 {
-        let path = root.join(format!(
-            ".allp-update-{version}-{}-{attempt}",
-            std::process::id()
-        ));
+        let path = root.join(format!("{prefix}-{}-{attempt}", std::process::id()));
         #[cfg(unix)]
         let mut builder = fs::DirBuilder::new();
         #[cfg(not(unix))]
@@ -970,9 +954,14 @@ fn create_staging_directory(root: &Path, version: Version) -> AllpResult<PathBuf
     )))
 }
 
-fn sync_file(path: &Path) -> AllpResult<()> {
-    let mut file = fs::OpenOptions::new().write(true).open(path)?;
-    file.flush()?;
+fn copy_binary(source: &Path, target: &Path, metadata: &fs::Metadata) -> AllpResult<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)?;
+    std::io::copy(&mut fs::File::open(source)?, &mut file)?;
+    preserve_destination_owner(target, metadata)?;
+    file.set_permissions(metadata.permissions())?;
     file.sync_all()?;
     Ok(())
 }
@@ -1181,8 +1170,28 @@ mod tests {
         write_version_script(&destination, "0.3.3", 0o755);
         write_version_script(&staged, "0.3.4", 0o755);
 
-        replace_binary_atomically(&staged, &destination, Version::new(0, 3, 4))
-            .expect("verified replacement should succeed");
+        let previous = fs::read(&destination).unwrap();
+        let backup = replace_binary_atomically_verified(
+            &staged,
+            &destination,
+            "0.3.4",
+            &ExpectedBinary::from_path(&staged).unwrap(),
+            None,
+        )
+        .expect("verified replacement should succeed");
+        assert_eq!(fs::read(&backup).unwrap(), previous);
+        assert_eq!(
+            fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(
+            fs::metadata(backup.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
         let output = Command::new(&destination)
             .arg("--version")
             .output()

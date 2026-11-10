@@ -23,6 +23,8 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       title: ${{ steps.version.outputs.title }}
       notes: ${{ steps.version.outputs.notes }}
+      channel: ${{ steps.version.outputs.channel }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,10 +46,22 @@ jobs:
           test -s "$title"
           test -s "$notes"
           test -s release/MINIMUM_UPDATER_VERSION.txt
+          channel=stable
+          channel_file="release/RELEASE_CHANNEL_v${version}.txt"
+          if [[ -f "$channel_file" ]]; then
+            channel="$(tr -d '[:space:]' < "$channel_file")"
+          fi
+          [[ "$channel" == stable || "$channel" == prerelease ]]
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$(git rev-list -n 1 "$tag")"
           printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$tag" >>"$GITHUB_OUTPUT"
           printf 'title=%s\n' "$title" >>"$GITHUB_OUTPUT"
           printf 'notes=%s\n' "$notes" >>"$GITHUB_OUTPUT"
+          printf 'channel=%s\n' "$channel" >>"$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$commit" >>"$GITHUB_OUTPUT"
+          printf 'ALLP_BUILD_CHANNEL=%s\n' "$channel" >>"$GITHUB_ENV"
+          printf 'ALLP_GIT_SHA=%s\n' "$commit" >>"$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ github.token }}
       - run: cargo fmt --all -- --check
@@ -61,8 +75,11 @@ jobs:
 
   binary:
     needs: validate
+    env:
+      ALLP_BUILD_CHANNEL: ${{ needs.validate.outputs.channel }}
+      ALLP_GIT_SHA: ${{ needs.validate.outputs.commit }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -93,6 +110,19 @@ jobs:
           components: rustfmt, clippy
       - run: cargo test --lib --bins --test catalog --test exit_codes --test modularity
       - run: cargo build --release --target "${{ matrix.target }}"
+      - name: Verify the compiled release identity
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TARGET: ${{ matrix.target }}
+          RELEASE_BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          binary="target/$RELEASE_TARGET/release/$RELEASE_BINARY"
+          "$binary" --version | tr -d '\r' | grep -Fx "allp $RELEASE_VERSION"
+          identity="$("$binary" --version --verbose | tr -d '\r')"
+          test "$(awk '/^Channel:$/ { getline; print $1 }' <<<"$identity")" = "$ALLP_BUILD_CHANNEL"
+          test "$(awk '/^Commit:$/ { getline; print $1 }' <<<"$identity")" = "$ALLP_GIT_SHA"
       - name: Package Unix binary
         if: matrix.archive == 'tar.gz'
         shell: bash
@@ -157,6 +187,7 @@ jobs:
           done
           python3 scripts/generate-release-manifest.py \
             --version "${{ needs.validate.outputs.version }}" \
+            --channel "${{ needs.validate.outputs.channel }}" \
             --minimum-updater-version "$(tr -d '[:space:]' < release/MINIMUM_UPDATER_VERSION.txt)" \
             --dist dist \
             --output dist/allp-release-manifest.json
@@ -170,17 +201,24 @@ jobs:
           tag="${{ needs.validate.outputs.tag }}"
           title="$(cat '${{ needs.validate.outputs.title }}')"
           mapfile -t assets < <(find dist -maxdepth 1 -type f -printf '%p\n' | sort)
+          release_flags=()
+          if [[ "$RELEASE_CHANNEL" == prerelease ]]; then
+            release_flags=(--prerelease --latest=false)
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release edit "$tag" \
               --verify-tag \
+              "${release_flags[@]}" \
               --title "$title" \
               --notes-file "${{ needs.validate.outputs.notes }}"
             gh release upload "$tag" "${assets[@]}" --clobber
           else
             gh release create "$tag" "${assets[@]}" \
               --verify-tag \
+              "${release_flags[@]}" \
               --title "$title" \
               --notes-file "${{ needs.validate.outputs.notes }}"
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}

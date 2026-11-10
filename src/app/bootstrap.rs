@@ -480,7 +480,12 @@ impl App {
         let staged = stage_release(release, asset, platform)?;
         let outcome = apply_replacement(&staged, platform)?;
         match outcome {
-            ReplacementOutcome::Replaced => {}
+            ReplacementOutcome::Replaced { backup } => {
+                renderer.info_message(&format!(
+                    "Previous Allp binary saved to {}",
+                    backup.display()
+                ));
+            }
             ReplacementOutcome::RequiresElevation { command } => {
                 let plan = ExecutionPlan {
                     backend_id: "allp-self-update".to_owned(),
@@ -712,13 +717,15 @@ fn run_internal_replacement(
             destination.display()
         )));
     }
-    crate::self_update::replace_binary_atomically_verified(
+    let backup = crate::self_update::replace_binary_atomically_verified(
         staged,
         destination,
         version,
         binary,
         identity,
-    )
+    )?;
+    println!("Previous Allp binary saved to {}", backup.display());
+    Ok(())
 }
 
 fn run_internal_deferred_replacement(

@@ -576,7 +576,7 @@ exit 0
 if [ "$#" -gt 2 ]; then
   exit 1
 fi
-printf '%s\n' 'git	1.0' 'code	2.0'
+printf '%s\n' 'installed	git	1.0' 'installed	code	2.0' 'config-files	removed-fixture	1.0'
 "#,
     );
 }
@@ -618,7 +618,7 @@ if [ "$#" -gt 2 ]; then
   printf '%s\n' 'install ok installed	1.0'
   exit 0
 fi
-printf '%s\n' 'git	1.0'
+printf '%s\n' 'installed	git	1.0'
 "#,
     );
 }
@@ -665,7 +665,7 @@ exit 0
 if [ "$#" -gt 2 ]; then
   exit 1
 fi
-printf '%s\n' 'git	1.0'
+printf '%s\n' 'installed	git	1.0'
 "#,
     );
 }
@@ -877,7 +877,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/stable: 1.0 2026-06-01 (10) 50MB strict'
       exit 0
@@ -894,7 +894,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 2.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/edge: 2.0 2026-06-01 (20) 50MB strict'
       exit 0
@@ -920,7 +920,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.1' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/stable: 1.1 2026-06-01 (11) 50MB strict'
       exit 0
@@ -933,7 +933,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/stable: 1.0 2026-06-01 (12) 50MB strict'
       exit 0
@@ -946,7 +946,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  1/stable: 1.0 2026-06-01 (13) 50MB strict' \
         '  2/stable: 2.0 2026-06-01 (14) 50MB strict'
@@ -961,7 +961,7 @@ if [ "$1" = "info" ]; then
         'publisher: Example' \
         'version: 1.0' \
         'confinement: strict' \
-        'architectures: amd64' \
+        'architectures: amd64, arm64' \
         'channels:' \
         '  latest/stable: 1.0 2026-06-01 (15) 50MB strict'
       exit 0
@@ -1273,8 +1273,8 @@ exit 0
         "uv",
         &format!(
             r#"#!/bin/sh
-if [ "$1" = "tool" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
-  printf '%s\n' '{{"tools":{{"ruff":{{}}}}}}'
+if [ "$1" = "tool" ] && [ "$2" = "list" ] && [ "$#" -eq 2 ]; then
+  printf '%s\n' 'ruff v0.15.0' '- ruff'
   exit 0
 fi
 printf '%s\n' "uv $*" >> '{marker}'
@@ -1409,7 +1409,7 @@ if [ "$1" = "view" ]; then
   exit 0
 fi
 if [ "$1" = "outdated" ]; then
-  printf '%s\n' '{{"typescript":{{"current":"5.0.0","wanted":"5.1.0","latest":"5.2.0"}}}}'
+  printf '%s\n' '{{"typescript":[{{"current":"5.0.0","wanted":"5.1.0","latest":"5.2.0"}},{{"current":"5.0.1","wanted":"5.1.0","latest":"5.2.0"}}]}}'
   exit 1
 fi
 if [ "$1" = "update" ]; then
@@ -2868,6 +2868,40 @@ fn non_interactive_install_ambiguity_explains_recovery() {
 }
 
 #[test]
+fn non_interactive_install_requires_an_exact_match_even_for_one_result() {
+    let dir = temp_dir("install-related-only");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    write_executable(
+        &dir,
+        "apt-cache",
+        "#!/bin/sh\nprintf '%s\\n' 'git-cola - graphical git client'\n",
+    );
+
+    let output = run_allp(&dir, &["install", "git", "--from", "apt", "--yes"]);
+    assert_eq!(output.status.code(), Some(4));
+    assert!(stderr(&output).contains("exact match"));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn remove_reports_a_failed_inventory_before_selecting_a_package() {
+    let dir = temp_dir("remove-incomplete-inventory");
+    let marker = dir.join("executed");
+    install_fake_apt(&dir, &marker, 0, 0);
+    write_executable(
+        &dir,
+        "dpkg-query",
+        "#!/bin/sh\necho 'inventory unavailable' >&2\nexit 1\n",
+    );
+
+    let output = run_allp(&dir, &["remove", "git", "--from", "apt", "--yes"]);
+    assert_eq!(output.status.code(), Some(8));
+    assert!(stderr(&output).contains("inventory unavailable"));
+    assert!(!marker.exists());
+}
+
+#[test]
 fn remove_ownership_ambiguity_uses_installed_inventories() {
     let dir = temp_dir("remove-ownership");
     install_fake_apt(&dir, &dir.join("marker"), 0, 0);
@@ -3158,7 +3192,7 @@ fn apt_metadata_refresh_omits_yes_while_follow_up_upgrade_includes_it() {
     assert!(
         executed
             .lines()
-            .any(|line| line == "apt-update args=update"),
+            .any(|line| line == "apt-update args=update -o APT::Update::Error-Mode=any"),
         "apt-get update must never receive the noninteractive -y flag: {executed}"
     );
     assert!(
@@ -4235,7 +4269,17 @@ fn snap_and_flatpak_upgrade_up_to_date_outputs_are_not_generic_completed() {
     assert!(!snap_out.contains("Snap           Completed"));
 
     let flatpak_dir = temp_dir("flatpak-up-to-date");
-    install_fake_flatpak(&flatpak_dir);
+    install_fake_sudo_marker(&flatpak_dir, &flatpak_dir.join("sudo-called"));
+    write_executable(
+        &flatpak_dir,
+        "flatpak",
+        r#"#!/bin/sh
+case "$1" in
+  remotes) printf 'flathub\thttps://flathub.org/repo/\n' ;;
+  update) printf '%s\n' 'Looking for updates…' 'Nothing to update.' ;;
+esac
+"#,
+    );
 
     let flatpak = run_allp(
         &flatpak_dir,
@@ -4244,10 +4288,15 @@ fn snap_and_flatpak_upgrade_up_to_date_outputs_are_not_generic_completed() {
 
     assert!(flatpak.status.success(), "stderr: {}", stderr(&flatpak));
     let flatpak_out = stdout(&flatpak);
-    assert!(flatpak_out.contains("Nothing to do."));
-    assert!(flatpak_out.contains("Flatpak"));
-    assert!(flatpak_out.contains("Up to date · nothing to do"));
-    assert!(!flatpak_out.contains("Flatpak        Completed"));
+    assert!(flatpak_out.contains("Nothing to update."));
+    for scope in ["User", "System"] {
+        assert!(flatpak_out.lines().any(|line| {
+            line.contains(&format!("Flatpak ({scope})"))
+                && line.contains("Up to date · nothing to update")
+        }));
+    }
+    assert!(flatpak_out.contains("0 completed"));
+    assert!(flatpak_out.contains("2 up to date"));
 }
 
 #[test]
@@ -4404,8 +4453,9 @@ fn flatpak_telegram_result_is_included_in_combined_apps_search() {
     assert!(out.contains("Flatpak  1 result") || out.contains("Flatpak 1 result"));
     let commands = fs::read_to_string(marker).expect("flatpak commands should be recorded");
     assert!(commands.contains("remotes --user --columns=name,title,url,filter,options"));
-    assert!(commands
-        .contains("search telegram --columns=application,name,description,version,branch,remotes"));
+    assert!(commands.contains(
+        "search telegram --user --columns=application,name,description,version,branch,remotes"
+    ));
 }
 
 #[test]
@@ -4509,6 +4559,23 @@ fn user_scoped_flatpak_upgrade_does_not_print_root_privilege_notice() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(!stderr(&output).contains("Root-required"));
     assert!(stdout(&output).contains("Privilege: Current user"));
+}
+
+#[test]
+fn apt_upgrade_reports_unnamed_deferred_packages() {
+    let dir = temp_dir("apt-unnamed-deferrals");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    install_fake_apt(&dir, &dir.join("executed"), 0, 0);
+    write_executable(
+        &dir,
+        "apt-get",
+        "#!/bin/sh\nif [ \"$3\" = upgrade ]; then\n  echo '0 upgraded, 0 newly installed, 0 to remove and 4 not upgraded.'\nfi\n",
+    );
+    let output = run_allp(&dir, &["upgrade", "--from", "apt", "--yes", "--no-color"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output)
+        .lines()
+        .any(|line| { line.contains("Deferred") && line.contains("4 packages not upgraded") }));
 }
 
 #[test]
@@ -4627,6 +4694,67 @@ fn npm_project_update_plan_inspects_outdated_and_never_uses_npx_update() {
 }
 
 #[test]
+fn npm_project_discovery_stays_inside_the_current_git_checkout() {
+    let dir = temp_dir("node-project-boundary");
+    let marker = dir.join("executed");
+    install_fake_node(&dir, &marker);
+    let parent = temp_dir("node-project-parent");
+    fs::write(parent.join("package.json"), "{}").unwrap();
+    let checkout = parent.join("checkout");
+    fs::create_dir(&checkout).unwrap();
+    fs::write(checkout.join(".git"), "gitdir: /path/to/worktree\n").unwrap();
+
+    let output = run_allp_in(
+        &dir,
+        &checkout,
+        &[
+            "update",
+            "--from",
+            "npm",
+            "--target",
+            "project",
+            "--dry-run",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.lines().any(|line| {
+        line.contains("npm project") && line.contains("no project manifest found")
+    }));
+    assert!(!out.contains("npm update"));
+}
+
+#[test]
+fn npm_outdated_errors_are_not_treated_as_available_updates() {
+    let dir = temp_dir("npm-outdated-error");
+    write_executable(
+        &dir,
+        "npm",
+        r#"#!/bin/sh
+if [ "$1" = "outdated" ]; then
+  printf '%s\n' '{"error":{"code":"ENOTFOUND","summary":"registry unavailable"}}'
+  exit 1
+fi
+exit 0
+"#,
+    );
+    let output = run_allp(
+        &dir,
+        &[
+            "upgrade",
+            "--from",
+            "npm",
+            "--target",
+            "global",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(8));
+    assert!(stdout(&output).contains("registry unavailable"));
+    assert!(!stdout(&output).contains("npm update --global"));
+}
+
+#[test]
 fn npm_global_update_uses_npm_update_global() {
     let dir = temp_dir("npm-global-update");
     let marker = dir.join("executed");
@@ -4670,8 +4798,11 @@ fn node_runtime_and_cli_components_are_separate_from_package_targets() {
     assert!(out.contains("Node.js runtime"));
     assert!(out.contains("owner: nvm"));
     assert!(out.contains("installed versions: v20.11.1"));
-    assert!(out.contains("npm CLI"));
-    assert!(out.contains("Corepack"));
+    for (cli, version) in [("npm CLI", "11.9.0"), ("Corepack", "0.31.0")] {
+        assert!(out.lines().any(|line| {
+            line.contains(cli) && line.contains("Not applicable") && line.contains(version)
+        }));
+    }
     assert!(out.contains("npm global"));
     assert!(out.contains("npm project"));
     assert!(out.contains("Selected for execution: none"));
@@ -4745,7 +4876,94 @@ fn pnpm_and_yarn_upgrade_plans_use_native_version_specific_commands() {
     );
     assert!(yarn.status.success(), "stderr: {}", stderr(&yarn));
     assert!(stdout(&yarn).contains("yarn upgrade --latest"));
+
+    let automatic = run_allp_in(
+        &dir,
+        &project,
+        &[
+            "upgrade",
+            "--from",
+            "node",
+            "--target",
+            "project",
+            "--dry-run",
+        ],
+    );
+    assert!(automatic.status.success(), "stderr: {}", stderr(&automatic));
+    let automatic = stdout(&automatic);
+    assert!(automatic.contains("yarn upgrade --latest"));
+    assert!(!automatic.contains("npm update"));
+    assert!(!automatic.contains("pnpm update"));
     assert!(!marker.exists(), "dry run must not execute pnpm or yarn");
+}
+
+#[test]
+fn pnpm_workspace_is_planned_once_from_a_member_directory() {
+    let dir = temp_dir("pnpm-workspace-update");
+    let marker = dir.join("executed");
+    install_fake_node(&dir, &marker);
+    write_executable(
+        &dir,
+        "pnpm",
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo '11.25.0'; exit 0; fi
+if [ "$1" = "--recursive" ] && [ "$2" = "outdated" ] && [ -f pnpm-workspace.yaml ]; then
+  printf '%s\n' '{"typescript":{"current":"5.0.0","latest":"5.2.0"}}'
+  exit 1
+fi
+printf 'unexpected pnpm command: %s\n' "$*" >&2
+exit 42
+"#,
+    );
+    let workspace = temp_dir("pnpm-workspace-root");
+    fs::write(workspace.join("package.json"), "{}").unwrap();
+    fs::write(
+        workspace.join("pnpm-workspace.yaml"),
+        "packages: ['packages/*']",
+    )
+    .unwrap();
+    let member = workspace.join("packages/app");
+    fs::create_dir_all(&member).unwrap();
+    fs::write(member.join("package.json"), "{}").unwrap();
+
+    let output = run_allp_in(&dir, &member, &["upgrade", "--from", "pnpm", "--dry-run"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let out = stdout(&output);
+    assert_eq!(out.matches("pnpm --recursive update --latest").count(), 1);
+    assert!(!out.contains("pnpm project"));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn pnpm_does_not_plan_a_project_update_for_empty_or_invalid_reports() {
+    let dir = temp_dir("pnpm-no-project-update");
+    let project = temp_dir("pnpm-empty-project");
+    install_fake_node(&dir, &dir.join("executed"));
+    fs::write(project.join("package.json"), "{}").unwrap();
+    let args = [
+        "upgrade",
+        "--from",
+        "pnpm",
+        "--target",
+        "project",
+        "--dry-run",
+    ];
+
+    write_executable(
+        &dir,
+        "pnpm",
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '11.25.0'; else echo '{}'; fi\n",
+    );
+    let empty = run_allp_in(&dir, &project, &args);
+    assert!(empty.status.success(), "stderr: {}", stderr(&empty));
+    assert!(stdout(&empty).contains("pnpm reported no outdated dependencies"));
+    assert!(!stdout(&empty).contains("pnpm update --latest"));
+
+    write_executable(&dir, "pnpm", "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '11.25.0'; exit 0; fi\necho 'broken report'\nexit 1\n");
+    let invalid = run_allp_in(&dir, &project, &args);
+    assert_eq!(invalid.status.code(), Some(8));
+    assert!(stdout(&invalid).contains("broken report"));
+    assert!(!stdout(&invalid).contains("pnpm update --latest"));
 }
 
 #[test]
@@ -4755,7 +4973,9 @@ fn python_update_targets_plan_pip_pipx_and_uv_without_sudo() {
     install_fake_python(&dir, &marker);
     let project = temp_dir("python-project");
     let venv = project.join(".venv");
-    fs::create_dir_all(&venv).expect("fake venv should be created");
+    fs::create_dir_all(venv.join("bin")).expect("fake venv should be created");
+    fs::write(venv.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+    fs::copy(dir.join("python3"), venv.join("bin/python3")).unwrap();
 
     let pip = run_allp_in_with_env(
         &dir,
@@ -4774,6 +4994,7 @@ fn python_update_targets_plan_pip_pipx_and_uv_without_sudo() {
     assert!(pip.status.success(), "stderr: {}", stderr(&pip));
     let pip_out = stdout(&pip);
     assert!(pip_out.contains("pip environment"));
+    assert!(pip_out.contains(".venv/bin/python3 -m pip install"));
     assert!(pip_out.contains("python3 -m pip install --upgrade requests"));
     assert!(pip_out.contains("Privilege: Current user"));
 
@@ -4914,6 +5135,11 @@ fn list_filter_limit_and_no_pager_are_applied() {
     assert!(out.contains("Installed Packages · APT"));
     assert!(out.contains("git"));
     assert!(!out.contains("code"));
+
+    let inventory = run_allp(&dir, &["list", "--from", "apt", "--json"]);
+    assert!(inventory.status.success());
+    assert!(stdout(&inventory).contains("code"));
+    assert!(!stdout(&inventory).contains("removed-fixture"));
 }
 
 #[test]
@@ -5055,6 +5281,40 @@ exit 0
         "unexpected error: {err}"
     );
     assert!(!dir.join("xdg-config/allp/profiles/dev.toml").exists());
+
+    write_executable(&dir, "npm", "#!/bin/sh\necho 'invalid npm inventory'\n");
+    let invalid = run_allp(&dir, &["profile", "save", "dev"]);
+    assert_eq!(invalid.status.code(), Some(8));
+    assert!(stderr(&invalid).contains("valid installed-package inventory"));
+    assert!(!dir.join("xdg-config/allp/profiles/dev.toml").exists());
+}
+
+#[test]
+fn zypper_search_and_inventory_keep_numeric_package_names() {
+    let dir = temp_dir("zypper-package-name");
+    write_executable(
+        &dir,
+        "zypper",
+        r#"#!/bin/sh
+printf '%s\n' 'Loading repository data...' 'Reading installed packages...'
+printf '%s\n' 'S  | Name           | Type    | Version  | Arch   | Repository'
+printf '%s\n' '---+----------------+---------+----------+--------+-----------'
+printf '%s\n' 'i+ | compat-tool-32 | package | 1.2.3-4  | x86_64 | Main'
+"#,
+    );
+    let search = run_allp(
+        &dir,
+        &["search", "compat-tool-32", "--from", "zypper", "--json"],
+    );
+    assert!(search.status.success(), "stderr: {}", stderr(&search));
+    assert!(stdout(&search).contains("\"package_id\": \"compat-tool-32\""));
+    let list = run_allp(&dir, &["list", "--from", "zypper", "--json"]);
+    assert!(list.status.success(), "stderr: {}", stderr(&list));
+    let report: Value = serde_json::from_slice(&list.stdout).unwrap();
+    let results = report["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["package_id"], "compat-tool-32");
+    assert_eq!(results[0]["version"], "1.2.3-4");
 }
 
 #[test]
@@ -5091,6 +5351,154 @@ fn profile_install_dry_run_uses_declared_backend() {
     assert!(out.contains("Dry run complete; no command was executed"));
     assert!(out.contains("dry run completed; no package was installed"));
     assert!(!dir.join("executed").exists());
+}
+
+#[test]
+fn internal_replacement_version_is_a_subcommand_argument() {
+    let dir = temp_dir("replacement-cli-version");
+    let version = run_allp(&dir, &["--version", "--verbose"]);
+    assert!(version.status.success());
+    assert!(stdout(&version).contains("Commit:"));
+    let helper = run_allp(&dir, &["internal-replace", "--version", "9.8.7"]);
+    assert_eq!(helper.status.code(), Some(2));
+    assert!(stderr(&helper).contains("--staged"));
+}
+
+#[test]
+fn node_tool_inventory_and_removal_keep_the_native_installer() {
+    let dir = temp_dir("node-tool-ownership");
+    write_executable(
+        &dir,
+        "npm",
+        "#!/bin/sh\necho '{\"dependencies\":{\"shared-tool\":{\"version\":\"1.0.0\"}}}'\n",
+    );
+    write_executable(
+        &dir,
+        "pnpm",
+        "#!/bin/sh\necho '[{\"dependencies\":{\"shared-tool\":{\"version\":\"2.0.0\"}}}]'\n",
+    );
+    let yarn_global = dir.join("yarn-global");
+    fs::create_dir_all(&yarn_global).unwrap();
+    fs::write(yarn_global.join("package.json"), "{}").unwrap();
+    write_executable(
+        &dir,
+        "yarn",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n --version) echo '1.22.22' ;;\n global) printf '%s\\n' '{}' ;;\n list) printf '%s\\n' '{{\"type\":\"tree\",\"data\":{{\"trees\":[{{\"name\":\"@example/tool@3.0.0\"}}]}}}}' ;;\nesac\n",
+            yarn_global.display()
+        ),
+    );
+    let inventory = run_allp(&dir, &["list", "--from", "node", "--json"]);
+    assert!(inventory.status.success(), "{}", stderr(&inventory));
+    let report: Value = serde_json::from_slice(&inventory.stdout).unwrap();
+    let rows = report["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(rows
+        .iter()
+        .any(|row| row["installer"] == "yarn" && row["package_id"] == "@example/tool"));
+
+    let ambiguous = run_allp(
+        &dir,
+        &["remove", "shared-tool", "--dry-run", "--no-interactive"],
+    );
+    assert_eq!(ambiguous.status.code(), Some(4));
+    assert!(stderr(&ambiguous).contains("allp remove shared-tool --from pnpm"));
+    assert!(stderr(&ambiguous).contains("allp remove shared-tool --from npm"));
+
+    let removal = run_allp(
+        &dir,
+        &["remove", "shared-tool", "--from", "pnpm", "--dry-run"],
+    );
+    assert!(removal.status.success(), "{}", stderr(&removal));
+    assert!(stdout(&removal).contains("pnpm remove --global shared-tool"));
+    let yarn = run_allp(
+        &dir,
+        &["remove", "@example/tool", "--from", "yarn", "--dry-run"],
+    );
+    assert!(yarn.status.success(), "{}", stderr(&yarn));
+    assert!(stdout(&yarn).contains("yarn global remove @example/tool"));
+}
+
+#[test]
+fn python_tools_are_listed_and_removed_by_their_installer() {
+    let dir = temp_dir("python-tool-ownership");
+    install_fake_python(&dir, &dir.join("executed"));
+    let list = run_allp(&dir, &["list", "--from", "uv", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let report: Value = serde_json::from_slice(&list.stdout).unwrap();
+    let rows = report["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["installer"], "uv");
+    assert_eq!(rows[0]["package_id"], "ruff");
+    for (package, installer, command) in [
+        ("black", "pipx", "pipx uninstall black"),
+        ("ruff", "uv", "uv tool uninstall ruff"),
+    ] {
+        let removal = run_allp(&dir, &["remove", package, "--from", installer, "--dry-run"]);
+        assert!(removal.status.success(), "{}", stderr(&removal));
+        assert!(stdout(&removal).contains(command));
+    }
+    let save = run_allp(&dir, &["profile", "save", "python-tools"]);
+    assert!(save.status.success(), "{}", stderr(&save));
+    let profile =
+        fs::read_to_string(dir.join("xdg-config/allp/profiles/python-tools.toml")).unwrap();
+    assert!(profile.contains("installer = \"uv\""));
+    assert!(profile.contains("installer = \"pipx\""));
+    assert!(!dir.join("executed").exists());
+}
+
+#[test]
+fn profile_round_trips_both_flatpak_installations_of_one_application() {
+    let dir = temp_dir("profile-flatpak-scopes");
+    write_executable(
+        &dir,
+        "flatpak",
+        r#"#!/bin/sh
+case "$1" in
+  remotes) printf 'flathub\thttps://flathub.org/repo/\n' ;;
+  search) printf 'org.example.App\tExample\tAn app\t1.0\tstable\tflathub\n' ;;
+  list)
+    printf 'org.example.App\tExample\t1.0\tstable\tflathub\tuser\n'
+    printf 'org.example.App\tExample\t1.0\tstable\tflathub\tsystem\n' ;;
+  install) exit 42 ;;
+esac
+"#,
+    );
+
+    let save = run_allp(&dir, &["profile", "save", "apps"]);
+    assert!(save.status.success(), "stderr: {}", stderr(&save));
+    let profile = fs::read_to_string(dir.join("xdg-config/allp/profiles/apps.toml")).unwrap();
+    assert!(profile.contains("scope = \"user\""));
+    assert!(profile.contains("scope = \"system\""));
+    assert_eq!(profile.matches("branch = \"stable\"").count(), 2);
+
+    let replay = run_allp(
+        &dir,
+        &[
+            "profile",
+            "install",
+            "apps",
+            "--dry-run",
+            "--no-interactive",
+        ],
+    );
+    assert!(replay.status.success(), "stderr: {}", stderr(&replay));
+    let replay = stdout(&replay);
+    assert!(replay.contains("flatpak install --user -- flathub org.example.App//stable"));
+    assert!(replay.contains("flatpak install --system -- flathub org.example.App//stable"));
+
+    let direct = run_allp(
+        &dir,
+        &[
+            "install",
+            "org.example.App",
+            "--from",
+            "flatpak",
+            "--dry-run",
+        ],
+    );
+    assert!(direct.status.success(), "stderr: {}", stderr(&direct));
+    assert!(stdout(&direct).contains("flatpak install --user"));
 }
 
 #[test]

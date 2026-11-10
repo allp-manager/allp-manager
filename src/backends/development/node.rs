@@ -112,13 +112,16 @@ impl Backend for NodeBackend {
         commands: &CommandMap,
         runner: &dyn ProcessRunner,
     ) -> AllpResult<Vec<InstalledPackage>> {
-        let npm = command_path(self, commands, "npm")?;
-        let output = capture_checked(
-            self,
-            runner,
-            NativeCommand::new(npm).args(["list", "--global", "--depth=0", "--json"]),
-        )?;
-        Ok(parse_npm_list(self, &output))
+        node_inventory(self, commands, runner, None)
+    }
+
+    fn list_installed_with_selector(
+        &self,
+        commands: &CommandMap,
+        runner: &dyn ProcessRunner,
+        selector: Option<&str>,
+    ) -> AllpResult<Vec<InstalledPackage>> {
+        node_inventory(self, commands, runner, selector)
     }
 
     fn info(
@@ -203,16 +206,35 @@ impl Backend for NodeBackend {
         commands: &CommandMap,
         package: &InstalledPackage,
     ) -> AllpResult<ExecutionPlan> {
+        let installer = package.installer.as_deref().unwrap_or("npm");
+        let command = match installer {
+            "npm" => NativeCommand::new(command_path(self, commands, "npm")?).args([
+                "uninstall",
+                "--global",
+                &package.package_id,
+            ]),
+            "pnpm" => NativeCommand::new(command_path(self, commands, "pnpm")?).args([
+                "remove",
+                "--global",
+                &package.package_id,
+            ]),
+            "yarn" => NativeCommand::new(command_path(self, commands, "yarn")?).args([
+                "global",
+                "remove",
+                &package.package_id,
+            ]),
+            _ => {
+                return Err(AllpError::InvalidInput(format!(
+                    "unknown Node installer {installer}"
+                )))
+            }
+        };
         Ok(plan(
             self,
             OperationKind::Remove,
             "Remove global Node package",
             Some(package.package_id.clone()),
-            NativeCommand::new(command_path(self, commands, "npm")?).args([
-                "uninstall",
-                "--global",
-                package.package_id.as_str(),
-            ]),
+            command,
         ))
     }
 
@@ -340,10 +362,32 @@ fn node_maintenance(
     let mut output = MaintenancePlan::default();
     let target = target.unwrap_or(DeveloperTarget::All);
     let project_root = find_project_root();
+    let automatic_project_manager = if selector_allows_runtime(selector) {
+        project_root.as_deref().map(project_manager)
+    } else {
+        None
+    };
+    let target_for = |installer| match automatic_project_manager {
+        None => Some(target),
+        Some(Some(manager)) if manager == installer => Some(target),
+        _ if target.includes(DeveloperTarget::Global) => Some(DeveloperTarget::Global),
+        _ => None,
+    };
 
     append_node_component_records(backend, commands, runner, selector, operation, &mut output)?;
 
-    if selector_allows(selector, "npm") {
+    if automatic_project_manager == Some(None)
+        && (target.includes(DeveloperTarget::Project)
+            || target.includes(DeveloperTarget::Workspace))
+    {
+        output.records.push(node_record(
+            backend,
+            "Node project",
+            OperationStatus::NotApplicable,
+            "no single supported package manager is declared; choose one with --from",
+        ));
+    }
+    if let Some(target) = target_for("npm").filter(|_| selector_allows(selector, "npm")) {
         append_npm_plans(
             backend,
             commands,
@@ -354,7 +398,7 @@ fn node_maintenance(
             &mut output,
         )?;
     }
-    if selector_allows(selector, "pnpm") {
+    if let Some(target) = target_for("pnpm").filter(|_| selector_allows(selector, "pnpm")) {
         append_pnpm_plans(
             backend,
             commands,
@@ -365,7 +409,7 @@ fn node_maintenance(
             &mut output,
         )?;
     }
-    if selector_allows(selector, "yarn") {
+    if let Some(target) = target_for("yarn").filter(|_| selector_allows(selector, "yarn")) {
         append_yarn_plans(
             backend,
             commands,
@@ -565,10 +609,8 @@ fn node_cli_record(
     Ok(node_record(
         backend,
         target_name,
-        OperationStatus::UpToDate,
-        &format!(
-            "{version} · CLI self-update is separate from global packages, projects, and workspaces"
-        ),
+        OperationStatus::NotApplicable,
+        &format!("{version} · CLI updates are managed separately from package updates"),
     ))
 }
 
@@ -767,26 +809,51 @@ fn append_pnpm_plans(
         return Ok(());
     };
 
-    if target.includes(DeveloperTarget::Project) {
-        if let Some(root) = project_root {
-            inspect_pnpm(backend, runner, pnpm, root)?;
-            let mut command = NativeCommand::new(pnpm).arg("update");
+    let workspace_root = if target.includes(DeveloperTarget::Workspace) {
+        project_root.and_then(find_pnpm_workspace)
+    } else {
+        None
+    };
+    if target.includes(DeveloperTarget::Workspace) && workspace_root.is_none() {
+        output.records.push(node_record(
+            backend,
+            "pnpm workspace",
+            OperationStatus::NotApplicable,
+            "no pnpm workspace manifest found",
+        ));
+    }
+
+    let root =
+        workspace_root.or(project_root.filter(|_| target.includes(DeveloperTarget::Project)));
+    if let Some(root) = root {
+        let recursive = workspace_root.is_some();
+        let name = if recursive {
+            "pnpm workspace"
+        } else {
+            "pnpm project"
+        };
+        if inspect_pnpm(backend, runner, pnpm, root, recursive)? {
+            let mut command = NativeCommand::new(pnpm);
+            if recursive {
+                command = command.arg("--recursive");
+            }
+            command = command.arg("update");
             if operation == OperationKind::Upgrade {
                 command = command.arg("--latest");
             }
             command.current_dir = Some(root.to_path_buf());
             output.plans.push(node_plan(
                 backend,
-                "pnpm project",
+                name,
                 operation,
                 if operation == OperationKind::Upgrade {
-                    "Update pnpm project packages to latest versions"
+                    "Update pnpm dependencies to latest versions"
                 } else {
-                    "Update pnpm project packages within declared ranges"
+                    "Update pnpm dependencies within declared ranges"
                 },
                 Some("npm registry".to_owned()),
                 Some(format!(
-                    "project · {} · affects package.json, pnpm-lock.yaml, node_modules",
+                    "{} · affects package manifests, pnpm-lock.yaml, node_modules",
                     root.display()
                 )),
                 command,
@@ -794,50 +861,18 @@ fn append_pnpm_plans(
         } else {
             output.records.push(node_record(
                 backend,
-                "pnpm project",
-                crate::domain::OperationStatus::NotApplicable,
-                "no project manifest found in the current directory or its parents",
+                name,
+                OperationStatus::UpToDate,
+                "pnpm reported no outdated dependencies",
             ));
         }
-    }
-
-    if target.includes(DeveloperTarget::Workspace) {
-        if let Some(root) = project_root {
-            if is_pnpm_workspace(root) {
-                inspect_pnpm(backend, runner, pnpm, root)?;
-                let mut command = NativeCommand::new(pnpm).arg("update");
-                if operation == OperationKind::Upgrade {
-                    command = command.arg("--latest");
-                }
-                command.current_dir = Some(root.to_path_buf());
-                output.plans.push(node_plan(
-                    backend,
-                    "pnpm workspace",
-                    operation,
-                    "Update selected pnpm workspace packages",
-                    Some("npm registry".to_owned()),
-                    Some(format!(
-                        "workspace · {} · affects workspace manifests and pnpm-lock.yaml",
-                        root.display()
-                    )),
-                    command,
-                ));
-            } else {
-                output.records.push(node_record(
-                    backend,
-                    "pnpm workspace",
-                    crate::domain::OperationStatus::NotApplicable,
-                    "no pnpm workspace manifest found",
-                ));
-            }
-        } else {
-            output.records.push(node_record(
-                backend,
-                "pnpm workspace",
-                crate::domain::OperationStatus::NotApplicable,
-                "no project manifest found in the current directory or its parents",
-            ));
-        }
+    } else if target.includes(DeveloperTarget::Project) {
+        output.records.push(node_record(
+            backend,
+            "pnpm project",
+            OperationStatus::NotApplicable,
+            "no project manifest found in the current directory or its parents",
+        ));
     }
 
     if target.includes(DeveloperTarget::Global) {
@@ -930,8 +965,8 @@ fn append_yarn_plans(
             "Update Yarn 1 project dependencies to latest versions"
         }
         (_, OperationKind::Update) => {
-            command = command.arg("up");
-            "Update modern Yarn project dependencies"
+            command = command.args(["up", "-R", "*", "@*/*"]);
+            "Refresh modern Yarn dependency resolutions within declared ranges"
         }
         (_, OperationKind::Upgrade) => {
             command = command.args(["up", "*"]);
@@ -991,11 +1026,43 @@ fn npm_outdated(
             stderr: output.stderr,
         });
     }
-    Ok(if json_object_has_entries(&output.stdout) {
-        OutdatedState::Outdated
-    } else {
-        OutdatedState::None
-    })
+    if output.success && output.stdout.trim().is_empty() {
+        return Ok(OutdatedState::None);
+    }
+    let report = serde_json::from_str::<Value>(&output.stdout)
+        .ok()
+        .and_then(|value| {
+            let entries = value.as_object()?;
+            let valid = |entry: &Value| {
+                ["wanted", "latest"]
+                    .iter()
+                    .all(|key| entry.get(key).and_then(Value::as_str).is_some())
+            };
+            let is_empty = entries.is_empty();
+            let is_report = entries.values().all(|entry| match entry.as_array() {
+                Some(items) => !items.is_empty() && items.iter().all(valid),
+                None => valid(entry),
+            });
+            ((output.success || !is_empty) && is_report).then_some(is_empty)
+        });
+    match report {
+        Some(true) => Ok(OutdatedState::None),
+        Some(false) => Ok(OutdatedState::Outdated),
+        None if !output.success => Err(AllpError::CommandFailed {
+            backend: backend.display_name().to_owned(),
+            command: rendered,
+            code: output.code,
+            stderr: if output.stderr.trim().is_empty() {
+                output.stdout
+            } else {
+                output.stderr
+            },
+        }),
+        None => Err(AllpError::Parse {
+            backend: backend.display_name().to_owned(),
+            message: "npm outdated did not return a valid package report".to_owned(),
+        }),
+    }
 }
 
 fn inspect_pnpm(
@@ -1003,20 +1070,47 @@ fn inspect_pnpm(
     runner: &dyn ProcessRunner,
     pnpm: &Path,
     root: &Path,
-) -> AllpResult<()> {
-    let mut command = NativeCommand::new(pnpm).args(["outdated", "--format", "json"]);
+    recursive: bool,
+) -> AllpResult<bool> {
+    let mut command = NativeCommand::new(pnpm);
+    if recursive {
+        command = command.arg("--recursive");
+    }
+    command = command.args(["outdated", "--format", "json"]);
     command.current_dir = Some(root.to_path_buf());
     let rendered = render_native_command(&command);
     let output = runner.capture(&command)?;
-    if output.success || output.code == Some(1) {
-        Ok(())
-    } else {
-        Err(AllpError::CommandFailed {
+    let report = serde_json::from_str::<Value>(&output.stdout)
+        .ok()
+        .and_then(|value| {
+            let entries = value.as_object()?;
+            let valid = |entry: &Value| entry.get("latest").and_then(Value::as_str).is_some();
+            entries
+                .values()
+                .all(|entry| match entry.as_array() {
+                    Some(items) => !items.is_empty() && items.iter().all(valid),
+                    None => valid(entry),
+                })
+                .then_some(!entries.is_empty())
+        });
+    match (output.success, output.code, report) {
+        (true, _, Some(outdated)) => Ok(outdated),
+        (false, Some(1), Some(true)) => Ok(true),
+        (true, _, None) if output.stdout.trim().is_empty() => Ok(false),
+        (true, _, None) => Err(AllpError::Parse {
+            backend: backend.display_name().to_owned(),
+            message: "pnpm outdated did not return a valid package report".to_owned(),
+        }),
+        _ => Err(AllpError::CommandFailed {
             backend: backend.display_name().to_owned(),
             command: rendered,
             code: output.code,
-            stderr: output.stderr,
-        })
+            stderr: if output.stderr.trim().is_empty() {
+                output.stdout
+            } else {
+                output.stderr
+            },
+        }),
     }
 }
 
@@ -1044,32 +1138,64 @@ fn yarn_major_version(
         .and_then(|value| value.parse::<u64>().ok()))
 }
 
-fn json_object_has_entries(output: &str) -> bool {
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    match serde_json::from_str::<Value>(trimmed) {
-        Ok(Value::Object(map)) => !map.is_empty(),
-        Ok(Value::Array(items)) => !items.is_empty(),
-        _ => true,
-    }
-}
-
 fn find_project_root() -> Option<PathBuf> {
     let mut current = env::current_dir().ok()?;
     loop {
         if current.join("package.json").is_file() {
             return Some(current);
         }
-        if !current.pop() {
+        if current.join(".git").exists() || !current.pop() {
             return None;
         }
     }
 }
 
-fn is_pnpm_workspace(root: &Path) -> bool {
-    root.join("pnpm-workspace.yaml").is_file()
+fn find_pnpm_workspace(root: &Path) -> Option<&Path> {
+    for directory in root.ancestors() {
+        if directory.join("pnpm-workspace.yaml").is_file() {
+            return Some(directory);
+        }
+        if directory.join(".git").exists() {
+            break;
+        }
+    }
+    None
+}
+
+fn project_manager(root: &Path) -> Option<&'static str> {
+    let manifest = fs::read_to_string(root.join("package.json")).ok()?;
+    let manifest = serde_json::from_str::<Value>(&manifest).ok()?;
+    if let Some(manager) = manifest.get("packageManager") {
+        return match manager.as_str()?.split_once('@')?.0 {
+            "npm" => Some("npm"),
+            "pnpm" => Some("pnpm"),
+            "yarn" => Some("yarn"),
+            _ => None,
+        };
+    }
+
+    let mut lockfiles = [
+        (
+            "npm",
+            root.join("package-lock.json").is_file() || root.join("npm-shrinkwrap.json").is_file(),
+        ),
+        (
+            "pnpm",
+            root.join("pnpm-lock.yaml").is_file() || find_pnpm_workspace(root).is_some(),
+        ),
+        ("yarn", root.join("yarn.lock").is_file()),
+        (
+            "bun",
+            root.join("bun.lock").is_file() || root.join("bun.lockb").is_file(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(manager, exists)| exists.then_some(manager));
+    match (lockfiles.next(), lockfiles.next()) {
+        (None, _) => Some("npm"),
+        (Some(manager), None) if manager != "bun" => Some(manager),
+        _ => None,
+    }
 }
 
 fn uses_yarn(root: &Path) -> bool {
@@ -1186,31 +1312,160 @@ fn parse_npm_search(
     report
 }
 
-fn parse_npm_list(backend: &NodeBackend, output: &str) -> Vec<InstalledPackage> {
-    let Ok(json) = serde_json::from_str::<Value>(output) else {
-        return Vec::new();
-    };
-    let Some(dependencies) = json.get("dependencies").and_then(Value::as_object) else {
-        return Vec::new();
-    };
-    dependencies
-        .iter()
-        .map(|(package_id, value)| InstalledPackage {
-            backend_id: backend.id().to_owned(),
-            backend_name: backend.display_name().to_owned(),
-            category: backend.category(),
-            domain: PackageDomain::Node,
-            package_id: package_id.clone(),
-            display_name: package_id.clone(),
-            version: value
-                .get("version")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            description: None,
-            source: Some("npm registry".to_owned()),
-            scope: Some("global user tool".to_owned()),
+fn node_inventory(
+    backend: &NodeBackend,
+    commands: &CommandMap,
+    runner: &dyn ProcessRunner,
+    selector: Option<&str>,
+) -> AllpResult<Vec<InstalledPackage>> {
+    let selector = selector.map(str::to_ascii_lowercase);
+    let selected = selector
+        .as_deref()
+        .filter(|value| matches!(*value, "npm" | "pnpm" | "yarn"));
+    let mut packages = Vec::new();
+    for installer in ["npm", "pnpm", "yarn"] {
+        if selected.is_some_and(|selected| selected != installer) {
+            continue;
+        }
+        let Some(program) = commands.get(installer) else {
+            if selected == Some(installer) {
+                return Err(AllpError::BackendNotDetected(installer.to_owned()));
+            }
+            continue;
+        };
+        if installer == "yarn" {
+            if yarn_major_version(backend, runner, program)? != Some(1) {
+                if selected == Some("yarn") {
+                    return Err(backend.unsupported("global inventory for Yarn 2 or newer"));
+                }
+                continue;
+            }
+            let global_dir = crate::backends::util::capture_checked_with_privilege(
+                backend,
+                runner,
+                NativeCommand::new(program).args(["global", "dir"]),
+                PrivilegeRequirement::OriginalUserRequired,
+            )?;
+            let global_dir = Path::new(global_dir.trim());
+            if !global_dir.is_absolute() {
+                return Err(invalid_node_inventory(backend, installer));
+            }
+            if !global_dir.join("package.json").is_file() {
+                continue;
+            }
+            let mut command = NativeCommand::new(program).args(["list", "--depth=0", "--json"]);
+            command.current_dir = Some(global_dir.to_owned());
+            let output = crate::backends::util::capture_checked_with_privilege(
+                backend,
+                runner,
+                command,
+                PrivilegeRequirement::OriginalUserRequired,
+            )?;
+            for line in output.lines().filter(|line| !line.trim().is_empty()) {
+                let record =
+                    serde_json::from_str::<Value>(line).map_err(|error| AllpError::Parse {
+                        backend: backend.display_name().to_owned(),
+                        message: format!("invalid Yarn inventory: {error}"),
+                    })?;
+                if record.get("type").and_then(Value::as_str) != Some("tree") {
+                    continue;
+                }
+                let entries = record
+                    .pointer("/data/trees")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| invalid_node_inventory(backend, installer))?;
+                for entry in entries {
+                    let (name, version) = entry
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .and_then(|name| name.rsplit_once('@'))
+                        .ok_or_else(|| invalid_node_inventory(backend, installer))?;
+                    packages.push(node_installed(backend, installer, name, Some(version)));
+                }
+            }
+            continue;
+        }
+        let output = crate::backends::util::capture_checked_with_privilege(
+            backend,
+            runner,
+            NativeCommand::new(program).args(["list", "--global", "--depth=0", "--json"]),
+            PrivilegeRequirement::OriginalUserRequired,
+        );
+        let output = match output {
+            Ok(output) => output,
+            Err(AllpError::CommandFailed { stderr, .. })
+                if selected.is_none()
+                    && installer == "pnpm"
+                    && pnpm_global_unconfigured(&stderr) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let report = serde_json::from_str::<Value>(&output)
+            .map_err(|_| invalid_node_inventory(backend, installer))?;
+        let roots = match (installer, report.as_array()) {
+            ("pnpm", Some(roots)) => roots.as_slice(),
+            _ => std::slice::from_ref(&report),
+        };
+        for root in roots {
+            if !root.is_object() || root.get("error").is_some() {
+                return Err(invalid_node_inventory(backend, installer));
+            }
+            let Some(entries) = root.get("dependencies") else {
+                continue;
+            };
+            let entries = entries
+                .as_object()
+                .ok_or_else(|| invalid_node_inventory(backend, installer))?;
+            for (name, package) in entries {
+                packages.push(node_installed(
+                    backend,
+                    installer,
+                    name,
+                    package.get("version").and_then(Value::as_str),
+                ));
+            }
+        }
+    }
+    Ok(packages)
+}
+
+fn pnpm_global_unconfigured(stderr: &str) -> bool {
+    stderr.contains("ERR_PNPM_NO_GLOBAL_BIN_DIR")
+        || (stderr.contains("configured global bin directory") && stderr.contains("is not in PATH"))
+        || stderr.lines().any(|line| {
+            line.contains("ENOENT: no such file or directory, mkdir ")
+                && (line.ends_with("/pnpm/bin'") || line.ends_with("\\pnpm\\bin'"))
         })
-        .collect()
+}
+
+fn invalid_node_inventory(backend: &NodeBackend, installer: &str) -> AllpError {
+    AllpError::Parse {
+        backend: backend.display_name().to_owned(),
+        message: format!("{installer} list did not return a valid installed-package inventory"),
+    }
+}
+
+fn node_installed(
+    backend: &NodeBackend,
+    installer: &str,
+    name: &str,
+    version: Option<&str>,
+) -> InstalledPackage {
+    InstalledPackage {
+        installer: Some(installer.to_owned()),
+        backend_id: backend.id().to_owned(),
+        backend_name: backend.display_name().to_owned(),
+        category: backend.category(),
+        domain: PackageDomain::Node,
+        package_id: name.to_owned(),
+        display_name: name.to_owned(),
+        version: version.map(str::to_owned),
+        description: None,
+        source: Some("npm registry".to_owned()),
+        scope: Some(format!("global user tool via {installer}")),
+    }
 }
 
 fn info_from_npm_view(backend: &NodeBackend, package_id: &str, output: &str) -> PackageInfo {

@@ -1,4 +1,4 @@
-use std::{env, process::Command};
+use std::{env, path::Path, process::Command};
 
 fn main() {
     for name in [
@@ -12,7 +12,6 @@ fn main() {
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
-    println!("cargo:rerun-if-changed=.git/HEAD");
 
     let package_version = required_env("CARGO_PKG_VERSION");
     let base_version = env::var("ALLP_BASE_VERSION").unwrap_or_else(|_| package_version.clone());
@@ -57,11 +56,12 @@ fn main() {
     let build_id = env::var("ALLP_BUILD_ID").unwrap_or_else(|_| "local".to_owned());
     let built_at = env::var("ALLP_BUILD_TIMESTAMP").unwrap_or_default();
     let target = required_env("TARGET");
-    let display_version = if channel == "stable" && parsed_revision == 0 {
-        base_version.clone()
-    } else {
-        format!("{base_version}.{parsed_revision}")
-    };
+    let display_version =
+        if matches!(channel.as_str(), "stable" | "prerelease") && parsed_revision == 0 {
+            base_version.clone()
+        } else {
+            format!("{base_version}.{parsed_revision}")
+        };
 
     emit("ALLP_BASE_VERSION", &base_version);
     emit("ALLP_BUILD_REVISION", &revision);
@@ -86,13 +86,33 @@ fn emit(name: &str, value: &str) {
 }
 
 fn git_head() -> Option<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--verify", "HEAD"])
-        .output()
-        .ok()?;
+    // A source archive may be unpacked inside an unrelated checkout.
+    if !Path::new(".git").exists() {
+        return None;
+    }
+    for name in ["HEAD", "packed-refs"] {
+        if let Some(path) = git_output(&["rev-parse", "--git-path", name]) {
+            if Path::new(&path).exists() {
+                println!("cargo:rerun-if-changed={path}");
+            }
+        }
+    }
+    if let Some(branch) = git_output(&["symbolic-ref", "-q", "HEAD"]) {
+        if let Some(path) = git_output(&["rev-parse", "--git-path", &branch]) {
+            // A packed branch gains a loose ref on its next commit.
+            if let Some(watched) = Path::new(&path).ancestors().find(|path| path.exists()) {
+                println!("cargo:rerun-if-changed={}", watched.display());
+            }
+        }
+    }
+    git_output(&["rev-parse", "--verify", "HEAD"])
+}
+
+fn git_output(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
-    let sha = String::from_utf8(output.stdout).ok()?.trim().to_owned();
-    (!sha.is_empty()).then_some(sha)
+    let value = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+    (!value.is_empty()).then_some(value)
 }

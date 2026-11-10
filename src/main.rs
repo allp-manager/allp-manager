@@ -1,30 +1,36 @@
 use allp::{app::App, cli::Cli};
-use clap::Parser;
+use clap::{error::ErrorKind, Parser};
 use serde_json::json;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let raw_args = std::env::args_os().collect::<Vec<_>>();
-    if requests_version(&raw_args) {
-        let verbose = raw_args.iter().skip(1).any(|argument| {
-            let argument = argument.to_string_lossy();
-            argument == "--verbose"
-                || argument.starts_with("--verbose=")
-                || (argument.starts_with('-')
-                    && !argument.starts_with("--")
-                    && argument.chars().any(|character| character == 'v'))
-        });
-        println!(
-            "{}",
-            if verbose {
-                allp::build_identity::verbose_version_output()
-            } else {
-                allp::build_identity::short_version_output()
-            }
-        );
-        return ExitCode::SUCCESS;
-    }
-    let cli = Cli::parse_from(raw_args);
+    let cli = match Cli::try_parse_from(&raw_args) {
+        Ok(cli) => cli,
+        Err(error) if error.kind() == ErrorKind::DisplayVersion => {
+            let verbose = raw_args
+                .iter()
+                .skip(1)
+                .take_while(|arg| *arg != "--")
+                .any(|argument| {
+                    let argument = argument.to_string_lossy();
+                    argument == "--verbose"
+                        || (argument.starts_with('-')
+                            && !argument.starts_with("--")
+                            && argument.chars().any(|character| character == 'v'))
+                });
+            println!(
+                "{}",
+                if verbose {
+                    allp::build_identity::verbose_version_output()
+                } else {
+                    allp::build_identity::short_version_output()
+                }
+            );
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => error.exit(),
+    };
     let json_output = cli.command.json();
 
     match App::new().run(cli) {
@@ -45,15 +51,4 @@ fn main() -> ExitCode {
             ExitCode::from(error.exit_code())
         }
     }
-}
-
-fn requests_version(arguments: &[std::ffi::OsString]) -> bool {
-    arguments.iter().skip(1).any(|argument| {
-        let argument = argument.to_string_lossy();
-        argument == "--version"
-            || argument == "-V"
-            || (argument.starts_with('-')
-                && !argument.starts_with("--")
-                && argument.chars().skip(1).any(|character| character == 'V'))
-    })
 }

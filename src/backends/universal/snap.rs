@@ -17,7 +17,9 @@ use crate::{
         NativeCommand, OperationKind, OperationStatus, PackageCandidate, PackageDomain,
         PackageInfo, PrivilegeRequirement,
     },
-    execution::{CommandOutput, ProcessRunner, ProcessStatus},
+    execution::{
+        privilege::resolve_root_required_executable, CommandOutput, ProcessRunner, ProcessStatus,
+    },
     platform::PlatformContext,
     requirements::{snap_requirements, BackendRequirements, RequirementSet},
 };
@@ -230,6 +232,7 @@ impl Backend for SnapBackend {
                 let columns: Vec<&str> = line.split_whitespace().collect();
                 let package_id = columns.first()?;
                 Some(InstalledPackage {
+                    installer: None,
                     backend_id: self.id().to_owned(),
                     backend_name: self.display_name().to_owned(),
                     category: self.category(),
@@ -426,21 +429,35 @@ impl Backend for SnapBackend {
         if candidate
             .metadata
             .get(SNAP_AVAILABILITY_KEY)
-            .map_or(true, |availability| {
-                availability != SnapAvailability::Available.as_str()
-            })
+            .is_none_or(|availability| availability != SnapAvailability::Available.as_str())
         {
             return Err(AllpError::CandidateUnavailable {
                 backend: self.display_name().to_owned(),
                 message: "Snap installation requires successful exact resolution".to_owned(),
             });
         }
-        if candidate
+        let rest_metadata = candidate
             .metadata
             .get(SNAP_TRANSPORT_KEY)
-            .is_some_and(|transport| transport == SnapTransport::Rest.as_str())
-        {
-            return snapd_install_plan(self, candidate);
+            .is_some_and(|transport| transport == SnapTransport::Rest.as_str());
+        if rest_metadata {
+            let socket = candidate
+                .metadata
+                .get(SNAP_SOCKET_KEY)
+                .map(PathBuf::from)
+                .unwrap_or_else(snapd_socket_path);
+            let plan = snapd_install_plan(self, candidate, &socket)?;
+            match resolve_root_required_executable(&plan.command.program) {
+                Ok(_) => return Ok(plan),
+                Err(error)
+                    if !commands.contains_key("snap")
+                        || (socket != Path::new("/run/snapd.socket")
+                            && socket != Path::new("/var/run/snapd.socket")) =>
+                {
+                    return Err(error);
+                }
+                Err(_) => {}
+            }
         }
         let snap = command_path(self, commands, "snap")?;
         let mut args = vec!["install".to_owned(), candidate.package_id.clone()];
@@ -471,6 +488,12 @@ impl Backend for SnapBackend {
             },
         );
         plan.details = snap_plan_details(candidate);
+        if rest_metadata {
+            plan.details.push((
+                "Transport".to_owned(),
+                "Snap CLI using snapd metadata".to_owned(),
+            ));
+        }
         Ok(plan)
     }
 
@@ -1510,7 +1533,7 @@ fn snap_resolution_status_command(
     if candidate
         .metadata
         .get(SNAP_TRANSPORT_KEY)
-        .map_or(true, |transport| transport == SnapTransport::Rest.as_str())
+        .is_none_or(|transport| transport == SnapTransport::Rest.as_str())
     {
         let socket = candidate
             .metadata
@@ -1707,7 +1730,7 @@ fn parse_snapd_top_level_channel(result: &Value) -> Option<SnapChannel> {
         available: result
             .get("status")
             .and_then(Value::as_str)
-            .map_or(true, |status| status.eq_ignore_ascii_case("available")),
+            .is_none_or(|status| status.eq_ignore_ascii_case("available")),
     })
 }
 
@@ -2298,12 +2321,8 @@ fn snap_plan_details(candidate: &PackageCandidate) -> Vec<(String, String)> {
 fn snapd_install_plan(
     backend: &SnapBackend,
     candidate: &PackageCandidate,
+    socket: &Path,
 ) -> AllpResult<ExecutionPlan> {
-    let socket = candidate
-        .metadata
-        .get(SNAP_SOCKET_KEY)
-        .map(PathBuf::from)
-        .unwrap_or_else(snapd_socket_path);
     let channel = candidate
         .metadata
         .get("snap.channel")
@@ -2563,10 +2582,14 @@ fn bounded_block(value: &str) -> String {
     if value.len() <= LIMIT {
         return value.trim_end().to_owned();
     }
+    let mut end = LIMIT;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
     format!(
         "{}\n... <truncated {} byte(s)>",
-        &value[..LIMIT],
-        value.len() - LIMIT
+        &value[..end],
+        value.len() - end
     )
 }
 
@@ -2877,6 +2900,60 @@ mod tests {
     use std::io;
     #[cfg(unix)]
     use std::{os::unix::net::UnixListener, path::Path};
+
+    #[test]
+    fn snap_diagnostics_truncate_at_a_character_boundary() {
+        let text = format!("{}ب", "a".repeat(7_999));
+        let output = super::bounded_block(&text);
+        assert!(output.ends_with("<truncated 2 byte(s)>"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snap_install_keeps_the_resolved_channel_when_using_the_native_cli() {
+        use crate::backends::Backend;
+
+        let mut candidate = candidate("example");
+        candidate.metadata.insert(
+            SNAP_TRANSPORT_KEY.to_owned(),
+            super::SnapTransport::Rest.as_str().to_owned(),
+        );
+        candidate.metadata.insert(
+            super::SNAP_SOCKET_KEY.to_owned(),
+            "/run/snapd.socket".to_owned(),
+        );
+        candidate.metadata.insert(
+            SNAP_AVAILABILITY_KEY.to_owned(),
+            super::SnapAvailability::Available.as_str().to_owned(),
+        );
+        candidate
+            .metadata
+            .insert("snap.channel".to_owned(), "latest/beta".to_owned());
+        candidate
+            .metadata
+            .insert("snap.confinement".to_owned(), "classic".to_owned());
+        let plan = super::SnapBackend
+            .plan_install(&commands(), &candidate)
+            .unwrap();
+        let executable = std::env::current_exe().unwrap();
+        if super::resolve_root_required_executable(&executable).is_err() {
+            assert_eq!(
+                plan.command.program,
+                std::path::PathBuf::from("/usr/bin/snap")
+            );
+            assert_eq!(
+                plan.command.args,
+                ["install", "example", "--classic", "--channel=latest/beta"]
+            );
+        } else {
+            assert_eq!(plan.command.program, executable);
+            assert!(plan
+                .command
+                .args
+                .iter()
+                .any(|argument| argument == "latest/beta"));
+        }
+    }
 
     #[test]
     fn all_snaps_up_to_date_maps_to_up_to_date() {
