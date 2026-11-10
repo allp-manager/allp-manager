@@ -58,10 +58,10 @@ cd "$test_home"
 allp --version
 allp update --from termux --skip-self-update --yes --no-tui --no-color
 allp search tree --from termux --exact --json > search.json
-allp info tree --from termux --json > info.json
 allp upgrade --from pkg --dry-run --json > upgrade-plan.json
 printf 'y\n' | allp install tree --from termux --yes --no-interactive --no-tui --no-color
 tree --version
+allp info tree --from termux --json > info.json
 allp list --from termux --json > inventory-installed.json
 allp upgrade --from termux --yes --no-tui --no-color
 printf 'y\n' | allp remove tree --from termux --yes --no-interactive --no-tui --no-color

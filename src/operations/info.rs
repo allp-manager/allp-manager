@@ -74,7 +74,16 @@ pub fn run(context: &OperationContext<'_>, package: &str, full: bool, raw: bool)
         return Err(AllpError::PackageNotFound(package.to_owned()));
     }
 
-    let selectable = search_report.candidates;
+    let mut selectable = search_report.candidates;
+    if context.backend_filter.is_some() {
+        let exact_matches = selectable
+            .iter()
+            .filter(|candidate| candidate.package_id.eq_ignore_ascii_case(package))
+            .count();
+        if exact_matches == 1 {
+            selectable.retain(|candidate| candidate.package_id.eq_ignore_ascii_case(package));
+        }
+    }
 
     if !context.renderer.json() {
         let groups = crate::identity::resolver::group_candidates(&selectable);

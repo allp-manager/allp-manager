@@ -604,8 +604,10 @@ fn parse_info<'a>(
     output: &'a str,
     package_id: &str,
 ) -> AllpResult<(&'a str, std::collections::BTreeMap<String, String>)> {
-    let mut lines = output.split(['\r', '\n']);
+    let mut lines = output.lines();
     for line in lines.by_ref() {
+        // WinGet can overwrite a progress indicator before printing the identity.
+        let line = line.rsplit_once('\r').map_or(line, |(_, visible)| visible);
         let Some(found) = line.trim_start_matches('\u{feff}').strip_prefix("Found ") else {
             continue;
         };
@@ -810,7 +812,7 @@ mod tests {
 
     #[test]
     fn show_requires_the_requested_identity_before_extracting_metadata() {
-        let details = "Found 7-Zip [7zip.7zip] Version 25.01\r\nVersion: 25.01\r\nPublisher: Igor Pavlov\r\nDescription: Archive manager\r\n";
+        let details = "\r -\rFound 7-Zip [7zip.7zip] Version 25.01\r\nVersion: 25.01\r\nPublisher: Igor Pavlov\r\nDescription: Archive manager\r\n";
         let info = WinGetBackend
             .info(
                 &commands(),
