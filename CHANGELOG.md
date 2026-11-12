@@ -4,6 +4,28 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-11-13
+
+### Release Title
+
+Allp v0.6.10 — Live Snap Tasks and Truthful Homebrew Updates
+
+### Changed
+
+- Allow the native Snap canary's first installation enough time to bootstrap
+  base/snapd snaps and restart the daemon, while preserving every lifecycle check.
+
+### Fixed
+
+- Include v0.6.9's live Snap task progress, DNS recovery guidance and truthful
+  Homebrew metadata failure handling in the published Stable release.
+
+### Known Limitations
+
+- The public v0.6.9 source tag is retained unchanged. Its release stopped before
+  binary publication after external Snap rate limits and a cold-start timeout.
+
+
 ## [0.6.9] - 2026-11-13
 
 ### Release Title

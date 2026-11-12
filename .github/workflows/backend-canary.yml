@@ -105,7 +105,7 @@ jobs:
   snap-search:
     name: Snap on Ubuntu
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -140,7 +140,10 @@ jobs:
             exit 1
           fi
           trap 'sudo snap remove --purge hello-world >snap-cleanup.log 2>&1 || true' EXIT
-          timeout 180s target/debug/allp install hello-world --from snap --yes --no-interactive --no-color | tee snap-install.log
+          # A fresh runner may bootstrap the snapd/base snaps and restart the
+          # daemon during its first installation. Keep a bounded deadline that
+          # permits that native setup; all lifecycle assertions still apply.
+          timeout 600s target/debug/allp install hello-world --from snap --yes --no-interactive --no-color | tee snap-install.log
           snap list hello-world | tee snap-installed.log
           snap run hello-world | tee snap-run.log
           grep -Fq 'Hello World!' snap-run.log
