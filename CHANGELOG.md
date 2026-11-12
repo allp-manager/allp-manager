@@ -4,10 +4,25 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+
+## [0.6.8] - 2026-11-12
+
+### Release Title
+
+Allp v0.6.8 — Snap Reliability and Automatic AUR Releases
+
+### Changed
+
 - Automatically reconcile the tested AUR source package after a successful
   published Stable release, with six-hour retries and monotonic version checks.
 - Record a proven pre-mutation Snap Store outage separately from exact-source
   CI, while retaining blocking checks for application and mutation failures.
+- Wait for pending exact-source checks and run backend canaries automatically on main and prerelease pushes.
+
+### Fixed
+
+- Read colored GitHub Actions logs with both old and new GitHub CLI versions, keeping raw escape sequences inside the validation parser.
+- Include the Snap timeout/error-reporting fixes and verified installation lifecycle from the unpublished v0.6.7 candidate.
 
 ## [0.6.7] - 2026-11-12
 

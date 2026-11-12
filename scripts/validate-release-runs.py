@@ -15,6 +15,17 @@ class ChecksPending(ValueError):
     """Exact-source workflows have not completed yet; publication must wait."""
 
 
+def github_api(repo, path):
+    command = ['gh', 'api', f'repos/{repo}/actions/{path}']
+    if path.endswith('/logs'):
+        # New gh versions reject raw ANSI by default. This pipe is parsed below,
+        # never replayed to a terminal; keep compatibility with older clients.
+        help_text = subprocess.check_output(['gh', 'api', '--help'], text=True, timeout=30)
+        if '--allow-escape-sequences' in help_text:
+            command.append('--allow-escape-sequences')
+    return subprocess.check_output(command, text=True, timeout=90)
+
+
 def store_outage(job, raw_log):
     failed = [step['name'] for step in job['steps'] if step.get('conclusion') == 'failure']
     log = re.sub(r'\x1b\[[0-9;]*m', '', raw_log)
@@ -106,8 +117,7 @@ def main():
         parser.error('invalid source commit')
 
     def api(path):
-        return subprocess.check_output(['gh', 'api', f'repos/{args.repo}/actions/{path}'],
-                                       text=True, timeout=90)
+        return github_api(args.repo, path)
 
     try:
         proof = assess(json.loads(args.runs.read_text())['workflow_runs'], args.sha,

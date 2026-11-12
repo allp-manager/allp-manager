@@ -4,11 +4,32 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('validation', Path(__file__).with_name('validate-release-runs.py'))
 validation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(validation)
 SHA = 'a' * 40
+
+
+class GithubLogCompatibilityTests(unittest.TestCase):
+    def test_new_gh_can_pipe_colored_logs_to_the_parser(self):
+        with patch.object(validation.subprocess, 'check_output', side_effect=[
+                'Options: --allow-escape-sequences', '\x1b[31mraw log\x1b[0m']) as call:
+            result = validation.github_api('allp-manager/allp-manager', 'jobs/1/logs')
+            self.assertIn('--allow-escape-sequences', call.call_args.args[0])
+            self.assertIn('raw log', result)
+
+    def test_old_gh_does_not_receive_an_unsupported_flag(self):
+        with patch.object(validation.subprocess, 'check_output', side_effect=['Options: --include', 'log']) as call:
+            self.assertEqual(validation.github_api('allp-manager/allp-manager', 'jobs/1/logs'), 'log')
+            self.assertNotIn('--allow-escape-sequences', call.call_args.args[0])
+
+    def test_json_requests_do_not_enable_terminal_output(self):
+        with patch.object(validation.subprocess, 'check_output', return_value='{}') as call:
+            self.assertEqual(validation.github_api('allp-manager/allp-manager', 'runs/1/jobs'), '{}')
+            self.assertEqual(call.call_count, 1)
+            self.assertNotIn('--allow-escape-sequences', call.call_args.args[0])
 
 
 class ReleaseValidationTests(unittest.TestCase):
