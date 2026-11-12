@@ -7,6 +7,11 @@ Snap uses two transports behind `SnapService`:
 
 Every fallback records its concrete reason.
 
+Transient socket read timeouts or disconnects during discovery and exact lookup
+may retry the same read through the native CLI. Store queries have a bounded
+45-second CLI deadline. An authoritative `snap-not-found` response still blocks
+installation, and a lost mutation response never authorizes replaying an install.
+
 Snap health is capability-specific:
 
 - daemon
@@ -42,6 +47,13 @@ CLI fallback executes direct argv vectors. Classic metadata produces `snap insta
 Snap does not expose a useful metadata-only operation for Allp's `update` semantics. `allp update` reports Snap as `Not applicable` and does not run `snap refresh`.
 
 Installed snap refresh is a combined refresh/upgrade operation. `allp upgrade` plans one `snap refresh` operation and parses `All snaps up to date.` as an up-to-date result.
+
+HTTP errors and response timeouts from the Snap Store refresh endpoint are
+reported with their native evidence. A passing `snap debug connectivity` check
+does not prove that `POST /v2/snaps/refresh` will succeed. Allp never rewrites
+snapd's network configuration or forces an operation to appear successful.
+Install/remove failures use `Failed`; only real package-management lock conflicts
+use `Busy`. Both stdout and stderr are retained when the native command fails.
 
 ## Recovery
 

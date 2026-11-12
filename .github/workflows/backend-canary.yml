@@ -102,7 +102,8 @@ jobs:
 
   snap-search:
     name: Snap on Ubuntu
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -112,6 +113,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y snapd
           sudo systemctl enable --now snapd.socket
+          timeout 60s sudo snap wait system seed.loaded
+      - name: Check native Snap Store availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60s snap find hello-world | tee snap-native-search.log
+          grep -Eq '^hello-world[[:space:]]' snap-native-search.log
       - run: cargo build --locked
       - name: Exercise Snap discovery
         run: target/debug/allp search hello-world --from snap --json >canary.json
@@ -121,9 +129,48 @@ jobs:
           grep -q '"schema_version": 2' canary.json
           grep -q '"complete": true' canary.json
           grep -q '"package_id":' canary.json
+      - name: Exercise real Snap install, refresh and removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          if snap list hello-world >/dev/null 2>&1; then
+            echo 'Refusing to replace a pre-existing smoke-test application.' >&2
+            exit 1
+          fi
+          trap 'sudo snap remove --purge hello-world >snap-cleanup.log 2>&1 || true' EXIT
+          timeout 180s target/debug/allp install hello-world --from snap --yes --no-interactive --no-color | tee snap-install.log
+          snap list hello-world | tee snap-installed.log
+          snap run hello-world | tee snap-run.log
+          grep -Fq 'Hello World!' snap-run.log
+          timeout 180s target/debug/allp upgrade --from snap --yes --no-interactive --no-tui --no-color | tee snap-upgrade.log
+          timeout 180s target/debug/allp remove hello-world --from snap --yes --no-interactive --no-color | tee snap-remove.log
+          if snap list hello-world >/dev/null 2>&1; then
+            echo 'Allp reported removal success but hello-world is still installed.' >&2
+            exit 1
+          fi
+      - name: Capture native Snap diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          {
+            snap version
+            timeout 30s snap debug connectivity
+            timeout 60s snap find hello-world
+            snap changes
+            getent ahosts api.snapcraft.io
+            curl --ipv4 --connect-timeout 10 --max-time 20 -sS -H 'Snap-Device-Series: 16' \
+              -o snap-store-info.json -w 'Store metadata via IPv4: HTTP %{http_code}\n' \
+              https://api.snapcraft.io/v2/snaps/info/hello-world
+            sudo journalctl -u snapd --no-pager -n 80
+          } >snap-diagnostics.log 2>&1 || true
+          cat snap-diagnostics.log
+          if [[ -s canary.json ]]; then cat canary.json; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: search-snap
-          path: canary.json
+          path: |
+            canary.json
+            snap-*.log
+            snap-*.json
           if-no-files-found: ignore

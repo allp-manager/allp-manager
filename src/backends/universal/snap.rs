@@ -105,6 +105,7 @@ const SNAP_DISCOVERY_NOTES_KEY: &str = "snap.discovery.notes";
 const SNAP_TRANSPORT_KEY: &str = "snap.transport";
 const SNAP_SOCKET_KEY: &str = "snap.socket";
 const SNAP_FALLBACK_REASON_KEY: &str = "snap.fallback_reason";
+const SNAP_STORE_QUERY_TIMEOUT: Duration = Duration::from_secs(45);
 
 const CAPABILITIES: &[Capability] = &[
     Capability::Search,
@@ -588,8 +589,9 @@ impl Backend for SnapBackend {
         command: &str,
     ) -> Option<AllpError> {
         let package = plan.package_id.as_deref().unwrap_or("selected snap");
-        match classify_snap_error(&status.stderr).or_else(|| classify_snap_error(&status.stdout)) {
-            Some(SnapErrorKind::PackageNotFound) => {
+        let native_error = snap_native_error(status);
+        match classify_snap_error(&native_error) {
+            Some(SnapErrorKind::PackageNotFound) if plan.package_id.is_some() => {
                 Some(AllpError::PackageNotFound(package.to_owned()))
             }
             Some(SnapErrorKind::ClassicConfinementRequired) => Some(AllpError::InvalidInput(
@@ -614,17 +616,37 @@ impl Backend for SnapBackend {
                 holder_pid: None,
                 holder_process: None,
             }),
-            Some(SnapErrorKind::StoreUnavailable) => Some(AllpError::CommandFailed {
-                backend: self.display_name().to_owned(), command: command.to_owned(), code: status.code,
-                stderr: format!("Cannot reach Snap Store; the operation did not complete successfully.\nCheck connectivity: snap debug connectivity\nRetry check: allp doctor snap --verbose\nNative error: {}", if status.stderr.trim().is_empty() { status.stdout.trim() } else { status.stderr.trim() }),
-            }),
+            Some(SnapErrorKind::StoreUnavailable) => {
+                let summary = match snap_store_http_status(&native_error) {
+                    Some(code @ (408 | 504)) => format!(
+                        "Snap Store request timed out (HTTP {code}); the operation did not complete successfully."
+                    ),
+                    Some(code) => format!("Snap Store request failed (HTTP {code}); the operation did not complete successfully."),
+                    None => "Cannot reach Snap Store; the operation did not complete successfully.".to_owned(),
+                };
+                Some(AllpError::CommandFailed {
+                    backend: self.display_name().to_owned(),
+                    command: command.to_owned(),
+                    code: status.code,
+                    stderr: format!("{summary}\nNative error: {native_error}\nRead-only refresh check: snap refresh --list\nCheck connectivity: snap debug connectivity\nA passing connectivity check does not verify the Store refresh endpoint."),
+                })
+            }
             Some(SnapErrorKind::PermissionDenied) => Some(AllpError::InvalidInput(
                 "Snap denied permission for the requested operation.".to_owned(),
             )),
             Some(SnapErrorKind::AlreadyInstalled) => Some(AllpError::InvalidInput(format!(
                 "Snap \"{package}\" is already installed."
             ))),
-            _ => None,
+            _ => Some(AllpError::CommandFailed {
+                backend: self.display_name().to_owned(),
+                command: command.to_owned(),
+                code: status.code,
+                stderr: if native_error.is_empty() {
+                    "Snap returned no diagnostic output; inspect `snap changes` and `snap tasks <change-id>`.".to_owned()
+                } else {
+                    native_error
+                },
+            }),
         }
     }
 
@@ -1107,7 +1129,7 @@ impl SnapService for SnapCliFallbackService<'_> {
 
     fn resolve(&self, candidate: &PackageCandidate) -> AllpResult<SnapResolution> {
         let package_id = normalize_snap_package_id(&candidate.package_id)?;
-        let command = snap_info_command(self.snap, candidate)?.timeout(Duration::from_secs(10));
+        let command = snap_info_command(self.snap, candidate)?;
         let display_command = render_native_command(&command);
         let output = match self.runner.capture(&command) {
             Ok(output) => output,
@@ -1402,7 +1424,7 @@ fn search_snap_candidates(
     };
     match rest.search_result(query) {
         Ok(search) => Ok(search),
-        Err(error) if error.allows_cli_fallback() => {
+        Err(error) if error.allows_read_only_cli_fallback() => {
             let snap = commands.get("snap").ok_or_else(|| {
                 AllpError::BackendNotDetected(format!(
                     "Snap REST discovery unavailable ({}); snap CLI fallback was not found",
@@ -1456,7 +1478,7 @@ fn validate_snap_candidate(
         };
         match rest.resolve_result(candidate) {
             Ok(resolution) => resolution,
-            Err(error) if error.allows_cli_fallback() => resolve_with_cli(
+            Err(error) if error.allows_read_only_cli_fallback() => resolve_with_cli(
                 backend,
                 commands,
                 runner,
@@ -1509,7 +1531,9 @@ fn resolve_with_cli(
 }
 
 fn snap_find_command(snap: &Path, query: &str) -> NativeCommand {
-    NativeCommand::new(snap).args(["find", query])
+    NativeCommand::new(snap)
+        .args(["find", query])
+        .timeout(SNAP_STORE_QUERY_TIMEOUT)
 }
 
 pub fn snapd_socket_path() -> PathBuf {
@@ -1772,7 +1796,9 @@ fn parse_snapd_architectures(value: Option<&Value>) -> Vec<String> {
 
 fn snap_info_command(snap: &Path, candidate: &PackageCandidate) -> AllpResult<NativeCommand> {
     let package_id = normalize_snap_package_id(&candidate.package_id)?;
-    Ok(NativeCommand::new(snap).args(["info", package_id.as_str()]))
+    Ok(NativeCommand::new(snap)
+        .args(["info", package_id.as_str()])
+        .timeout(SNAP_STORE_QUERY_TIMEOUT))
 }
 
 fn normalize_snap_package_id(raw: &str) -> AllpResult<String> {
@@ -2794,6 +2820,26 @@ fn indent_block(value: &str) -> String {
     value.lines().collect::<Vec<_>>().join("\n  ")
 }
 
+fn snap_native_error(status: &ProcessStatus) -> String {
+    let stderr = status.stderr.trim();
+    let stdout = status.stdout.trim();
+    match (stderr.is_empty(), stdout.is_empty()) {
+        (true, _) => stdout.to_owned(),
+        (_, true) => stderr.to_owned(),
+        _ if stderr == stdout => stderr.to_owned(),
+        _ => format!("{stderr}\n{stdout}"),
+    }
+}
+
+fn snap_store_http_status(output: &str) -> Option<u16> {
+    let lower = output.to_ascii_lowercase();
+    ["http status code ", "http status ", "http "]
+        .into_iter()
+        .filter_map(|prefix| lower.split_once(prefix).map(|(_, value)| value))
+        .filter_map(|value| value.split_whitespace().next()?.parse::<u16>().ok())
+        .find(|code| (400..600).contains(code))
+}
+
 fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
     let lower = output.to_ascii_lowercase();
     if lower.trim().is_empty() {
@@ -2834,6 +2880,12 @@ fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
             && (lower.contains("no such host")
                 || lower.contains("network is unreachable")
                 || lower.contains("connection timed out"))
+        || (lower.contains("store") || lower.contains("api.snapcraft.io"))
+            && (snap_store_http_status(&lower).is_some()
+                || lower.contains("client.timeout exceeded")
+                || lower.contains("request canceled")
+                || lower.contains("tls handshake timeout")
+                || lower.contains("connection reset"))
     {
         return Some(SnapErrorKind::StoreUnavailable);
     }
@@ -3079,6 +3131,26 @@ mod tests {
         assert_eq!(
             classify_snap_error("error: snap snap-store not found"),
             Some(SnapErrorKind::PackageNotFound)
+        );
+    }
+
+    #[test]
+    fn store_refresh_http_errors_and_response_timeouts_are_not_missing_packages() {
+        for message in [
+            include_str!("../../../tests/fixtures/snap/refresh-http-408.stderr").to_owned(),
+            "Post https://api.snapcraft.io/v2/snaps/refresh: net/http: request canceled (Client.Timeout exceeded while awaiting headers)".to_owned(),
+            "cannot query the store: unexpected HTTP status code 503".to_owned(),
+            "cannot query the store: unexpected HTTP status code 429".to_owned(),
+        ] {
+            assert_eq!(classify_snap_error(&message), Some(SnapErrorKind::StoreUnavailable), "{message}");
+        }
+        assert_eq!(
+            classify_snap_error("snap snap-store not found"),
+            Some(SnapErrorKind::PackageNotFound)
+        );
+        assert_eq!(
+            classify_snap_error("hook returned HTTP status code 408"),
+            None
         );
     }
 
