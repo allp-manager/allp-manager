@@ -45,6 +45,10 @@ help:
 	@printf '%s\n' '  make reinstall        Rebuild and replace /usr/local/bin/allp (warns if PATH shadows it)'
 	@printf '%s\n' '  make uninstall        Remove the installed allp binary'
 	@printf '%s\n' '  make install-user     Install allp to $$HOME/.local/bin without sudo'
+	@printf '%s\n' '  make package-deb      Build a native Debian/Ubuntu package in dist/packages'
+	@printf '%s\n' '  make package-rpm      Build an RPM with native rpm-build tools'
+	@printf '%s\n' '  make package-test     Inspect/extract DEB and test formula generation'
+	@printf '%s\n' '  make package-apt-test Test signed archives with isolated APT state'
 	@printf '%s\n' '  make install-termux   Install a source build into the Termux prefix without sudo'
 	@printf '%s\n' '  make install-check    Show the allp binary resolved by the shell'
 	@printf '%s\n' ''
@@ -292,3 +296,16 @@ installer-test:
 
 release-assets-test:
 	$(BASH) scripts/test-release-assets.sh
+
+.PHONY: package-deb package-rpm package-test package-apt-test
+package-deb: release
+	$(BASH) scripts/package-native.sh deb "$(RELEASE_BINARY)" "$(DIST_DIR)/packages"
+
+package-rpm: release
+	$(BASH) scripts/package-native.sh rpm "$(RELEASE_BINARY)" "$(DIST_DIR)/packages"
+
+package-test: release
+	$(BASH) scripts/test-native-packages.sh "$(RELEASE_BINARY)"
+
+package-apt-test:
+	python3 scripts/test-apt-repository.py

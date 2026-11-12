@@ -156,6 +156,48 @@ impl App {
             doctor_backend_filter.as_deref(),
         );
         capabilities.apply_discovery(&discovery.report);
+        if let Commands::Profile(args) = &command {
+            if let ProfileCommands::Install(args) = &args.command {
+                let missing = crate::profiles::missing_install_backends(
+                    &platform.config_dir,
+                    &args.name,
+                    &args.without,
+                    &discovery.detected,
+                )?;
+                if !missing.is_empty() && (!no_interactive || allow_bootstrap || dry_run) {
+                    // Plan every supported prerequisite before executing any of
+                    // them, including distributions where Snap needs manual setup.
+                    for backend in &missing {
+                        let requirement = bootstrap_requirement_for_backend(backend)
+                            .expect("universal backend requirement");
+                        if select_provider(&requirement, &platform, &capabilities).is_none() {
+                            return Err(AllpError::InvalidInput(format!(
+                                "{backend} apps were found in this profile, but automatic setup is unavailable on this distribution. Snap on Arch requires snapd from AUR and service setup; install it manually or use --without {backend}. No packages were installed."
+                            )));
+                        }
+                    }
+                    renderer.info_message(&format!("This profile contains apps from {}. Set up these managers before installing applications.", missing.join(", ")));
+                    for backend in &missing {
+                        self.bootstrap_explicit_backend(
+                            backend,
+                            &renderer,
+                            &platform,
+                            &mut capabilities,
+                            &mut discovery,
+                            dry_run,
+                            no_interactive,
+                            yes,
+                            allow_bootstrap,
+                            &privilege_context,
+                        )?;
+                    }
+                    if dry_run {
+                        renderer.info_message("Prerequisite dry run completed. After setup, rerun profile install to resolve applications; no command was executed.");
+                        return Ok(0);
+                    }
+                }
+            }
+        }
         if matches!(&command, Commands::Install(_)) {
             if let Some(filter) = backend_filter.as_deref() {
                 match self.bootstrap_explicit_backend(
@@ -279,7 +321,7 @@ impl App {
                 ProfileCommands::List(_) => operations::profile::list(&context)?,
                 ProfileCommands::Show(args) => operations::profile::show(&context, &args.name)?,
                 ProfileCommands::Install(args) => {
-                    operations::profile::install(&context, &args.name)?
+                    operations::profile::install(&context, &args.name, &args.without)?
                 }
                 ProfileCommands::Export(args) => {
                     operations::profile::export(&context, &args.name, &args.path)?
@@ -287,6 +329,8 @@ impl App {
                 ProfileCommands::Import(args) => {
                     operations::profile::import(&context, &args.path, args.name.as_deref())?
                 }
+                ProfileCommands::Verify(args) => operations::profile::verify(&context, &args.name)?,
+                ProfileCommands::Convert(args) => operations::profile::convert(&context, &args)?,
             },
             Commands::Doctor(args) => {
                 let mut report = DoctorReport::collect(

@@ -1,0 +1,57 @@
+name: Native package artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ALLP_BUILD_REVISION: "0"
+  ALLP_BUILD_CHANNEL: development
+  ALLP_BUILD_OFFICIAL: "0"
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --all-targets
+      - run: cargo build --locked --release
+      - run: bash scripts/package-native.sh deb target/release/allp dist/packages
+      - name: Check package payload and dependency resolution
+        run: |
+          dpkg-deb --info dist/packages/*.deb
+          sudo apt-get install -y ./dist/packages/*.deb
+          /usr/bin/allp --version
+          /usr/bin/allp profile convert --help
+          sudo apt-get remove -y allp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: allp-debian-amd64
+          path: dist/packages/*.deb
+  rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - run: dnf install -y cargo gcc git rpm-build binutils findutils
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: cargo test --locked --lib --test catalog --test exit_codes
+      - run: cargo build --locked --release
+      - run: bash scripts/package-native.sh rpm target/release/allp dist/packages
+      - name: Check package payload and dependency resolution
+        run: |
+          rpm -qp --requires dist/packages/*.rpm
+          dnf install -y ./dist/packages/*.rpm
+          /usr/bin/allp --version
+          /usr/bin/allp profile convert --help
+          dnf remove -y allp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: allp-fedora-x86_64
+          path: dist/packages/*.rpm

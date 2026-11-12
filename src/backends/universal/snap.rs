@@ -1,3 +1,5 @@
+#[cfg(unix)]
+mod progress;
 mod rest;
 
 use self::rest::{percent_encode, SnapdClient, SnapdRestError};
@@ -567,6 +569,18 @@ impl Backend for SnapBackend {
         )]))
     }
 
+    #[cfg(unix)]
+    fn watch_maintenance_progress(
+        &self,
+        plan: &ExecutionPlan,
+    ) -> Option<std::sync::mpsc::Receiver<Option<String>>> {
+        if plan.operation == OperationKind::Upgrade {
+            progress::watch_refresh()
+        } else {
+            None
+        }
+    }
+
     fn classify_execution_failure(
         &self,
         plan: &ExecutionPlan,
@@ -600,10 +614,10 @@ impl Backend for SnapBackend {
                 holder_pid: None,
                 holder_process: None,
             }),
-            Some(SnapErrorKind::StoreUnavailable) => Some(AllpError::InvalidInput(
-                "Snap Store metadata is unavailable. Check network or Snap Store status before retrying."
-                    .to_owned(),
-            )),
+            Some(SnapErrorKind::StoreUnavailable) => Some(AllpError::CommandFailed {
+                backend: self.display_name().to_owned(), command: command.to_owned(), code: status.code,
+                stderr: format!("Cannot reach Snap Store; the operation did not complete successfully.\nCheck connectivity: snap debug connectivity\nRetry check: allp doctor snap --verbose\nNative error: {}", if status.stderr.trim().is_empty() { status.stdout.trim() } else { status.stderr.trim() }),
+            }),
             Some(SnapErrorKind::PermissionDenied) => Some(AllpError::InvalidInput(
                 "Snap denied permission for the requested operation.".to_owned(),
             )),
@@ -2812,6 +2826,17 @@ fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
     if lower.contains("channel") && (lower.contains("not found") || lower.contains("unavailable")) {
         return Some(SnapErrorKind::ChannelUnavailable);
     }
+    if lower.contains("unable to contact snap store")
+        || lower.contains("cannot contact snap store")
+        || lower.contains("cannot reach snap store")
+        || lower.contains("store") && (lower.contains("unavailable") || lower.contains("timeout"))
+        || lower.contains("api.snapcraft.io")
+            && (lower.contains("no such host")
+                || lower.contains("network is unreachable")
+                || lower.contains("connection timed out"))
+    {
+        return Some(SnapErrorKind::StoreUnavailable);
+    }
     if lower.contains("snap-not-found")
         || lower.contains("not found")
         || lower.contains("no snap found")
@@ -2825,9 +2850,6 @@ fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
         || lower.contains("daemon is unavailable")
     {
         return Some(SnapErrorKind::DaemonUnavailable);
-    }
-    if lower.contains("store") && (lower.contains("unavailable") || lower.contains("timeout")) {
-        return Some(SnapErrorKind::StoreUnavailable);
     }
     None
 }
@@ -3038,6 +3060,24 @@ mod tests {
     fn classifies_snap_not_found_error() {
         assert_eq!(
             classify_snap_error(r#"error: snap "pycharm" not found"#),
+            Some(SnapErrorKind::PackageNotFound)
+        );
+    }
+
+    #[test]
+    fn store_connectivity_errors_are_distinct_from_missing_snap_packages() {
+        for message in [
+            "error: unable to contact snap store",
+            "cannot reach snap store",
+            "Get https://api.snapcraft.io: no such host",
+        ] {
+            assert_eq!(
+                classify_snap_error(message),
+                Some(SnapErrorKind::StoreUnavailable)
+            );
+        }
+        assert_eq!(
+            classify_snap_error("error: snap snap-store not found"),
             Some(SnapErrorKind::PackageNotFound)
         );
     }

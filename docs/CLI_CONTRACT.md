@@ -59,6 +59,9 @@ allp upgrade --from apt
 allp upgrade --dry-run
 allp upgrade --scope dev --target all --dry-run
 allp upgrade --no-tui
+allp upgrade --from aur --dry-run
+allp upgrade --from yay --dry-run
+allp upgrade --from paru --dry-run
 
 allp list
 allp list --from apt
@@ -90,6 +93,20 @@ allp self-update --update-channel continuous
 allp self-update --update-channel stable
 allp self-update --update-channel prerelease
 ```
+
+Profile migration commands are documented in [PROFILE_MIGRATION.md](PROFILE_MIGRATION.md).
+`profile verify NAME` is read-only and exits 8 on an inventory mismatch.
+`profile convert NAME --to debian|ubuntu|arch|fedora` writes a new profile and
+JSON report without installing anything. `--verify` checks availability using
+destination managers; `--map FILE` supplies explicit TOML mappings. Incomplete
+conversion still writes its report and returns JSON `complete: false`.
+`profile install NAME --without snap,flatpak` skips those optional applications.
+Prerequisite setup requires interactive confirmation or `--yes --allow-bootstrap`.
+
+AUR is selected by `--from aur`, `--from yay`, or `--from paru`. Default host
+upgrade selects one helper, uses AUR-only `-Sua`, and retains native PKGBUILD
+review prompts. With no helper, AUR supports inventory and Pacman-based removal.
+See [AUR_BACKEND.md](AUR_BACKEND.md).
 
 `--from` accepts backend IDs and documented aliases. Examples: `python`, `pypi`, `pip`, `pipx`, `uv`, `node`, `npm`, `pnpm`, `yarn`, `rust`, `cargo`, `crates.io`, `brew`, `homebrew`, `linuxbrew`, `rpm-ostree`, and `bazzite`.
 

@@ -82,7 +82,8 @@ impl Backend for PacmanBackend {
     ) -> AllpResult<Vec<InstalledPackage>> {
         let pacman = command_path(self, commands, "pacman")?;
         let output = capture_checked(self, runner, NativeCommand::new(pacman).arg("-Q"))?;
-        Ok(output
+        let foreign = super::aur::foreign_packages(commands, runner)?;
+        let mut packages = output
             .lines()
             .filter_map(|line| {
                 let mut parts = line.split_whitespace();
@@ -101,7 +102,10 @@ impl Backend for PacmanBackend {
                     scope: Some("system".to_owned()),
                 })
             })
-            .collect())
+            .filter(|package| !foreign.iter().any(|p| p.package_id == package.package_id))
+            .collect::<Vec<_>>();
+        packages.extend(foreign);
+        Ok(packages)
     }
 
     fn info(
@@ -241,7 +245,11 @@ impl Backend for PacmanBackend {
     }
 }
 
-fn parse_pacman_search(backend: &PacmanBackend, output: &str, query: &str) -> BackendSearchReport {
+pub(super) fn parse_pacman_search(
+    backend: &dyn Backend,
+    output: &str,
+    query: &str,
+) -> BackendSearchReport {
     let mut lines = output.lines().peekable();
     let mut report = BackendSearchReport::default();
     let mut rejected_lines = 0usize;

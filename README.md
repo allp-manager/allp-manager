@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.6.5" src="https://img.shields.io/badge/version-0.6.5-7c3aed">
+  <img alt="Version 0.6.6" src="https://img.shields.io/badge/version-0.6.6-7c3aed">
   <img alt="Public alpha" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
   <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-dea584">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
@@ -25,7 +25,7 @@
 
 Allp is a transparent package-manager orchestrator with a cross-platform runtime core and Linux-first package backends. It discovers native tools such as APT, Pacman, DNF, rpm-ostree on Bazzite/Atomic hosts, Flatpak, Snap, Homebrew/Linuxbrew, Python and Node installers, and Rust/Cargo, then shows the exact native command or local API request before anything mutates the system.
 
-Stable release **0.6.5**
+Stable release **0.6.6**
 Maturity: **public alpha**
 
 ## Start Here
@@ -67,7 +67,8 @@ The platform layer detects Linux distributions and package-manager families, inc
 | Source | Status | Search | Install | Remove | Update | Upgrade | List | Info |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | APT | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
-| Pacman | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
+| Pacman | Stable alpha | yes | yes | yes | no | yes | yes | yes |
+| AUR with yay / paru | Experimental | yes | yes | yes | no | yes | yes | yes |
 | DNF / DNF5 | Stable alpha | yes | yes | yes | yes | yes | yes | yes |
 | WinGet community source | Windows | yes | yes | yes | yes | yes | yes | yes |
 | Termux package manager | Android Termux | yes | yes | yes | APT only | yes | yes | yes |
@@ -85,6 +86,20 @@ The platform layer detects Linux distributions and package-manager families, inc
 JSON is available for read-only commands and dry-run maintenance/install planning where supported. See [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md) for the detailed matrix.
 
 ## Installation
+
+### Debian / Ubuntu with APT
+
+Follow the [one-time repository setup](https://allp-manager.github.io/apt/)
+to install the archive key and APT source. Then:
+
+```bash
+sudo apt update
+sudo apt install allp
+```
+
+The signed Stable feed supports amd64 and arm64. Its initial v0.6.5 packages
+require glibc 2.39 (Ubuntu 24.04+ / Debian 13+). This is the Allp project's
+repository; it is separate from the official Debian/Ubuntu archives.
 
 **⚠️ Install Rust and Cargo before running make.** Git, Make and a C compiler/linker are also required. Follow the [official Rust installation guide](https://www.rust-lang.org/tools/install), reopen your terminal, then check:
 
@@ -199,6 +214,7 @@ list through Allp's normal search, planning, and confirmation flow.
 
 ```bash
 allp profile save dev
+allp profile verify dev
 allp profile list
 allp profile show dev
 allp profile export dev dev.toml
@@ -227,11 +243,27 @@ backend = "flatpak"
 package = "org.mozilla.firefox"
 ```
 
-Profiles deliberately preserve the backend instead of guessing an equivalent
-package on another ecosystem. All required backends are checked before the
+Profiles preserve the owning backend. Explicit conversion is available for
+Debian/Ubuntu, Arch and Fedora with `allp profile convert dev --to arch`.
+It creates a new profile and a per-package JSON report, preserving the source.
+Known mappings are separate from repository availability; use `--verify` on
+the destination to check exact IDs. Unresolved packages remain in the report,
+and their count travels with the converted profile. See the
+[profile migration guide](docs/PROFILE_MIGRATION.md).
+All required backends are checked before the
 first installation, then packages are installed sequentially with the same
 safety checks and confirmations as `allp install`. Review a profile with
 `show`, or export and edit it, before applying it on another machine.
+
+On Arch, `allp upgrade` runs Pacman's full `-Syu` and one installed AUR helper
+(`yay` preferred, otherwise `paru`) with `-Sua` for AUR only. Select explicitly
+with `--from yay` or `--from paru`. A failed Pacman upgrade defers AUR even with
+`--allow-stale-metadata`. Helper review prompts remain enabled, and maintenance
+uses ordinary terminal output when AUR is selected. Foreign inventory is
+captured even without a helper; foreign packages may also be local builds.
+See [AUR support](docs/AUR_BACKEND.md) and
+[native package distribution](packaging/README.md) for installable DEB/RPM
+artifacts, the existing AUR recipe and a Homebrew tap formula template.
 
 In profile format version 1, the stored package version is observed inventory
 metadata, not a version pin; installation resolves the version currently
@@ -593,7 +625,7 @@ Keep backend-specific parsing and flags inside backend modules. Add fixtures for
 
 Near-term work is broader real-distro validation, richer parser fixtures, an
 interactive Snap channel chooser, deeper signal/trusted-path testing, and
-real-host Homebrew, Cargo, and Bazzite validation. Version 0.6.5 includes Rust/Cargo
+real-host Homebrew, Cargo, and Bazzite validation. Version 0.6.6 includes Rust/Cargo
 binary-tool management and transactional rpm-ostree support for Bazzite; a
 broader full-screen TUI and GUI remain later work, alongside future ecosystems
 such as Composer, Go, RubyGems, and Maven/Gradle.
@@ -602,7 +634,7 @@ See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 ## Changelog
 
-Version `0.6.5` is the Stable release with WinGet, Termux, package maintenance fixes,
+Version `0.6.6` is the Stable release with WinGet, Termux, package maintenance fixes,
 installer-aware Node and Python tools, and retained self-update backups.
 See [CHANGELOG.md](CHANGELOG.md).
 

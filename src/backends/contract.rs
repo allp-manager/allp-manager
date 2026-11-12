@@ -10,6 +10,7 @@ use crate::{
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::mpsc::Receiver,
 };
 
 pub type CommandMap = BTreeMap<String, PathBuf>;
@@ -143,6 +144,18 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    /// Other backend plans that must succeed first when included in the same
+    /// maintenance run. Explicitly selecting this backend does not add them.
+    fn maintenance_dependencies(&self, _capability: Capability) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Preserve native review prompts/editors instead of placing them inside
+    /// the live dashboard.
+    fn maintenance_requires_terminal(&self) -> bool {
+        false
+    }
+
     /// Delay upgrade inspection until a required metadata refresh has executed successfully.
     fn plan_upgrade_after_metadata_refresh(&self) -> bool {
         false
@@ -271,6 +284,14 @@ pub trait Backend: Send + Sync {
         _context: &RuntimePrivilegeContext,
     ) -> AllpResult<()> {
         Ok(())
+    }
+
+    /// Starts optional, read-only progress reporting for an interactive maintenance plan.
+    fn watch_maintenance_progress(
+        &self,
+        _plan: &ExecutionPlan,
+    ) -> Option<Receiver<Option<String>>> {
+        None
     }
 
     fn classify_execution_failure(

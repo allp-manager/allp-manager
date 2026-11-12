@@ -132,7 +132,7 @@ impl SnapdClient {
         }
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
     pub fn with_timeout(socket_path: impl Into<PathBuf>, timeout: Duration) -> Self {
         Self {
             socket_path: socket_path.into(),

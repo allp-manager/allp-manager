@@ -1,0 +1,34 @@
+Name:           allp
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Transparent orchestrator for native package managers
+License:        MIT
+URL:            https://github.com/allp-manager/allp-manager
+Source0:        allp
+Source1:        LICENSE
+Source2:        README.md
+Source3:        README.fa.md
+
+# The binary is built by Cargo before packaging; RPM discovers ELF dependencies.
+%global debug_package %{nil}
+
+%description
+Discover installed package managers, review native commands, manage packages,
+and migrate package inventories between supported Linux distributions.
+Native package managers are optional; this package does not install them.
+
+%prep
+
+%build
+
+%install
+install -Dm755 %{SOURCE0} %{buildroot}%{_bindir}/allp
+install -Dm644 %{SOURCE1} %{buildroot}%{_licensedir}/%{name}/LICENSE
+install -Dm644 %{SOURCE2} %{buildroot}%{_docdir}/%{name}/README.md
+install -Dm644 %{SOURCE3} %{buildroot}%{_docdir}/%{name}/README.fa.md
+
+%files
+%{_bindir}/allp
+%license %{_licensedir}/%{name}/LICENSE
+%doc %{_docdir}/%{name}/README.md
+%doc %{_docdir}/%{name}/README.fa.md

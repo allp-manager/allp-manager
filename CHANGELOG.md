@@ -4,6 +4,51 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-11-12
+
+### Release Title
+
+Allp v0.6.6 — Profile Migration, AUR and APT Distribution
+
+### Added
+
+- Verify saved inventories against the host and convert profiles between
+  Debian/Ubuntu, Arch and Fedora with explicit mappings and per-package reports.
+- Prompt for optional Snap/Flatpak prerequisites before profile installation;
+  allow intentionally skipping their applications with `--without`.
+- Support AUR search, install, info, inventory, removal and AUR-only upgrades
+  using yay or paru. Default upgrades run only one helper after Pacman succeeds.
+- Add DEB/RPM artifact packaging, an opt-in artifact build workflow, and a
+  checksum-based Homebrew tap formula generator.
+- Publish signed Stable APT packages for amd64/arm64 through the dedicated
+  `allp-manager/apt` feed, with checksum-verified release packaging, isolated
+  APT tests and automated metadata refresh.
+- Show read-only Snap refresh task and download details in live maintenance
+  progress while preserving native execution and prompts.
+
+### Fixed
+
+- Keep independent npm targets when a project update check fails, use a bounded
+  registry-specific deadline, and report the project and retry check.
+- Classify Snap Store connectivity failures and preserve native error details
+  with a read-only diagnostic command.
+- Distinguish detected tools from update readiness; show failed checks before
+  confirmation and compact human maintenance totals without hiding an entire
+  unavailable manager's reason.
+- Refuse profile capture when a detected manager's probe fails instead of
+  silently omitting that manager's installed packages.
+- Preserve foreign Pacman package ownership in inventories without duplicating
+  entries when an AUR helper is installed.
+
+### Known Limitations
+
+- Cross-distribution conversion maps inventories, not complete operating systems,
+  configuration or data. Review reports and retain original profiles.
+- AUR remains experimental and requires an installed yay/paru for build operations.
+  Real helper build/review flows have not been validated on every supported Arch host.
+- The independent APT feed requires one-time source/key setup; Debian/Ubuntu
+  archive inclusion is a separate review process. Snap channels are not captured.
+
 ## [0.6.5] - 2026-11-10
 
 ### Release Title

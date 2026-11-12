@@ -119,6 +119,20 @@ pub fn gather(context: &OperationContext<'_>) -> AllpResult<InstalledReport> {
             .cmp(&right.category)
             .then(left.backend_id.cmp(&right.backend_id))
             .then(left.package_id.cmp(&right.package_id))
+            .then(left.installer.cmp(&right.installer))
+            .then(left.scope.cmp(&right.scope))
+            .then(left.description.cmp(&right.description))
+    });
+    // Managers may expose the same local database (for example a native
+    // manager and a helper). Keep one identical ownership record.
+    packages.dedup_by(|left, right| {
+        left.backend_id == right.backend_id
+            && left.package_id == right.package_id
+            && left.installer == right.installer
+            && left.scope == right.scope
+            && left.description == right.description
+            && left.version == right.version
+            && left.source == right.source
     });
 
     Ok(InstalledReport {

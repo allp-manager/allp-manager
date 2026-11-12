@@ -31,6 +31,18 @@ Required JSON surfaces:
 
 Human logs, spinners, and prompts must not be written to JSON stdout.
 
+Profile read/file commands (`save`, `show`, `list`, `export`, `import`, `verify`,
+and `convert`) also support JSON. `profile verify` includes `matches`, saved and
+current counts, and missing/new or changed entries; mismatch exits 8.
+`profile convert` returns its complete per-entry report in `results` and writes
+the same report to disk. Envelope `complete` describes mapping completeness;
+`availability_checked` records whether destination checking was requested and
+`availability_verified` is true only when all entries were checked successfully.
+Entry statuses are `mapped`, `preserved`, `verified`, `unmapped`, `unavailable`,
+or `check_failed`. A missing portable manager preserves its app IDs for later
+setup. A lookup failure is never reported as package absence. Original source
+entries, prerequisite guidance and conversion limitations remain in the report.
+
 ## Envelope Fields
 
 | Field | Type | Meaning |

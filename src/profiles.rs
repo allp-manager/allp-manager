@@ -10,6 +10,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod conversion;
+mod prerequisites;
+pub use prerequisites::missing_install_backends;
+
 const PROFILE_VERSION: u32 = 1;
 const PROFILE_DIR: &str = "profiles";
 const MAX_NAME_LEN: usize = 64;
@@ -23,8 +27,19 @@ pub struct Profile {
     pub version: u32,
     pub name: String,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversion: Option<ProfileConversion>,
+
     #[serde(default)]
     pub packages: Vec<ProfilePackage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileConversion {
+    pub target: conversion::Target,
+    pub source_packages: usize,
+    pub omitted_packages: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,6 +92,15 @@ impl Profile {
         }
 
         validate_profile_name(&self.name)?;
+        if let Some(conversion) = &self.conversion {
+            if conversion.source_packages > MAX_PACKAGES
+                || conversion.omitted_packages > conversion.source_packages
+            {
+                return Err(AllpError::InvalidInput(
+                    "invalid conversion inventory counts".to_owned(),
+                ));
+            }
+        }
 
         if self.packages.len() > MAX_PACKAGES {
             return Err(AllpError::InvalidInput(format!(
@@ -122,7 +146,64 @@ pub fn profile_path(config_dir: &Path, name: &str) -> AllpResult<PathBuf> {
 }
 
 pub fn save_current(context: &OperationContext<'_>, name: &str) -> AllpResult<Profile> {
+    let profile = capture_current(context, name)?;
+    write_profile(context.config_dir, &profile)?;
+
+    if context.renderer.json() {
+        context
+            .renderer
+            .render_json_envelope("profile_save", true, &profile, &[] as &[String]);
+    } else {
+        context.renderer.success_message(&format!(
+            "Saved profile '{}' with {} package(s).",
+            profile.name,
+            profile.packages.len()
+        ));
+    }
+
+    Ok(profile)
+}
+
+fn capture_current(context: &OperationContext<'_>, name: &str) -> AllpResult<Profile> {
     validate_profile_name(name)?;
+
+    // A failed probe removes a manager from the detected set. Do not silently
+    // omit its inventory merely because list::gather cannot see it anymore.
+    let failed = context
+        .discovery
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.capabilities.contains(&Capability::List)
+                && !matches!(
+                    entry.state,
+                    crate::discovery::DetectionState::Ready
+                        | crate::discovery::DetectionState::FoundButUnconfigured
+                        | crate::discovery::DetectionState::NotFound
+                )
+                && (!entry.commands.is_empty() || entry.homebrew.is_some())
+        })
+        .map(|entry| {
+            format!(
+                "{}: {}",
+                entry.backend_name,
+                entry
+                    .message
+                    .as_deref()
+                    .unwrap_or("installed-package probe failed")
+            )
+        })
+        .collect::<Vec<_>>();
+    if !failed.is_empty() {
+        return Err(AllpError::PartialFailure(format!(
+            "cannot save a profile because installed-package discovery was incomplete:\n{}\nNo partial profile was written.", failed.join("\n")
+        )));
+    }
+    if context.backends.is_empty() {
+        return Err(AllpError::BackendNotDetected(
+            "cannot capture a profile: no supported package managers were detected".to_owned(),
+        ));
+    }
 
     let report = operations::list::gather(context)?;
 
@@ -183,25 +264,63 @@ pub fn save_current(context: &OperationContext<'_>, name: &str) -> AllpResult<Pr
     let profile = Profile {
         version: PROFILE_VERSION,
         name: name.to_owned(),
+        conversion: None,
         packages,
     };
 
     profile.validate()?;
-    write_profile(context.config_dir, &profile)?;
-
-    if context.renderer.json() {
-        context
-            .renderer
-            .render_json_envelope("profile_save", true, &profile, &[] as &[String]);
-    } else {
-        context.renderer.success_message(&format!(
-            "Saved profile '{}' with {} package(s).",
-            profile.name,
-            profile.packages.len()
-        ));
-    }
-
     Ok(profile)
+}
+
+/// Compare the saved inventory with a fresh, complete read without changing it.
+pub fn verify(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
+    let saved = read_profile(context.config_dir, name)?;
+    let current = capture_current(context, name)?;
+    let missing = saved
+        .packages
+        .iter()
+        .filter(|p| !current.packages.contains(p))
+        .collect::<Vec<_>>();
+    let added = current
+        .packages
+        .iter()
+        .filter(|p| !saved.packages.contains(p))
+        .collect::<Vec<_>>();
+    let matches = missing.is_empty() && added.is_empty();
+    if context.renderer.json() {
+        context.renderer.render_json_envelope(
+            "profile_verify",
+            matches,
+            &serde_json::json!({"name": name, "matches": matches,
+                "saved_count": saved.packages.len(), "current_count": current.packages.len(),
+                "missing_or_changed": missing, "new_or_changed": added}),
+            &[] as &[String],
+        );
+    } else {
+        println!(
+            "Profile '{name}': {} saved / {} installed package(s)",
+            saved.packages.len(),
+            current.packages.len()
+        );
+        for package in missing {
+            println!("  Missing or changed: {}", package.description());
+        }
+        for package in added {
+            println!("  New or changed: {}", package.description());
+        }
+        if matches {
+            context
+                .renderer
+                .success_message("Saved inventory matches this system.");
+        }
+    }
+    if matches {
+        Ok(())
+    } else {
+        Err(AllpError::PartialFailure(
+            "saved profile differs from the current installed inventory".to_owned(),
+        ))
+    }
 }
 
 pub fn list(config_dir: &Path, renderer: &crate::cli::Renderer) -> AllpResult<Vec<String>> {
@@ -252,6 +371,7 @@ pub fn show(config_dir: &Path, name: &str, renderer: &crate::cli::Renderer) -> A
         println!("Profile: {}", profile.name);
         println!("Version: {}", profile.version);
         println!("Packages: {}", profile.packages.len());
+        render_conversion_notice(renderer, &profile);
 
         for package in &profile.packages {
             println!("  {}", package.description());
@@ -261,8 +381,9 @@ pub fn show(config_dir: &Path, name: &str, renderer: &crate::cli::Renderer) -> A
     Ok(profile)
 }
 
-pub fn install(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
-    let profile = read_profile(context.config_dir, name)?;
+pub fn install(context: &OperationContext<'_>, name: &str, without: &[String]) -> AllpResult<()> {
+    let profile = prerequisites::selected_profile(context.config_dir, name, without)?;
+    render_conversion_notice(context.renderer, &profile);
 
     if context.renderer.json() {
         return Err(AllpError::InvalidInput(
@@ -308,6 +429,10 @@ pub fn install(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
         profile.name,
         profile.packages.len()
     );
+
+    if !prerequisites::prepare_remotes(context, &profile)? {
+        return Ok(());
+    }
 
     for package in &profile.packages {
         context
@@ -556,6 +681,21 @@ impl ProfilePackage {
     }
 }
 
+fn render_conversion_notice(renderer: &crate::cli::Renderer, profile: &Profile) {
+    if !renderer.json() {
+        if let Some(conversion) = &profile.conversion {
+            renderer.info_message(&format!(
+                "Converted for {} from {} source package(s).",
+                conversion.target.label(),
+                conversion.source_packages
+            ));
+            if conversion.omitted_packages > 0 {
+                renderer.warn(&format!("{} source package(s) were unresolved and are omitted here. Review the conversion JSON report and original profile before applying.", conversion.omitted_packages));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,6 +712,7 @@ mod tests {
         let profile = Profile {
             version: PROFILE_VERSION,
             name: "dev".to_owned(),
+            conversion: None,
             packages: vec![
                 ProfilePackage {
                     backend: "apt".to_owned(),
@@ -598,6 +739,7 @@ mod tests {
         let profile = Profile {
             version: PROFILE_VERSION,
             name: "rust-dev".to_owned(),
+            conversion: None,
             packages: vec![ProfilePackage {
                 backend: "cargo".to_owned(),
                 package: "ripgrep".to_owned(),
@@ -619,6 +761,7 @@ mod tests {
         let profile = Profile {
             version: PROFILE_VERSION,
             name: "unsafe".to_owned(),
+            conversion: None,
             packages: vec![ProfilePackage {
                 backend: "apt".to_owned(),
                 package: "git\u{1b}[2J".to_owned(),

@@ -344,6 +344,10 @@ pub struct ProfileInstallArgs {
     /// Profile name.
     pub name: String,
 
+    /// Skip applications from these optional managers (snap,flatpak).
+    #[arg(long, value_delimiter = ',', value_parser = ["snap", "flatpak"])]
+    pub without: Vec<String>,
+
     #[command(flatten)]
     pub mutation: MutationOptions,
 
@@ -376,6 +380,29 @@ pub struct ProfileImportArgs {
     pub common: CommonOptions,
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct ProfileConvertArgs {
+    /// Saved source profile; it is never overwritten.
+    pub name: String,
+    /// Destination distribution family.
+    #[arg(long, value_enum)]
+    pub to: crate::profiles::conversion::Target,
+    /// Output profile name (defaults to SOURCE-TARGET).
+    #[arg(long = "name")]
+    pub output_name: Option<String>,
+    /// JSON report path (defaults beside the converted profile).
+    #[arg(long)]
+    pub report: Option<PathBuf>,
+    /// Explicit package mappings in TOML.
+    #[arg(long)]
+    pub map: Option<PathBuf>,
+    /// Check exact package availability using managers on this destination host.
+    #[arg(long)]
+    pub verify: bool,
+    #[command(flatten)]
+    pub common: CommonOptions,
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub enum ProfileCommands {
     /// Save the currently installed packages as a profile.
@@ -390,6 +417,10 @@ pub enum ProfileCommands {
     Export(ProfileExportArgs),
     /// Import a TOML profile into Allp's profile store.
     Import(ProfileImportArgs),
+    /// Compare a saved profile against a fresh installed inventory.
+    Verify(ProfileNameArgs),
+    /// Translate a profile for another Linux distribution, with a JSON report.
+    Convert(ProfileConvertArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -476,6 +507,8 @@ impl Commands {
                 ProfileCommands::Install(a) => &a.common,
                 ProfileCommands::Export(a) => &a.common,
                 ProfileCommands::Import(a) => &a.common,
+                ProfileCommands::Verify(a) => &a.common,
+                ProfileCommands::Convert(a) => &a.common,
             },
             Self::SelfUpdate(args) => &args.common,
             Self::InternalSnapdInstall(args) => &args.common,

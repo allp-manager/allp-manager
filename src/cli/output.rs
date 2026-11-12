@@ -567,19 +567,88 @@ impl Renderer {
         let ready: Vec<_> = report
             .entries
             .iter()
-            .filter(|entry| entry.state == DetectionState::Ready)
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    DetectionState::Ready | DetectionState::FoundButUnconfigured
+                )
+            })
             .map(|entry| entry.backend_name.as_str())
             .collect();
         println!("{}", self.heading("Environment Scan"));
         if ready.is_empty() {
-            println!("Detected and ready: none");
+            println!("Detected tools: none");
         } else {
-            println!("Detected and ready: {}", ready.join(", "));
+            println!("Detected tools: {}", ready.join(", "));
         }
+        println!("Update checks also depend on network access and prerequisites.");
         if selected.is_empty() {
             println!("Selected for execution: none");
         } else {
             println!("Selected for execution: {}", selected.join(", "));
+        }
+    }
+
+    pub fn maintenance_preflight(&self, records: &[crate::domain::BackendOperationRecord]) {
+        if self.json {
+            return;
+        }
+        let failures = records
+            .iter()
+            .filter(|record| record.status.is_failure() && record.command.is_none())
+            .collect::<Vec<_>>();
+        if failures.is_empty() {
+            return;
+        }
+        println!("\n{}", self.heading("Checks needing attention"));
+        let width = failures
+            .iter()
+            .map(|record| record.backend_name.len())
+            .max()
+            .unwrap_or(15)
+            .max(15);
+        for record in failures {
+            self.maintenance_record(record, width, self.verbose > 0);
+        }
+        println!("These checks did not schedule an upgrade. Other planned targets can continue.");
+    }
+
+    fn maintenance_record(
+        &self,
+        record: &crate::domain::BackendOperationRecord,
+        width: usize,
+        verbose: bool,
+    ) {
+        let marker = self.status_marker(&record.status);
+        let label = if matches!(record.status, crate::domain::OperationStatus::Failed)
+            && record.command.is_none()
+        {
+            "Check failed"
+        } else {
+            record.status.label()
+        };
+        let message = record.message.as_deref().map(strip_status_prefix);
+        let mut lines = message.unwrap_or("").lines();
+        if let Some(first) = lines.next() {
+            println!("{marker} {:<width$} {label} · {first}", record.backend_name);
+        } else {
+            println!("{marker} {:<width$} {label}", record.backend_name);
+        }
+        let details = lines.collect::<Vec<_>>();
+        let limit = if verbose { details.len() } else { 5 };
+        for line in details.iter().take(limit) {
+            println!("    {line}");
+        }
+        if details.len() > limit {
+            println!("    More details available with --verbose.");
+        }
+        if verbose {
+            if let Some(action) = &record.action {
+                println!("    Action: {action}");
+            }
+            if let Some(command) = &record.command {
+                println!("    Command: {command}");
+            }
         }
     }
 
@@ -604,6 +673,10 @@ impl Renderer {
             "Planned Operations"
         };
         println!("\n{}", self.heading(heading));
+        if plans.is_empty() {
+            println!("  No commands scheduled.");
+            return;
+        }
         for (index, plan) in plans.iter().enumerate() {
             if plans.len() > 1 {
                 println!("\n{}. {}", index + 1, self.bold(&plan.backend_name));
@@ -1420,45 +1493,38 @@ impl Renderer {
             "\n{}",
             self.heading(&format!("{} Summary", title_case(&report.operation)))
         );
-        let hidden_unavailable = report
+        let hide_optional = !verbose && !explicitly_selected;
+        let visible = report
             .records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                let redundant_optional = record.status.is_optional_unavailable()
+                    && (report.records.iter().any(|other| {
+                        other.backend_id == record.backend_id
+                            && !other.status.is_optional_unavailable()
+                    }) || report.records[..index]
+                        .iter()
+                        .any(|other| other.backend_id == record.backend_id));
+                (!hide_optional || !redundant_optional).then_some(record)
+            })
+            .collect::<Vec<_>>();
+        let hidden_unavailable = report.records.len() - visible.len();
+        let visible_unavailable = visible
             .iter()
             .filter(|record| record.status.is_optional_unavailable())
             .count();
-        let hide_optional = !verbose && !explicitly_selected;
-        for record in &report.records {
-            if record.status.is_optional_unavailable() && hide_optional {
-                continue;
-            }
-            let marker = self.status_marker(&record.status);
-            let label = record.status.label();
-            if let Some(message) = &record.message {
-                if matches!(record.status, crate::domain::OperationStatus::DryRun) {
-                    println!("{marker} {:<10} {label}", record.backend_name);
-                    if verbose {
-                        println!("  {message}");
-                    }
-                } else {
-                    println!(
-                        "{marker} {:<15} {label} · {}",
-                        record.backend_name,
-                        strip_status_prefix(message)
-                    );
-                }
-            } else {
-                println!("{marker} {:<15} {label}", record.backend_name);
-            }
-            if verbose {
-                if let Some(action) = &record.action {
-                    println!("  Action: {action}");
-                }
-                if let Some(command) = &record.command {
-                    println!("  Command: {command}");
-                }
-            }
+        let width = visible
+            .iter()
+            .map(|record| record.backend_name.len())
+            .max()
+            .unwrap_or(15)
+            .max(15);
+        for record in visible {
+            self.maintenance_record(record, width, verbose);
         }
         if hidden_unavailable > 0 && hide_optional {
-            println!("\nOptional unavailable targets hidden; use --verbose to show details.");
+            println!("\n{hidden_unavailable} optional unavailable targets hidden; use --verbose to show details.");
         }
 
         let completed = count_status(report, |status| {
@@ -1503,23 +1569,53 @@ impl Renderer {
             .filter(|record| record.command.is_some())
             .count();
         if dry_run {
-            println!("\nDry run completed");
+            if report.has_failures() {
+                println!("\nDry run completed with failed checks; preview is incomplete.");
+            } else {
+                println!("\nDry run completed");
+            }
             println!("{planned} operation(s) planned");
             println!("0 commands executed");
         } else {
-            println!("\n{completed} completed");
-            println!("{updated} updated");
-            println!("{up_to_date} up to date");
-            println!("{deferred} deferred");
-            println!("{not_applicable} not applicable");
-            println!("{protected} protected");
-            println!("{busy} busy");
-            println!("{blocked} blocked");
-            println!("{cancelled} cancelled");
-            println!("{failed} failed");
-            if verbose {
-                println!("{unavailable} unavailable");
-            }
+            let outcome = if report.has_failures() {
+                "needs attention"
+            } else if cancelled > 0 {
+                "cancelled"
+            } else if deferred > 0 {
+                "finished with deferred targets"
+            } else if planned == 0 {
+                "nothing scheduled"
+            } else {
+                "finished"
+            };
+            println!("\nOutcome: {outcome}");
+        }
+        let totals = [
+            (completed, "completed"),
+            (updated, "updated"),
+            (up_to_date, "up to date"),
+            (deferred, "deferred"),
+            (not_applicable, "not applicable"),
+            (protected, "protected"),
+            (busy, "busy"),
+            (blocked, "blocked"),
+            (cancelled, "cancelled"),
+            (failed, "failed"),
+            (
+                if hide_optional {
+                    visible_unavailable
+                } else {
+                    unavailable
+                },
+                "unavailable",
+            ),
+        ]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, label)| format!("{count} {label}"))
+        .collect::<Vec<_>>();
+        if !totals.is_empty() {
+            println!("Results: {}", totals.join(" · "));
         }
     }
 
@@ -1619,6 +1715,7 @@ impl Renderer {
             status.label(),
             message
                 .map(strip_status_prefix)
+                .and_then(|value| value.lines().next())
                 .map(|value| format!(" · {value}"))
                 .unwrap_or_default()
         );

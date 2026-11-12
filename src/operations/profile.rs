@@ -13,8 +13,28 @@ pub fn show(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
     profiles::show(context.config_dir, name, context.renderer).map(|_| ())
 }
 
-pub fn install(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
-    profiles::install(context, name)
+pub fn install(context: &OperationContext<'_>, name: &str, without: &[String]) -> AllpResult<()> {
+    profiles::install(context, name, without)
+}
+
+pub fn verify(context: &OperationContext<'_>, name: &str) -> AllpResult<()> {
+    profiles::verify(context, name)
+}
+
+pub fn convert(
+    context: &OperationContext<'_>,
+    args: &crate::cli::args::ProfileConvertArgs,
+) -> AllpResult<()> {
+    profiles::conversion::convert(
+        context,
+        &args.name,
+        args.to,
+        args.output_name.as_deref(),
+        args.report.as_deref(),
+        args.map.as_deref(),
+        args.verify,
+    )
+    .map(|_| ())
 }
 
 pub fn export(context: &OperationContext<'_>, name: &str, path: &Path) -> AllpResult<()> {

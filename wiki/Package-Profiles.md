@@ -7,6 +7,7 @@ package ID and owning backend.
 
 ```bash
 allp profile save workstation
+allp profile verify workstation
 allp profile list
 allp profile show workstation
 allp profile export workstation workstation.toml
@@ -29,11 +30,20 @@ package = "ripgrep"
 version = "14.1.1"
 ```
 
-Version is observed inventory metadata, not a pin. Allp does not translate an
-APT package into a DNF package. Before applying, every backend is verified so a
+Version is observed inventory metadata, not a pin. Explicit conversion uses
+`allp profile convert workstation --to arch` (also Debian/Ubuntu and Fedora).
+It preserves the original and produces a new profile and JSON report for every
+source package. `--verify` checks exact availability on the destination;
+`--map FILE` supplies reviewed mappings. Unknown packages remain in the report.
+See [the migration guide](../docs/PROFILE_MIGRATION.md).
+Before applying, every backend is verified so a
 missing backend cannot stop the run after earlier packages already changed the
 host. Installation then uses the normal per-package search, planning and
 confirmation path.
+
+Missing Snap/Flatpak prerequisites are offered before application installation.
+Use `--yes --allow-bootstrap` for explicit noninteractive setup, or
+`profile install NAME --without snap,flatpak` to skip those optional apps.
 
 System inventory can include dependencies. Review the exported file before
 moving it to another machine. Imports reject unknown fields, duplicate entries,

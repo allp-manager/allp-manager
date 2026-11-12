@@ -1,0 +1,12 @@
+Package: allp
+Version: @VERSION@-1
+Section: utils
+Priority: optional
+Architecture: @ARCH@
+Maintainer: Ali <Im_wrench@proton.me>
+Depends: @DEPENDS@
+Homepage: https://github.com/allp-manager/allp-manager
+Description: transparent orchestrator for native package managers
+ Discover installed package managers, review native commands, manage packages,
+ and migrate package inventories between supported Linux distributions.
+ Package managers remain optional and are never installed by this package.

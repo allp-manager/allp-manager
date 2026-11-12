@@ -16,12 +16,16 @@ use serde_json::Value;
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
 pub struct NodeBackend;
+
+// Registry lookups need a different budget from short local version probes.
+const REGISTRY_CHECK_TIMEOUT: Duration = Duration::from_secs(45);
 
 const CAPABILITIES: &[Capability] = &[
     Capability::Search,
@@ -388,7 +392,7 @@ fn node_maintenance(
         ));
     }
     if let Some(target) = target_for("npm").filter(|_| selector_allows(selector, "npm")) {
-        append_npm_plans(
+        let result = append_npm_plans(
             backend,
             commands,
             runner,
@@ -396,10 +400,19 @@ fn node_maintenance(
             operation,
             project_root.as_deref(),
             &mut output,
-        )?;
+        );
+        if let Err(error) = result {
+            output.records.push(node_check_failure(
+                backend,
+                "npm",
+                target.cli_value(),
+                None,
+                error,
+            ));
+        }
     }
     if let Some(target) = target_for("pnpm").filter(|_| selector_allows(selector, "pnpm")) {
-        append_pnpm_plans(
+        let result = append_pnpm_plans(
             backend,
             commands,
             runner,
@@ -407,10 +420,19 @@ fn node_maintenance(
             operation,
             project_root.as_deref(),
             &mut output,
-        )?;
+        );
+        if let Err(error) = result {
+            output.records.push(node_check_failure(
+                backend,
+                "pnpm",
+                target.cli_value(),
+                project_root.as_deref(),
+                error,
+            ));
+        }
     }
     if let Some(target) = target_for("yarn").filter(|_| selector_allows(selector, "yarn")) {
-        append_yarn_plans(
+        let result = append_yarn_plans(
             backend,
             commands,
             runner,
@@ -418,7 +440,16 @@ fn node_maintenance(
             operation,
             project_root.as_deref(),
             &mut output,
-        )?;
+        );
+        if let Err(error) = result {
+            output.records.push(node_check_failure(
+                backend,
+                "yarn",
+                target.cli_value(),
+                project_root.as_deref(),
+                error,
+            ));
+        }
     }
 
     if output.plans.is_empty() && output.records.is_empty() {
@@ -719,8 +750,8 @@ fn append_npm_plans(
     let npm = command_path(backend, commands, "npm")?;
     if target.includes(DeveloperTarget::Project) {
         if let Some(root) = project_root {
-            match npm_outdated(backend, runner, npm, Some(root), false)? {
-                OutdatedState::Outdated => {
+            match npm_outdated(backend, runner, npm, Some(root), false) {
+                Ok(OutdatedState::Outdated) => {
                     let mut command = NativeCommand::new(npm).arg("update");
                     command.current_dir = Some(root.to_path_buf());
                     let action = match operation {
@@ -745,11 +776,18 @@ fn append_npm_plans(
                         command,
                     ));
                 }
-                OutdatedState::None => output.records.push(node_record(
+                Ok(OutdatedState::None) => output.records.push(node_record(
                     backend,
                     "npm project",
                     crate::domain::OperationStatus::UpToDate,
                     "no outdated packages found after npm outdated --json inspection",
+                )),
+                Err(error) => output.records.push(node_check_failure(
+                    backend,
+                    "npm",
+                    "project",
+                    Some(root),
+                    error,
                 )),
             }
         } else {
@@ -763,8 +801,8 @@ fn append_npm_plans(
     }
 
     if target.includes(DeveloperTarget::Global) {
-        match npm_outdated(backend, runner, npm, None, true)? {
-            OutdatedState::Outdated => output.plans.push(node_plan(
+        match npm_outdated(backend, runner, npm, None, true) {
+            Ok(OutdatedState::Outdated) => output.plans.push(node_plan(
                 backend,
                 "npm global",
                 operation,
@@ -773,12 +811,15 @@ fn append_npm_plans(
                 Some("global user packages".to_owned()),
                 NativeCommand::new(npm).args(["update", "--global"]),
             )),
-            OutdatedState::None => output.records.push(node_record(
+            Ok(OutdatedState::None) => output.records.push(node_record(
                 backend,
                 "npm global",
                 crate::domain::OperationStatus::UpToDate,
                 "no globally installed outdated npm packages found",
             )),
+            Err(error) => output
+                .records
+                .push(node_check_failure(backend, "npm", "global", None, error)),
         }
     }
 
@@ -1034,7 +1075,7 @@ fn npm_outdated(
     project_root: Option<&Path>,
     global: bool,
 ) -> AllpResult<OutdatedState> {
-    let mut command = NativeCommand::new(npm);
+    let mut command = NativeCommand::new(npm).timeout(REGISTRY_CHECK_TIMEOUT);
     if global {
         command = command.args(["outdated", "--global", "--depth=0", "--json"]);
     } else {
@@ -1044,7 +1085,8 @@ fn npm_outdated(
         command.current_dir = Some(root.to_path_buf());
     }
     let rendered = render_native_command(&command);
-    let output = runner.capture(&command)?;
+    let output =
+        runner.capture_with_privilege(&command, PrivilegeRequirement::OriginalUserRequired)?;
     if !output.success && output.code != Some(1) {
         return Err(AllpError::CommandFailed {
             backend: backend.display_name().to_owned(),
@@ -1101,7 +1143,8 @@ fn inspect_pnpm(
 ) -> AllpResult<bool> {
     let mut command = NativeCommand::new(pnpm)
         .args(probe.iter().copied())
-        .args(["--format", "json"]);
+        .args(["--format", "json"])
+        .timeout(REGISTRY_CHECK_TIMEOUT);
     command.current_dir = root.map(Path::to_path_buf);
     let rendered = render_native_command(&command);
     let output =
@@ -1267,6 +1310,60 @@ fn node_record(
     reason: &str,
 ) -> crate::domain::BackendOperationRecord {
     MaintenancePlan::record(backend.id(), target_name, status, reason)
+}
+
+fn node_check_failure(
+    backend: &NodeBackend,
+    installer: &str,
+    target: &str,
+    root: Option<&Path>,
+    error: AllpError,
+) -> crate::domain::BackendOperationRecord {
+    let reason = if matches!(error, AllpError::Timeout(_)) {
+        "Registry check timed out; update availability is unknown."
+    } else {
+        "Update check failed; update availability is unknown."
+    };
+    let details = match &error {
+        AllpError::CommandFailed {
+            stderr,
+            command,
+            code,
+            ..
+        } => {
+            let parsed = serde_json::from_str::<Value>(stderr).ok();
+            match parsed.as_ref().and_then(|value| value.get("error")) {
+                Some(issue) if issue.get("summary").and_then(Value::as_str).is_some() => format!(
+                    "{}{} (native exit {})\nCheck command: {command}",
+                    issue["summary"].as_str().unwrap_or_default(),
+                    issue
+                        .get("code")
+                        .and_then(Value::as_str)
+                        .map(|code| format!(" [{code}]"))
+                        .unwrap_or_default(),
+                    code.map(|code| code.to_string())
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                ),
+                _ => error.to_string(),
+            }
+        }
+        _ => error.to_string(),
+    };
+    let mut message = format!("{reason}\nDetails: {details}");
+    if let Some(root) = root {
+        message.push_str(&format!("\nProject: {}", root.display()));
+    }
+    message.push_str(&format!(
+        "\nRetry check: allp upgrade --from {installer} --target {target} --dry-run"
+    ));
+    let mut record = node_record(
+        backend,
+        &format!("{installer} {target}"),
+        OperationStatus::Failed,
+        &message,
+    );
+    record.action = Some("Check package update availability".to_owned());
+    record
 }
 
 fn node_plan(
@@ -1611,5 +1708,86 @@ mod search_contract_tests {
             report.issues[0].kind,
             BackendSearchIssueKind::UnrecognizedOutput
         );
+    }
+}
+
+#[cfg(test)]
+mod maintenance_check_tests {
+    use super::*;
+    use crate::execution::{CommandOutput, ProcessStatus};
+    use std::sync::Mutex;
+
+    struct RegistryRunner {
+        calls: Mutex<Vec<bool>>,
+    }
+    impl ProcessRunner for RegistryRunner {
+        fn capture(&self, _: &NativeCommand) -> AllpResult<CommandOutput> {
+            panic!("registry checks must use the original user's context")
+        }
+        fn capture_with_privilege(
+            &self,
+            command: &NativeCommand,
+            privilege: PrivilegeRequirement,
+        ) -> AllpResult<CommandOutput> {
+            assert_eq!(privilege, PrivilegeRequirement::OriginalUserRequired);
+            let timeout = command
+                .timeout
+                .expect("network checks need an explicit deadline");
+            assert!(timeout > Duration::from_secs(15) && timeout <= Duration::from_secs(60));
+            let global = command.args.iter().any(|arg| arg == "--global");
+            self.calls.lock().unwrap().push(global);
+            if !global {
+                return Err(AllpError::Timeout(
+                    "Native command timed out during registry lookup".to_owned(),
+                ));
+            }
+            Ok(CommandOutput {
+                success: true,
+                code: Some(0),
+                signal: None,
+                stdout: "{}".to_owned(),
+                stderr: String::new(),
+                duration: Duration::ZERO,
+            })
+        }
+        fn execute(&self, _: &ExecutionPlan) -> AllpResult<ProcessStatus> {
+            panic!("availability checks must not update packages")
+        }
+    }
+
+    #[test]
+    fn project_timeout_keeps_global_check_and_identifies_the_project() {
+        let runner = RegistryRunner {
+            calls: Mutex::new(Vec::new()),
+        };
+        let mut commands = CommandMap::new();
+        commands.insert("npm".to_owned(), PathBuf::from("/tools/npm"));
+        let mut report = MaintenancePlan::default();
+        append_npm_plans(
+            &NodeBackend,
+            &commands,
+            &runner,
+            DeveloperTarget::All,
+            OperationKind::Upgrade,
+            Some(Path::new("/work/current-project")),
+            &mut report,
+        )
+        .unwrap();
+        assert_eq!(*runner.calls.lock().unwrap(), vec![false, true]);
+        assert!(report.plans.is_empty());
+        let project = report
+            .records
+            .iter()
+            .find(|r| r.backend_name == "npm project")
+            .unwrap();
+        assert!(matches!(project.status, OperationStatus::Failed));
+        let message = project.message.as_deref().unwrap();
+        assert!(message.contains("availability is unknown"));
+        assert!(message.contains("/work/current-project"));
+        assert!(message.contains("--target project --dry-run"));
+        assert!(project.command.is_none());
+        assert!(report.records.iter().any(
+            |r| r.backend_name == "npm global" && matches!(r.status, OperationStatus::UpToDate)
+        ));
     }
 }

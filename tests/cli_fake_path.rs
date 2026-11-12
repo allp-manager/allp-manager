@@ -3,8 +3,8 @@
 use serde_json::Value;
 use std::{
     fs,
-    io::{Read, Write},
-    os::unix::fs::PermissionsExt,
+    io::{BufRead, BufReader, Read, Write},
+    os::unix::{fs::PermissionsExt, net::UnixListener},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::mpsc,
@@ -3115,7 +3115,7 @@ fn update_dry_run_shows_detected_and_selected_sets() {
     assert!(!marker.exists(), "dry run must not execute native command");
     let out = stdout(&output);
     assert!(out.contains("Environment Scan"));
-    assert!(out.contains("Detected and ready: APT, Snap"));
+    assert!(out.contains("Detected tools: APT, Snap"));
     assert!(out.contains("Selected for execution: APT"));
     assert!(out.contains("Planned Operation"));
     assert!(out.contains("Privilege: Administrator access required"));
@@ -3352,6 +3352,120 @@ fn maintenance_tui_streams_native_output_with_only_apt_style_progress_in_a_pty()
     assert!(rendered.contains("apt update native output"));
     assert!(!rendered.contains("› apt update native output"));
     assert!(rendered.contains("Update Summary"));
+}
+
+#[test]
+fn maintenance_tui_reports_the_current_snap_downloads() {
+    let dir = temp_dir("snap-tui");
+    let refresh_started = dir.join("refresh-started");
+    let progress_delivered = dir.join("progress-delivered");
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    write_executable(
+        &dir,
+        "snap",
+        &format!(
+            r#"#!/bin/sh
+case "$1" in
+  version) printf 'snap 2.75\nsnapd 2.75\n' ;;
+  refresh)
+    : > '{}'
+    remaining=15
+    while [ "$remaining" -gt 0 ]; do
+      if [ -f '{}' ]; then
+        /bin/sleep 1.5
+        printf '%s\n' 'firefox 160.0 refreshed' 'brave 1.99 refreshed'
+        exit 0
+      fi
+      /bin/sleep 1
+      remaining=$((remaining - 1))
+    done
+    exit 1 ;;
+esac
+"#,
+            refresh_started.display(),
+            progress_delivered.display(),
+        ),
+    );
+    let socket = dir.join("missing-snapd.socket");
+    let listener = match UnixListener::bind(&socket) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping Snap progress test: Unix socket unavailable: {error}");
+            return;
+        }
+        Err(error) => panic!("fake snapd socket: {error}"),
+    };
+    listener.set_nonblocking(true).unwrap();
+    let (stop, stopped) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut samples = 0;
+        while stopped.try_recv() == Err(mpsc::TryRecvError::Empty) {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("fake snapd accept failed: {error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut lines = BufReader::new(&stream).lines();
+            let request = lines.next().unwrap().unwrap();
+            for line in lines {
+                if line.unwrap().is_empty() {
+                    break;
+                }
+            }
+            let download = |name: &str, status: &str, done: u64| {
+                serde_json::json!({
+                    "kind": "download-snap", "status": status,
+                    "summary": format!("Download snap \"{name}\""),
+                    "progress": { "done": done, "total": 100 }
+                })
+            };
+            let change = |id: &str, tasks: Vec<Value>| serde_json::json!({ "id": id, "kind": "refresh-snap", "ready": false, "tasks": tasks });
+            let mut changes = vec![change("319", vec![download("unrelated", "Doing", 99)])];
+            if request.contains(" /v2/changes?") && refresh_started.is_file() {
+                samples += 1;
+                let tasks = match samples {
+                    1 => vec![
+                        download("firefox", "Doing", 25),
+                        download("brave", "Doing", 97),
+                    ],
+                    2 => vec![
+                        download("firefox", "Doing", 55),
+                        download("brave", "Done", 100),
+                    ],
+                    _ => vec![serde_json::json!({
+                        "kind": "mount-snap", "status": "Doing", "summary": "Mount snap firefox"
+                    })],
+                };
+                changes.push(change("320", tasks));
+            }
+            let body = serde_json::json!({ "type": "sync", "status-code": 200, "result": changes });
+            write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}").unwrap();
+            if samples >= 3 {
+                fs::write(&progress_delivered, "").unwrap();
+            }
+        }
+    });
+    let output = run_allp_pty_with_tui(&dir, &["upgrade", "--from", "snap", "--yes"], "");
+    let _ = stop.send(());
+    server.join().expect("fake snapd should finish");
+    fs::remove_file(socket).expect("remove fake snapd socket");
+
+    let rendered = stdout(&output);
+    assert!(output.status.success(), "{rendered}");
+    assert!(
+        rendered.contains("Downloading firefox 25%, brave 97%"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Downloading firefox 55%"), "{rendered}");
+    assert!(rendered.contains("Mount snap firefox"), "{rendered}");
+    assert!(!rendered.contains("Downloading unrelated"), "{rendered}");
+    assert!(rendered.contains("Upgrade Summary"), "{rendered}");
 }
 
 #[test]
@@ -3608,7 +3722,7 @@ fn failed_maintenance_privilege_preflight_blocks_backends_before_tui_or_native_e
         "Snap should be reported as privilege-blocked, not as a native failure: {rendered}"
     );
     assert!(
-        rendered.contains("0 failed"),
+        !rendered.contains("Failed") && rendered.contains("Results: 3 blocked"),
         "the privilege failure must not be classified as a native backend failure: {rendered}"
     );
     assert!(!rendered.contains("Progress: ["));
@@ -4295,7 +4409,8 @@ esac
                 && line.contains("Up to date · nothing to update")
         }));
     }
-    assert!(flatpak_out.contains("0 completed"));
+    assert!(flatpak_out.contains("Outcome: finished"));
+    assert!(!flatpak_out.contains("0 completed"));
     assert!(flatpak_out.contains("2 up to date"));
 }
 
@@ -5679,4 +5794,122 @@ fn profile_install_rejects_missing_backends_before_any_package_runs() {
         !marker.exists(),
         "APT must not run before backend preflight"
     );
+}
+
+#[test]
+fn npm_project_check_failure_preserves_global_results_and_is_shown_before_execution() {
+    let dir = temp_dir("npm-independent-checks");
+    install_fake_apt(&dir, &dir.join("executed"), 0, 0);
+    let project = temp_dir("npm-failing-project");
+    fs::write(project.join("package.json"), "{}").unwrap();
+    write_executable(
+        &dir,
+        "npm",
+        r#"#!/bin/sh
+if [ "$1" = --version ]; then echo 11.0.0; exit 0; fi
+if [ "$1" = outdated ]; then
+ if [ "$2" = --global ]; then echo '{}'; exit 0; fi
+ echo '{"error":{"code":"ENOTFOUND","summary":"registry unavailable"}}'
+ exit 1
+fi
+exit 42
+"#,
+    );
+    let output = run_allp_in(&dir, &project, &["upgrade", "--dry-run", "--no-color"]);
+    assert_eq!(output.status.code(), Some(8), "{}", stdout(&output));
+    let out = stdout(&output);
+    assert!(out.find("Checks needing attention").unwrap() < out.find("Planned Operation").unwrap());
+    assert!(out
+        .lines()
+        .any(|line| line.contains("npm project") && line.contains("Check failed")));
+    assert!(out
+        .lines()
+        .any(|line| line.contains("npm global") && line.contains("Up to date")));
+    assert!(out.contains(&format!("Project: {}", project.display())));
+    assert!(out.contains("--target project --dry-run"));
+    assert!(out.contains("preview is incomplete"));
+    assert!(!dir.join("executed").exists());
+
+    let json_output = run_allp_in(&dir, &project, &["upgrade", "--dry-run", "--json"]);
+    assert_eq!(json_output.status.code(), Some(8));
+    let json: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(json["complete"], false);
+    let rows = json["results"].as_array().unwrap();
+    assert!(rows.iter().any(|r| r["backend_name"] == "npm project"
+        && r["status"] == "failed"
+        && r["command"].is_null()));
+    assert!(rows
+        .iter()
+        .any(|r| r["backend_name"] == "npm global" && r["status"] == "up_to_date"));
+    assert!(!String::from_utf8_lossy(&json_output.stdout).contains("Checking targets"));
+}
+
+#[test]
+fn snap_store_failure_summary_names_connectivity_and_a_read_only_check() {
+    let dir = temp_dir("snap-store-summary");
+    write_executable(
+        &dir,
+        "snap",
+        r#"#!/bin/sh
+case "$1" in
+ version) printf 'snap 2.0\nsnapd 2.0\n' ;;
+ refresh) echo 'error: unable to contact snap store' >&2; exit 1 ;;
+esac
+"#,
+    );
+    install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+    let output = run_allp(
+        &dir,
+        &[
+            "upgrade",
+            "--from",
+            "snap",
+            "--yes",
+            "--no-tui",
+            "--no-color",
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(8),
+        "{} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.lines().any(|line| line.contains("Snap")
+            && line.contains("Failed")
+            && line.contains("Cannot reach Snap Store")),
+        "{out}"
+    );
+    assert!(out.contains("Check connectivity: snap debug connectivity"));
+    assert!(out.contains("Outcome: needs attention"));
+    assert!(out.contains("Results: 1 failed"));
+    assert!(!out.contains("0 completed"));
+    assert!(!out.contains("0 updated"));
+}
+
+#[test]
+fn a_manager_with_only_unavailable_targets_has_a_visible_reason() {
+    let dir = temp_dir("visible-unavailable-manager");
+    install_fake_node_up_to_date(&dir);
+    write_executable(&dir, "cargo", "#!/bin/sh\necho 'cargo 1.90.0'\n");
+    let output = run_allp(&dir, &["upgrade", "--dry-run", "--no-color"]);
+    assert!(
+        output.status.success(),
+        "{} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.lines().any(|line| line.contains("Rust / Cargo")
+            && line.contains("Unavailable")
+            && line.contains("cargo-update")),
+        "{out}"
+    );
+    assert!(!out.contains("pnpm CLI"));
+    assert!(!out.contains("Yarn CLI"));
+    assert!(out.contains("optional unavailable targets hidden"));
 }

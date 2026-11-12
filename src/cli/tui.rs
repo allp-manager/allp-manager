@@ -5,6 +5,7 @@ use crate::{
 use std::{
     env,
     io::{self, Write},
+    sync::mpsc::{Receiver, TryRecvError},
     time::Duration,
 };
 
@@ -33,12 +34,13 @@ pub struct MaintenanceTui {
     io_failed: bool,
 }
 
-#[derive(Debug, Clone)]
 struct ActiveOperation {
     backend_name: String,
     action: String,
     elapsed: Duration,
     percent: Option<u8>,
+    task: Option<String>,
+    task_updates: Option<Receiver<Option<String>>>,
 }
 
 impl MaintenanceTui {
@@ -65,6 +67,7 @@ impl MaintenanceTui {
         total: usize,
         plan: &ExecutionPlan,
         _privilege_context: &RuntimePrivilegeContext,
+        task_updates: Option<Receiver<Option<String>>>,
     ) {
         self.total = total.max(1);
         self.flush_pending();
@@ -74,6 +77,8 @@ impl MaintenanceTui {
             action: plan.action.clone(),
             elapsed: Duration::ZERO,
             percent: None,
+            task: None,
+            task_updates,
         });
         self.draw_footer();
     }
@@ -152,10 +157,17 @@ impl MaintenanceTui {
 
         self.width = terminal_width();
         let percentage = self.overall_percentage();
-        let bar_width = self
-            .width
-            .saturating_sub(42)
-            .clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH);
+        let bar_width = if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.task.is_some())
+        {
+            MIN_BAR_WIDTH
+        } else {
+            self.width
+                .saturating_sub(42)
+                .clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH)
+        };
         let filled = usize::from(percentage) * bar_width / 100;
         let bar = format!("[{}{}]", "#".repeat(filled), ".".repeat(bar_width - filled));
         let detail = self.active.as_ref().map_or_else(
@@ -164,7 +176,7 @@ impl MaintenanceTui {
                 format!(
                     "{} · {} · {}/{} · {}",
                     active.backend_name,
-                    active.action,
+                    active.task.as_deref().unwrap_or(&active.action),
                     self.completed.min(self.total),
                     self.total,
                     format_duration(active.elapsed)
@@ -293,6 +305,20 @@ impl MaintenanceTui {
     fn update_elapsed(&mut self, elapsed: Duration) {
         if let Some(active) = &mut self.active {
             active.elapsed = elapsed;
+            if let Some(updates) = &active.task_updates {
+                match updates.try_recv() {
+                    Ok(task) => {
+                        active.task = task.map(|task| {
+                            sanitize_terminal_text(task.as_bytes()).replace(['\n', '\t'], " ")
+                        });
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        active.task = None;
+                        active.task_updates = None;
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+            }
         }
         self.draw_footer();
     }

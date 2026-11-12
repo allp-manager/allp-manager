@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="نسخه 0.6.5" src="https://img.shields.io/badge/version-0.6.5-7c3aed">
+  <img alt="نسخه 0.6.6" src="https://img.shields.io/badge/version-0.6.6-7c3aed">
   <img alt="آلفای عمومی" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
   <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-dea584">
   <a href="LICENSE"><img alt="مجوز MIT" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
@@ -24,7 +24,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخهٔ Stable **0.6.5**
+نسخهٔ Stable **0.6.6**
 سطح بلوغ: **Public Alpha**
 
 ## از اینجا شروع کنید
@@ -64,7 +64,8 @@ Allp توزیع‌ها و مدیرهای بستهٔ Linux، از جمله Bazzit
 | Source | وضعیت | Search | Install | Remove | Update | Upgrade | List | Info |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | APT | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
-| Pacman | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
+| Pacman | Stable alpha | بله | بله | بله | خیر | بله | بله | بله |
+| AUR با yay / paru | Experimental | بله | بله | بله | خیر | بله | بله | بله |
 | DNF / DNF5 | Stable alpha | بله | بله | بله | بله | بله | بله | بله |
 | مخزن عمومی WinGet | Windows | بله | بله | بله | بله | بله | بله | بله |
 | مدیر بستهٔ Termux | Android Termux | بله | بله | بله | فقط APT | بله | بله | بله |
@@ -82,6 +83,20 @@ Allp توزیع‌ها و مدیرهای بستهٔ Linux، از جمله Bazzit
 جزئیات بیشتر در [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md) آمده است.
 
 ## نصب و ساخت
+
+### نصب با APT روی Debian و Ubuntu
+
+ابتدا [راهنمای افزودن مخزن و کلید امضا](https://allp-manager.github.io/apt/)
+را یک‌بار انجام دهید. بعد نصب و به‌روزرسانی با APT انجام می‌شود:
+
+```bash
+sudo apt update
+sudo apt install allp
+```
+
+مخزن Stable امضاشده برای `amd64` و `arm64` منتشر شده است. بستهٔ اولیهٔ
+`0.6.5` به glibc 2.39 نیاز دارد؛ Ubuntu 24.04 و Debian 13 به بعد این شرط را
+دارند. این مخزن متعلق به پروژهٔ Allp است و از مخازن رسمی توزیع‌ها جداست.
 
 **⚠️ اگر Rust و Cargo ندارید، ابتدا آن‌ها را نصب کنید.** Git، Make و کامپایلر و لینکِر C هم لازم‌اند. از [راهنمای رسمی نصب Rust](https://www.rust-lang.org/tools/install) استفاده کنید، ترمینال را دوباره باز کنید و سپس بررسی کنید:
 
@@ -197,6 +212,7 @@ Flatpak یا container را پیشنهاد می‌کند. جزئیات در
 
 ```bash
 allp profile save dev
+allp profile verify dev
 allp profile list
 allp profile show dev
 allp profile export dev dev.toml
@@ -225,8 +241,13 @@ backend = "flatpak"
 package = "org.mozilla.firefox"
 ```
 
-پروفایل عمداً Backend را حفظ می‌کند و میان ecosystemهای مختلف معادل‌سازی
-حدسی انجام نمی‌دهد. Allp پیش از اولین نصب، در دسترس بودن تمام Backendهای لازم
+پروفایل Backend اصلی را حفظ می‌کند. برای تبدیل صریح بین Debian/Ubuntu، Arch و
+Fedora از `allp profile convert dev --to arch` استفاده کنید. خروجی یک پروفایل
+جدید و گزارش JSON برای تک‌تک بسته‌هاست؛ پروفایل مبدأ دست‌نخورده می‌ماند.
+برای بررسی موجودبودن شناسه‌ها در مخازن مقصد، همان‌جا `--verify` را اضافه کنید.
+موارد بدون معادل مطمئن در گزارش می‌مانند و تعدادشان داخل پروفایل خروجی هم
+ثبت می‌شود. [راهنمای مهاجرت پروفایل](docs/PROFILE_MIGRATION.md) را ببینید.
+Allp پیش از اولین نصب، در دسترس بودن تمام Backendهای لازم
 را بررسی می‌کند و سپس پکیج‌ها را به‌ترتیب و با همان کنترل‌ها و تأییدهای `allp
 install` نصب می‌کند. قبل از استفاده روی سیستم دیگر، پروفایل را با `show` یا
 نسخهٔ exportشده بازبینی کنید.
@@ -238,6 +259,15 @@ install` نصب می‌کند. قبل از استفاده روی سیستم دی
 بنابراین این قابلیت فعلاً برای سیستم‌های دارای Backendهای سازگار مناسب است و
 یک lockfile عمومی cross-distribution نیست. دستور import نام داخل فایل TOML را
 استفاده می‌کند، مگر اینکه با `--name` نام دیگری داده شود.
+
+روی Arch، دستور `allp upgrade` ابتدا `pacman -Syu` و سپس فقط یکی از helperهای
+AUR را اجرا می‌کند: اولویت با yay است و اگر نباشد paru، با دستور `-Sua` برای
+بسته‌های AUR. با `--from yay` یا `--from paru` می‌توانید انتخاب کنید. شکست
+Pacman باعث توقف مرحلهٔ AUR می‌شود؛ `--allow-stale-metadata` هم این وابستگی را
+حذف نمی‌کند. تأیید و بازبینی PKGBUILD در helper فعال می‌ماند. بسته‌های foreign
+حتی بدون helper در پروفایل ثبت می‌شوند؛ foreign لزوماً به معنی بستهٔ AUR نیست.
+[راهنمای AUR](docs/AUR_BACKEND.md) و
+[بسته‌بندی DEB/RPM و Homebrew](packaging/README.md) جزئیات را توضیح می‌دهند.
 
 ## داشبورد زندهٔ عملیات نگهداری
 
@@ -596,7 +626,7 @@ RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 
 ## Changelog
 
-نسخهٔ Stable `0.6.5` از WinGet و Termux پشتیبانی می‌کند، ایرادهای نگه‌داری بسته‌ها را رفع
+نسخهٔ Stable `0.6.6` از WinGet و Termux پشتیبانی می‌کند، ایرادهای نگه‌داری بسته‌ها را رفع
 می‌کند، مدیر نصب ابزارهای Node و Python را حفظ می‌کند و بعد از خودبه‌روزرسانی نسخهٔ قبلی را
 در بک‌آپ نگه می‌دارد. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 

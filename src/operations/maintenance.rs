@@ -27,6 +27,7 @@ struct PlannedOperation {
     id: usize,
     plan: ExecutionPlan,
     depends_on: Vec<usize>,
+    required_dependencies: Vec<usize>,
 }
 
 pub fn run(
@@ -34,6 +35,16 @@ pub fn run(
     capability: Capability,
     operation_name: &str,
 ) -> AllpResult<MultiOperationReport> {
+    context
+        .renderer
+        .maintenance_title(operation_name, context.dry_run);
+    context
+        .renderer
+        .info_message(if capability == Capability::Upgrade {
+            "Checking targets and update availability..."
+        } else {
+            "Checking targets and prerequisites..."
+        });
     let mut records = Vec::new();
     let mut operations = Vec::new();
     let mut upgrades_pending_refresh = BTreeSet::new();
@@ -56,6 +67,11 @@ pub fn run(
             });
             continue;
         }
+
+        let _spinner = crate::cli::Spinner::start(
+            format!("Checking {}", runtime.backend.display_name()),
+            context.renderer.spinner_enabled() && !context.no_tui,
+        );
 
         if capability == Capability::Upgrade
             && operation_capability == BackendOperationCapability::InstalledPackageUpgrade
@@ -159,6 +175,20 @@ pub fn run(
         }
     }
 
+    let planned_backends = operations
+        .iter()
+        .map(|operation| (operation.id, operation.plan.backend_id.clone()))
+        .collect::<Vec<_>>();
+    for operation in &mut operations {
+        let runtime = context.backend(&operation.plan.backend_id)?;
+        let dependencies = runtime.backend.maintenance_dependencies(capability);
+        operation
+            .required_dependencies
+            .extend(planned_backends.iter().filter_map(|(id, backend)| {
+                (*id != operation.id && dependencies.contains(&backend.as_str())).then_some(*id)
+            }));
+    }
+
     // Allp owns the maintenance confirmation. Finalize backend-native
     // noninteractive flags before rendering so the reviewed command is the
     // exact command that will run whether approval comes from `--yes` or the
@@ -185,10 +215,8 @@ pub fn run(
     selected.dedup();
     context
         .renderer
-        .maintenance_title(operation_name, context.dry_run);
-    context
-        .renderer
         .environment_scan(context.discovery, operation_name, &selected);
+    context.renderer.maintenance_preflight(&records);
     context
         .renderer
         .planned_operations(&plans, context.privilege_context);
@@ -295,13 +323,18 @@ pub fn run(
     }
 
     update_phase(context, operation_name, "Phase 5: Execution");
+    let native_terminal_required = operations.iter().any(|operation| {
+        context
+            .backend(&operation.plan.backend_id)
+            .is_ok_and(|runtime| runtime.backend.maintenance_requires_terminal())
+    });
     let mut queue = VecDeque::from(operations);
     let mut total = queue.len();
     let mut live_tui = context.renderer.maintenance_tui(
         operation_name,
         total,
         context.no_interactive,
-        context.no_tui,
+        context.no_tui || native_terminal_required,
     );
     let mut next_id = total;
     let mut index = 0;
@@ -316,11 +349,20 @@ pub fn run(
             .copied()
             .filter(|dependency| failed.contains(dependency))
             .collect::<Vec<_>>();
-        if !blocked_by.is_empty() && !context.allow_stale_metadata {
+        let required_failed = operation
+            .required_dependencies
+            .iter()
+            .any(|dependency| failed.contains(dependency));
+        if required_failed || (!blocked_by.is_empty() && !context.allow_stale_metadata) {
             let record = record_from_plan(
                 plan,
                 OperationStatus::Deferred,
-                Some("required metadata refresh failed; use --allow-stale-metadata to explicitly permit existing metadata".to_owned()),
+                Some(if required_failed {
+                    "required backend operation failed; dependent upgrade was not executed"
+                        .to_owned()
+                } else {
+                    "required metadata refresh failed; use --allow-stale-metadata to explicitly permit existing metadata".to_owned()
+                }),
                 context.privilege_context,
             );
             if let Some(tui) = live_tui.as_mut() {
@@ -414,7 +456,13 @@ pub fn run(
         let command =
             render_execution_plan_with_privilege_session(&plan, context.privilege_context);
         if let Some(tui) = live_tui.as_mut() {
-            tui.start_operation(index, total, &plan, context.privilege_context);
+            tui.start_operation(
+                index,
+                total,
+                &plan,
+                context.privilege_context,
+                runtime.backend.watch_maintenance_progress(&plan),
+            );
         } else {
             context.renderer.execution_started_with_privilege_session(
                 index,
@@ -540,6 +588,7 @@ pub fn run(
                                         id: next_id,
                                         plan,
                                         depends_on: Vec::new(),
+                                        required_dependencies: Vec::new(),
                                     });
                                     next_id += 1;
                                     total += 1;
@@ -589,15 +638,28 @@ pub fn run(
                     message: Some(if cancelled {
                         "interrupted by user".to_owned()
                     } else {
-                        error.map(|error| error.to_string()).unwrap_or_else(|| {
-                            format!(
-                                "native command exited with status {}",
-                                status
-                                    .code
-                                    .map(|code| code.to_string())
-                                    .unwrap_or_else(|| "unknown".to_owned())
-                            )
-                        })
+                        error
+                            .map(|error| match error {
+                                crate::domain::AllpError::CommandFailed { stderr, .. }
+                                    if !stderr.trim().is_empty() =>
+                                {
+                                    stderr.trim().to_owned()
+                                }
+                                error => error.to_string(),
+                            })
+                            .unwrap_or_else(|| {
+                                let mut message = format!(
+                                    "native command exited with status {}",
+                                    status
+                                        .code
+                                        .map(|code| code.to_string())
+                                        .unwrap_or_else(|| "unknown".to_owned())
+                                );
+                                if !status.stderr.trim().is_empty() {
+                                    message.push_str(&format!("\n{}", status.stderr.trim()));
+                                }
+                                message
+                            })
                     }),
                     privilege_status: None,
                 };
@@ -808,6 +870,7 @@ fn append_operations(
             id,
             plan,
             depends_on: depends_on.to_vec(),
+            required_dependencies: Vec::new(),
         });
         ids.push(id);
     }

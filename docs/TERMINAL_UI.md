@@ -24,6 +24,27 @@ arguments, or its plan-level privilege requirement.
 
 ## Live Maintenance Dashboard
 
+Maintenance starts with a target-inspection notice. Interactive color terminals
+show the manager currently being checked. `Detected tools` describes local tool
+discovery; remote update checks and prerequisites determine which targets are
+selected. Failed checks appear before the execution confirmation and again in
+the final summary as `Check failed`, with a project path and retry check where
+available. A failed target check does not discard independent npm targets.
+
+The final human summary aligns target names, indents multiline diagnostics,
+prints an overall outcome, and combines nonzero status totals on one line.
+Dry runs retain their planned-operation count and explicit zero executed commands.
+If all targets for a detected manager are unavailable, one reason remains
+visible by default (for example, Cargo requiring `cargo-update`). Additional
+optional unavailable targets remain available with `--verbose`. JSON retains
+all records and the existing schema/status values without human notices.
+
+Npm/pnpm registry probes have an explicit 45-second deadline; local probes keep
+their shorter default. A timeout reports unknown update availability. Snap Store
+connection errors include `snap debug connectivity` guidance and the native
+error instead of only a process exit status. This does not change network
+configuration or bypass native package-manager decisions.
+
 Real, interactive `update` and `upgrade` execution uses an inline live
 progress line during the execution phase. It is deliberately **not** a
 full-screen or alternate-screen application: the terminal keeps its ordinary
@@ -50,6 +71,10 @@ last column so the line cannot wrap and corrupt prompt placement. Percentages
 reported by a native package manager are reflected in the bar; otherwise the
 bar advances as queued operations complete. The normal maintenance summary is
 printed after the live line is removed.
+
+During a Snap refresh, the live line can show the active Snap task, including
+package names and download percentages reported by the local snapd service.
+These percentages describe individual downloads. The bar tracks the Allp queue.
 
 The progress line starts only for a real maintenance run when all of the following
 are true:

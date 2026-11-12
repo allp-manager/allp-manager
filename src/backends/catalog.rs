@@ -3,6 +3,7 @@ use crate::backends::{
     homebrew::HomebrewBackend,
     system::{
         apt::AptBackend,
+        aur::AurBackend,
         dnf::DnfBackend,
         family::{SystemFamilyBackend, APK, EOPKG, PORTAGE, SWUPD, XBPS, ZYPPER},
         pacman::PacmanBackend,
@@ -19,6 +20,7 @@ pub fn builtin_backends() -> Vec<Arc<dyn Backend>> {
     vec![
         Arc::new(AptBackend),
         Arc::new(PacmanBackend),
+        Arc::new(AurBackend::detect()),
         Arc::new(DnfBackend),
         Arc::new(RpmOstreeBackend),
         Arc::new(TermuxBackend::detect()),
