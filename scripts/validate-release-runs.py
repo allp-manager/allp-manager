@@ -11,6 +11,10 @@ CANARY_JOBS = {'apt on Ubuntu', 'dnf on Fedora', 'pacman on Arch Linux',
                'Flatpak on Ubuntu', 'Snap on Ubuntu'}
 
 
+class ChecksPending(ValueError):
+    """Exact-source workflows have not completed yet; publication must wait."""
+
+
 def store_outage(job, raw_log):
     failed = [step['name'] for step in job['steps'] if step.get('conclusion') == 'failure']
     log = re.sub(r'\x1b\[[0-9;]*m', '', raw_log)
@@ -53,9 +57,12 @@ def assess(runs, sha, fetch_jobs, fetch_log):
     matching = [run for run in runs if run.get('head_sha') == sha]
     proof = {'commit': sha, 'required_runs': {}, 'status': 'passed'}
     for workflow in REQUIRED:
-        found = [run for run in matching if run.get('path', '').split('@')[0]
-                 == '.github/workflows/' + workflow and run.get('conclusion') == 'success']
+        relevant = [run for run in matching if run.get('path', '').split('@')[0]
+                    == '.github/workflows/' + workflow]
+        found = [run for run in relevant if run.get('conclusion') == 'success']
         if not found:
+            if not relevant or any(run.get('status') != 'completed' for run in relevant):
+                raise ChecksPending(f'Waiting for {workflow} on {sha}')
             raise ValueError(f'No successful {workflow} run for {sha}')
         proof['required_runs'][workflow] = max(found, key=lambda run: run['id'])['id']
     canaries = [run for run in matching if run.get('path', '').split('@')[0]
@@ -66,7 +73,7 @@ def assess(runs, sha, fetch_jobs, fetch_log):
         return proof
     completed = [run for run in canaries if run.get('status') == 'completed']
     if not completed:
-        raise ValueError('No completed exact-source backend canary run')
+        raise ChecksPending('Waiting for the exact-source backend canary run')
     canary = max(completed, key=lambda run: run['id'])
     if canary.get('conclusion') != 'failure':
         raise ValueError('Backend canary did not complete with a supported outcome')
@@ -106,6 +113,8 @@ def main():
         proof = assess(json.loads(args.runs.read_text())['workflow_runs'], args.sha,
                        lambda run: json.loads(api(f'runs/{run}/jobs?per_page=100'))['jobs'],
                        lambda job: api(f'jobs/{job}/logs'))
+    except ChecksPending as error:
+        parser.exit(75, str(error) + '\n')
     except (ValueError, KeyError) as error:
         parser.exit(1, str(error) + '\n')
     args.output.write_text(json.dumps(proof, indent=2) + '\n')

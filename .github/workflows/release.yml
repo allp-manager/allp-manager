@@ -20,6 +20,7 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: read
       actions: read
@@ -82,9 +83,15 @@ jobs:
           RELEASE_COMMIT: ${{ steps.version.outputs.commit }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_COMMIT&per_page=100" > test-runs.json
-          python3 scripts/validate-release-runs.py --repo "$GITHUB_REPOSITORY" \
-            --sha "$RELEASE_COMMIT" --runs test-runs.json --output release-validation.json
+          for attempt in $(seq 1 60); do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_COMMIT&per_page=100" >test-runs.json
+            status=0
+            python3 scripts/validate-release-runs.py --repo "$GITHUB_REPOSITORY" \
+              --sha "$RELEASE_COMMIT" --runs test-runs.json --output release-validation.json || status=$?
+            if [[ "$status" == 0 ]]; then break; fi
+            if [[ "$status" != 75 || "$attempt" == 60 ]]; then exit "$status"; fi
+            sleep 20
+          done
       - uses: actions/upload-artifact@v4
         if: github.ref_type == 'tag' && steps.version.outputs.channel == 'stable'
         with:

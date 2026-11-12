@@ -1,6 +1,8 @@
 name: Weekly backend canary
 
 on:
+  push:
+    branches: [main, 'prerelease-*']
   schedule:
     - cron: "17 4 * * 3"
   workflow_dispatch:

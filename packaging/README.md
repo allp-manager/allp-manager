@@ -64,6 +64,9 @@ with `yay -S allp-manager` or `paru -S allp-manager`. The installed command is
 `allp`; later package upgrades go through the same AUR helper.
 
 After a successful **Release** workflow, **AUR package** resolves the published
+Stable release automatically. Backend canaries run on `main` and prerelease
+pushes; tagged publication waits up to 20 minutes for pending exact-source
+checks and stops on application failures. The AUR workflow resolves the
 Stable tag and commit, verifies its source manifest/checksum, builds and tests
 the package as a regular Arch user, installs it in a disposable container, then
 pushes PKGBUILD and `.SRCINFO` using `AUR_SSH_PRIVATE_KEY`. The installed binary

@@ -32,6 +32,20 @@ class ReleaseValidationTests(unittest.TestCase):
         self.runs[-1]['conclusion'] = 'success'
         self.assertEqual(self.assess()['status'], 'passed')
 
+    def test_pending_required_workflow_waits_instead_of_publishing(self):
+        self.runs[0].update(status='in_progress', conclusion=None)
+        with self.assertRaises(validation.ChecksPending):
+            self.assess()
+
+    def test_failed_required_workflow_is_not_a_waiting_condition(self):
+        self.runs[0]['conclusion'] = 'failure'
+        try:
+            self.assess()
+        except ValueError as error:
+            self.assertNotIsInstance(error, validation.ChecksPending)
+        else:
+            self.fail('Failed required CI must block publication')
+
     def test_proven_native_outage_is_reported_as_outage(self):
         proof = self.assess()
         self.assertEqual(proof['status'], 'passed_with_store_outage')
