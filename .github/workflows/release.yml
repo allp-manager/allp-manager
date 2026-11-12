@@ -83,11 +83,14 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_COMMIT&per_page=100" > test-runs.json
-          for workflow in ci.yml backend-canary.yml windows-winget.yml termux-smoke.yml; do
-            jq --exit-status --arg path ".github/workflows/$workflow" --arg sha "$RELEASE_COMMIT" \
-              'any(.workflow_runs[]; (.path | split("@")[0]) == $path and .head_sha == $sha and .conclusion == "success")' \
-              test-runs.json >/dev/null || { printf 'No successful %s run for %s\n' "$workflow" "$RELEASE_COMMIT" >&2; exit 1; }
-          done
+          python3 scripts/validate-release-runs.py --repo "$GITHUB_REPOSITORY" \
+            --sha "$RELEASE_COMMIT" --runs test-runs.json --output release-validation.json
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag' && steps.version.outputs.channel == 'stable'
+        with:
+          name: stable-validation-${{ steps.version.outputs.tag }}
+          path: release-validation.json
+          if-no-files-found: error
       - run: cargo check --locked --all-targets
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --lib --bins --test catalog --test exit_codes --test modularity
@@ -272,6 +275,27 @@ jobs:
         with:
           name: verified-release-${{ needs.validate.outputs.tag }}
           path: dist
+      - uses: actions/download-artifact@v4
+        if: needs.validate.outputs.channel == 'stable'
+        with:
+          name: stable-validation-${{ needs.validate.outputs.tag }}
+          path: validation
+      - name: Include external validation status in release notes
+        if: needs.validate.outputs.channel == 'stable'
+        env:
+          NOTES: ${{ needs.validate.outputs.notes }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          proof = json.loads(Path('validation/release-validation.json').read_text())
+          if proof['status'] == 'passed_with_store_outage':
+              url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{proof['canary_run']}"
+              with Path(os.environ['NOTES']).open('a') as notes:
+                  notes.write('\n## External service validation\n\n' + proof['store_outage']
+                              + f' The [online canary]({url}) remains failed for this external error. '
+                              + 'Exact-source CI, WinGet, Termux and the other native backend checks passed.\n')
+          PY
       - name: Create or update GitHub Release
         shell: bash
         run: |

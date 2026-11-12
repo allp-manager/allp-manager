@@ -1,6 +1,11 @@
 name: AUR package
 
 on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  schedule:
+    - cron: '23 */6 * * *'
   workflow_dispatch:
     inputs:
       tag:
@@ -20,19 +25,69 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release:
+    if: >-
+      github.repository == 'allp-manager/allp-manager' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      build: ${{ steps.metadata.outputs.build }}
+      publish: ${{ steps.metadata.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: metadata
+        name: Resolve a published Stable release
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          endpoint=latest
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            endpoint="tags/$INPUT_TAG"
+          fi
+          curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/allp-manager/allp-manager/releases/$endpoint" >release.json
+          tag="$(jq -er '.tag_name' release.json)"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          commit="$(git rev-parse "$tag^{commit}")"
+          curl -fsSL --retry 3 'https://aur.archlinux.org/rpc/v5/info?arg%5B%5D=allp-manager' >aur.json
+          python3 scripts/resolve-aur-release.py --event-name "$GITHUB_EVENT_NAME" \
+            --event "$GITHUB_EVENT_PATH" --release release.json --aur aur.json \
+            --commit "$commit" --ref "$GITHUB_REF" --tag "$INPUT_TAG" \
+            --publish "${INPUT_PUBLISH:-false}" --output selection.json
+          jq -r 'to_entries[] | select(.key != "reason") | "\(.key)=\(.value)"' selection.json >>"$GITHUB_OUTPUT"
+          jq -r '.reason' selection.json >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aur-selection
+          path: selection.json
+          if-no-files-found: error
+
   build:
+    needs: release
+    if: needs.release.outputs.build == 'true'
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     steps:
       - name: Install build dependencies
-        run: pacman -Syu --noconfirm --needed cargo git jq
+        run: pacman -Syu --noconfirm --needed cargo git jq python
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Generate and test the AUR package
         shell: bash
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.release.outputs.commit }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -50,7 +105,16 @@ jobs:
           curl -fsSL --retry 3 "https://github.com/allp-manager/allp-manager/archive/refs/tags/$TAG.tar.gz" \
             -o "$archive"
           checksum="$(sha256sum "$archive" | cut -d' ' -f1)"
+          [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$|^[a-f0-9]{64}$ ]]
+          python - "$archive" "$version" <<'PY'
+          import sys, tarfile, tomllib
+          with tarfile.open(sys.argv[1]) as archive:
+              manifest = archive.extractfile(f'allp-manager-{sys.argv[2]}/Cargo.toml')
+              assert manifest is not None
+              assert tomllib.loads(manifest.read().decode())['package']['version'] == sys.argv[2]
+          PY
           sed -e "s/@VERSION@/$version/" -e "s/@SHA256@/$checksum/" \
+            -e "s/@COMMIT@/$RELEASE_COMMIT/" \
             packaging/aur/PKGBUILD > "$build_dir/PKGBUILD"
 
           useradd --create-home builder
@@ -61,6 +125,7 @@ jobs:
           pacman -U --noconfirm -- "$package_file"
           pacman -Q allp-manager
           test "$(/usr/bin/allp --version)" = "allp $version"
+          /usr/bin/allp --version --verbose | grep -F "$RELEASE_COMMIT"
           runuser -u builder -- /usr/bin/allp upgrade --dry-run --no-interactive --no-color |
             grep -F -e ' -Syu'
           mkdir -p "$GITHUB_WORKSPACE/aur-package"
@@ -74,8 +139,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: inputs.publish && github.ref == 'refs/heads/main' && github.repository == 'allp-manager/allp-manager'
-    needs: build
+    if: needs.release.outputs.publish == 'true' && github.ref == 'refs/heads/main' && github.repository == 'allp-manager/allp-manager'
+    needs: [release, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -85,7 +150,7 @@ jobs:
       - name: Push package metadata to AUR
         shell: bash
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ needs.release.outputs.tag }}
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail

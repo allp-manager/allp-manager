@@ -5891,6 +5891,97 @@ esac
 }
 
 #[test]
+fn snap_refresh_http_timeout_keeps_native_evidence_in_classic_and_tui_summaries() {
+    for tui in [false, true] {
+        let dir = temp_dir("snap-http-timeout");
+        install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+        write_executable(
+            &dir,
+            "snap",
+            &format!(
+                r#"#!/bin/sh
+case "$1" in
+ version) printf 'snap 2.78\nsnapd 2.78\n' ;;
+ refresh) printf '%s\n' '{}' >&2; exit 1 ;;
+esac
+"#,
+                include_str!("fixtures/snap/refresh-http-408.stderr")
+            ),
+        );
+        let output = if tui {
+            run_allp_pty_with_tui(&dir, &["upgrade", "--from", "snap", "--yes"], "")
+        } else {
+            run_allp(
+                &dir,
+                &[
+                    "upgrade",
+                    "--from",
+                    "snap",
+                    "--yes",
+                    "--no-tui",
+                    "--no-color",
+                ],
+            )
+        };
+        let out = stdout(&output);
+        assert_eq!(output.status.code(), Some(8), "{out}");
+        assert!(
+            out.contains("Snap Store request timed out (HTTP 408)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("https://api.snapcraft.io/v2/snaps/refresh"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Read-only refresh check: snap refresh --list"),
+            "{out}"
+        );
+        assert!(!out.contains("native command exited with status"), "{out}");
+    }
+}
+
+#[test]
+fn snap_install_and_remove_failures_are_failed_not_busy_and_keep_both_streams() {
+    for operation in ["install", "remove"] {
+        let dir = temp_dir("snap-operation-failure");
+        install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+        write_executable(
+            &dir,
+            "snap",
+            r#"#!/bin/sh
+case "$1" in
+ version) printf 'snap 2.78\nsnapd 2.78\n' ;;
+ find) printf 'Name Version Publisher Notes Summary\nexample 1.0 canonical** - example application\n' ;;
+ info) printf 'name: example\nconfinement: strict\nchannels:\n  latest/stable: 1.0 2026-11-12 (1) 20kB strict\n' ;;
+ list)
+   if [ -n "$2" ]; then echo 'error: no matching snaps installed' >&2; exit 1; fi
+   printf 'Name Version Rev Tracking Publisher Notes\nexample 1.0 1 latest/stable canonical** -\n' ;;
+ install|remove) printf 'transaction could not complete\n' >&2; printf 'backend diagnostic from stdout\n'; exit 1 ;;
+esac
+"#,
+        );
+        let output = run_allp(
+            &dir,
+            &[
+                operation,
+                "example",
+                "--from",
+                "snap",
+                "--yes",
+                "--no-color",
+            ],
+        );
+        let out = format!("{}\n{}", stdout(&output), stderr(&output));
+        assert_eq!(output.status.code(), Some(7), "{out}");
+        assert!(out.contains("Failed"), "{out}");
+        assert!(!out.contains("Busy"), "{out}");
+        assert!(out.contains("transaction could not complete"), "{out}");
+        assert!(out.contains("backend diagnostic from stdout"), "{out}");
+    }
+}
+
+#[test]
 fn a_manager_with_only_unavailable_targets_has_a_visible_reason() {
     let dir = temp_dir("visible-unavailable-manager");
     install_fake_node_up_to_date(&dir);

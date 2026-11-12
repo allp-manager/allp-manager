@@ -86,7 +86,12 @@ build:
 release:
 	ALLP_GIT_SHA="$(CURRENT_GIT_SHA)" $(CARGO) build --release
 
-quality: fmt-check check clippy test architecture release docs-check installer-test
+.PHONY: distribution-test
+quality: fmt-check check clippy test architecture release docs-check installer-test distribution-test
+
+distribution-test:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-release-validation.py
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-aur-release.py
 
 clean:
 	$(CARGO) clean

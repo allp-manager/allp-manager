@@ -2,14 +2,14 @@
 
 The signed Allp APT feed is hosted at
 [allp-manager.github.io/apt](https://allp-manager.github.io/apt/).
-The other distribution paths below still need their respective publication.
+Stable GitHub releases trigger the tested AUR publication workflow automatically.
 This does not imply acceptance into a distribution's official repositories.
 
 | Ecosystem | Prepared path | Publication still needed |
 |---|---|---|
 | Debian/Ubuntu APT | Published signed Stable feed for amd64/arm64 | One-time source setup; official distro inclusion is separate |
 | Fedora/RHEL DNF and compatible RPM tools | RPM spec and native builder | Test supported distribution versions; signed RPM repository/COPR or upstream acceptance |
-| Arch/AUR | Existing `packaging/aur/PKGBUILD` and `aur.yml` workflow | AUR account/key and explicit stable release publication |
+| Arch/AUR | Published `allp-manager` source package and `aur.yml` workflow | Automatic update after a successful Stable GitHub release; six-hour reconciliation retries |
 | Homebrew/Linuxbrew | Checksum-based source formula template/generator | Publish a tap repository; homebrew/core has its own acceptance criteria |
 | Snap/Flathub | Not packaged as a sandboxed Allp app | Host orchestration needs a separate confinement/host-access design |
 
@@ -56,6 +56,25 @@ DEB/RPM installation in disposable runners and uploads artifacts only. It does
 not publish releases or repositories. Local development binaries retain their
 build revision in the package version; stable distribution artifacts must be
 built from a reviewed stable tag with matching build identity.
+
+## Arch and AUR
+
+Install the [allp-manager AUR package](https://aur.archlinux.org/packages/allp-manager)
+with `yay -S allp-manager` or `paru -S allp-manager`. The installed command is
+`allp`; later package upgrades go through the same AUR helper.
+
+After a successful **Release** workflow, **AUR package** resolves the published
+Stable tag and commit, verifies its source manifest/checksum, builds and tests
+the package as a regular Arch user, installs it in a disposable container, then
+pushes PKGBUILD and `.SRCINFO` using `AUR_SSH_PRIVATE_KEY`. The installed binary
+retains the tagged source commit and is marked as a distribution build.
+Prereleases, failed/mismatched runs and version downgrades cannot publish.
+
+The workflow also reconciles the latest Stable release every six hours, so a
+temporary AUR outage can recover automatically. It skips versions already in
+AUR. For a manual retry, run **AUR package** from `main` with the Stable tag and
+`publish: true`; `publish: false` builds/tests without pushing. Build artifacts
+contain PKGBUILD and `.SRCINFO`, never the SSH key.
 
 ## Homebrew tap
 

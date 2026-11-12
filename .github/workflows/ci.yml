@@ -27,6 +27,7 @@ jobs:
           cargo test --locked --all-targets 2>&1 | tee quality-tests.log
       - run: bash scripts/check-architecture.sh
       - run: make installer-test
+      - run: make distribution-test
       - run: cargo build --release
       - uses: actions/upload-artifact@v4
         if: always()
