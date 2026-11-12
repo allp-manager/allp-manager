@@ -1,0 +1,4 @@
+==> Auto-updating Homebrew...
+Error: Failed to download https://formulae.brew.sh/api/internal/packages.x86_64_linux.jws.json!
+Please consider donating:
+  https://github.com/Homebrew/brew#donations

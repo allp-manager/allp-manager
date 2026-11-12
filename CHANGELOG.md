@@ -4,6 +4,27 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-11-13
+
+### Release Title
+
+Allp v0.6.9 — Live Snap Tasks and Truthful Homebrew Updates
+
+### Fixed
+
+- Keep Snap task progress visible after temporary snapd read failures, showing
+  package names, download percentages, and install/wait/rollback phases.
+- Label observed Snap progress as system activity if the initial snapshot is
+  unavailable, preserving truthful attribution when concurrent changes exist.
+- Treat Homebrew metadata download errors as failures even when its auto-update
+  wrapper exits successfully; do not mark the cache fresh or plan dependent upgrades.
+- Recognize Snap Store DNS failures with resolver/VPN checks and partial-change
+  inspection guidance, preserving native errors without replaying a refresh.
+
+### Known Limitations
+
+- Native downloads still require working system DNS and network access. Progress
+  monitoring does not restart refreshes or change VPN/proxy configuration.
 
 ## [0.6.8] - 2026-11-12
 

@@ -545,8 +545,17 @@ pub fn run(
                         );
                     }
                 }
-                persist_metadata_refresh_success(context, &plan);
+                let succeeded = !parsed.iter().any(|record| {
+                    record.status.is_failure()
+                        || matches!(record.status, OperationStatus::Cancelled)
+                });
                 records.append(&mut parsed);
+                if !succeeded {
+                    failed.insert(operation_id);
+                    defer_pending_upgrade(&mut upgrades_pending_refresh, &plan, &mut records);
+                    continue;
+                }
+                persist_metadata_refresh_success(context, &plan);
                 if plan.operation == OperationKind::Update
                     && upgrades_pending_refresh.remove(&plan.backend_id)
                 {

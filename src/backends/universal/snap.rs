@@ -617,18 +617,28 @@ impl Backend for SnapBackend {
                 holder_process: None,
             }),
             Some(SnapErrorKind::StoreUnavailable) => {
-                let summary = match snap_store_http_status(&native_error) {
-                    Some(code @ (408 | 504)) => format!(
-                        "Snap Store request timed out (HTTP {code}); the operation did not complete successfully."
-                    ),
-                    Some(code) => format!("Snap Store request failed (HTTP {code}); the operation did not complete successfully."),
-                    None => "Cannot reach Snap Store; the operation did not complete successfully.".to_owned(),
+                let dns_failed = snap_store_dns_failed(&native_error);
+                let summary = if dns_failed {
+                    "Snap Store DNS lookup failed; the operation did not complete successfully.".to_owned()
+                } else {
+                    match snap_store_http_status(&native_error) {
+                        Some(code @ (408 | 504)) => format!(
+                            "Snap Store request timed out (HTTP {code}); the operation did not complete successfully."
+                        ),
+                        Some(code) => format!("Snap Store request failed (HTTP {code}); the operation did not complete successfully."),
+                        None => "Cannot reach Snap Store; the operation did not complete successfully.".to_owned(),
+                    }
+                };
+                let dns_help = if dns_failed {
+                    "\nCheck system DNS (systemd-resolved): resolvectl query api.snapcraft.io\nCheck VPN/proxy DNS routing: resolvectl status; snapd needs system-wide connectivity, not just a terminal proxy."
+                } else {
+                    ""
                 };
                 Some(AllpError::CommandFailed {
                     backend: self.display_name().to_owned(),
                     command: command.to_owned(),
                     code: status.code,
-                    stderr: format!("{summary}\nNative error: {native_error}\nRead-only refresh check: snap refresh --list\nCheck connectivity: snap debug connectivity\nA passing connectivity check does not verify the Store refresh endpoint."),
+                    stderr: format!("{summary}{dns_help}\nInspect partial changes before retrying: snap changes; snap tasks <change-id>\nNative error: {native_error}\nRead-only refresh check: snap refresh --list\nCheck connectivity: snap debug connectivity\nA passing connectivity check does not verify the Store refresh endpoint."),
                 })
             }
             Some(SnapErrorKind::PermissionDenied) => Some(AllpError::InvalidInput(
@@ -2840,6 +2850,19 @@ fn snap_store_http_status(output: &str) -> Option<u16> {
         .find(|code| (400..600).contains(code))
 }
 
+fn snap_store_dns_failed(output: &str) -> bool {
+    output.lines().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("api.snapcraft.io")
+            && (lower.contains("lookup ") || lower.contains("resolve"))
+            && (lower.contains("server misbehaving")
+                || lower.contains("no such host")
+                || lower.contains("temporary failure in name resolution")
+                || lower.contains("could not resolve")
+                || lower.contains("i/o timeout"))
+    })
+}
+
 fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
     let lower = output.to_ascii_lowercase();
     if lower.trim().is_empty() {
@@ -2872,7 +2895,8 @@ fn classify_snap_error(output: &str) -> Option<SnapErrorKind> {
     if lower.contains("channel") && (lower.contains("not found") || lower.contains("unavailable")) {
         return Some(SnapErrorKind::ChannelUnavailable);
     }
-    if lower.contains("unable to contact snap store")
+    if snap_store_dns_failed(output)
+        || lower.contains("unable to contact snap store")
         || lower.contains("cannot contact snap store")
         || lower.contains("cannot reach snap store")
         || lower.contains("store") && (lower.contains("unavailable") || lower.contains("timeout"))
@@ -3132,6 +3156,31 @@ mod tests {
             classify_snap_error("error: snap snap-store not found"),
             Some(SnapErrorKind::PackageNotFound)
         );
+    }
+
+    #[test]
+    fn store_dns_errors_require_host_and_resolver_failure_evidence() {
+        for message in [
+            include_str!("../../../tests/fixtures/snap/refresh-dns-error.stderr"),
+            "Get https://api.snapcraft.io: lookup api.snapcraft.io: no such host",
+            "Get https://api.snapcraft.io: lookup api.snapcraft.io: i/o timeout",
+            "Could not resolve host: api.snapcraft.io",
+            "lookup api.snapcraft.io: temporary failure in name resolution",
+        ] {
+            assert!(super::snap_store_dns_failed(message), "{message}");
+            assert_eq!(
+                classify_snap_error(message),
+                Some(SnapErrorKind::StoreUnavailable)
+            );
+        }
+        for message in [
+            "snap dns-tools not found",
+            "lookup unrelated.example: server misbehaving",
+            "snap hook failed: server misbehaving",
+            "api.snapcraft.io: HTTP 408",
+        ] {
+            assert!(!super::snap_store_dns_failed(message), "{message}");
+        }
     }
 
     #[test]

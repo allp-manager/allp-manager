@@ -75,6 +75,13 @@ printed after the live line is removed.
 During a Snap refresh, the live line can show the active Snap task, including
 package names and download percentages reported by the local snapd service.
 These percentages describe individual downloads. The bar tracks the Allp queue.
+For example, `Snap · Downloading code 91%` shows the current package download;
+subsequent phases place the package name before the native task summary.
+Temporary snapd read failures show a retrying message and monitoring resumes
+without restarting the native refresh. If the initial snapshot cannot be read,
+observed tasks are explicitly labeled `System activity:` because Allp cannot
+attribute them to its own change. Ambiguous concurrent refreshes are identified
+instead of silently returning to a generic action label.
 
 The progress line starts only for a real maintenance run when all of the following
 are true:

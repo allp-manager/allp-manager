@@ -1,0 +1,4 @@
+error: cannot perform the following tasks:
+- Download snap "code" (280) from channel "latest/stable" (Get "https://api.snapcraft.io/api/v1/snaps/download/example_280.snap": dial tcp: lookup api.snapcraft.io on 127.0.0.53:53: server misbehaving)
+- Fetch and check assertions for snap "brave" (709) (Get "https://api.snapcraft.io/v2/assertions/snap-revision/example": dial tcp: lookup api.snapcraft.io on 127.0.0.53:53: server misbehaving)
+- Monitoring snaps "brave", "chromium", "code", "core20" to determine whether extra refresh steps are required (Post "https://api.snapcraft.io/v2/snaps/refresh": dial tcp: lookup api.snapcraft.io on 127.0.0.53:53: server misbehaving)

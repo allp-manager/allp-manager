@@ -48,10 +48,23 @@ Snap does not expose a useful metadata-only operation for Allp's `update` semant
 
 Installed snap refresh is a combined refresh/upgrade operation. `allp upgrade` plans one `snap refresh` operation and parses `All snaps up to date.` as an up-to-date result.
 
+During a live TUI refresh, a read-only observer polls local snapd every two
+seconds and shows active package/task details, including actual download
+percentages. Read failures are retried with a visible status. A missing initial
+snapshot permits only explicitly labeled system-activity reporting; a known
+baseline excludes pre-existing changes. The observer never starts or retries a
+refresh and does not determine the operation's final result.
+
 HTTP errors and response timeouts from the Snap Store refresh endpoint are
 reported with their native evidence. A passing `snap debug connectivity` check
 does not prove that `POST /v2/snaps/refresh` will succeed. Allp never rewrites
 snapd's network configuration or forces an operation to appear successful.
+Store DNS lookup failures such as `lookup api.snapcraft.io ... server misbehaving`
+include `resolvectl query api.snapcraft.io` and `resolvectl status` guidance for
+systemd-resolved hosts. Check VPN DNS routing when it changes the active resolver.
+Snap downloads run in snapd, so terminal-only proxy settings do not configure it.
+Inspect `snap changes` and `snap tasks <change-id>` before retrying: a failed
+refresh can still have upgraded other snaps. Allp does not replay the mutation.
 Install/remove failures use `Failed`; only real package-management lock conflicts
 use `Busy`. Both stdout and stderr are retained when the native command fails.
 

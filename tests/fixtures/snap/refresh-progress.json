@@ -1,0 +1,20 @@
+{
+  "id": "328",
+  "kind": "refresh-snap",
+  "ready": false,
+  "summary": "Refresh snaps \"brave\", \"code\"",
+  "tasks": [
+    {
+      "kind": "download-snap",
+      "status": "Doing",
+      "summary": "Download snap \"code\" (280) from channel \"latest/stable\"",
+      "progress": {"label": "code (delta)", "done": 170411722, "total": 186507335},
+      "data": {"affected-snaps": ["code"]}
+    },
+    {
+      "kind": "check-rerefresh",
+      "status": "Doing",
+      "summary": "Monitoring snaps \"brave\", \"code\" to determine whether extra refresh steps are required"
+    }
+  ]
+}

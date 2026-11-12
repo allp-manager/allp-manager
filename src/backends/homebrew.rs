@@ -402,6 +402,19 @@ impl Backend for HomebrewBackend {
         _command: &str,
     ) -> Option<Vec<BackendOperationRecord>> {
         if plan.operation == OperationKind::Update {
+            // update-if-needed's auto-update wrapper can discard a failed
+            // download's exit code. Its native error remains authoritative.
+            if let Some(message) = update_error(&status.stdout, &status.stderr) {
+                return Some(vec![BackendOperationRecord {
+                    backend_id: plan.backend_id.clone(),
+                    backend_name: plan.backend_name.clone(),
+                    action: None,
+                    command: None,
+                    status: OperationStatus::Failed,
+                    message: Some(message),
+                    privilege_status: None,
+                }]);
+            }
             let changed = !(status.stdout.trim().is_empty() && status.stderr.trim().is_empty())
                 && !status.stdout.contains("Already up-to-date");
             return Some(vec![BackendOperationRecord {
@@ -480,6 +493,35 @@ fn is_busy_output(stderr: &str) -> bool {
     let lower = stderr.to_ascii_lowercase();
     lower.contains("another `brew update` process is already running")
         || lower.contains("another brew update process is already running")
+}
+
+fn update_error(stdout: &str, stderr: &str) -> Option<String> {
+    let output = [stderr.trim(), stdout.trim()]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let failed = output.lines().any(|line| {
+        let mut line = line.trim_start();
+        // Homebrew colors its Error: label on a native terminal. Recognize
+        // leading SGR styles without mistaking warnings or package names for errors.
+        while let Some(styled) = line.strip_prefix("\x1b[") {
+            let Some((style, rest)) = styled.split_once('m') else {
+                break;
+            };
+            if !style
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte == b';')
+            {
+                break;
+            }
+            line = rest.trim_start();
+        }
+        line.starts_with("Error:")
+    });
+    failed.then(|| format!(
+        "Homebrew metadata refresh failed despite exit status 0; cached metadata was not verified.\nNative error: {output}\nCheck network, DNS and any configured proxy, then retry `allp update --from brew --skip-self-update`."
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -731,7 +773,38 @@ fn first_version(output: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{homebrew_command, is_busy_output, parse_outdated};
+    use super::{homebrew_command, is_busy_output, parse_outdated, update_error};
+
+    #[test]
+    fn metadata_errors_override_zero_exit_in_either_stream_including_colored_labels() {
+        let fixture = include_str!("../../tests/fixtures/homebrew/update-download-error.txt");
+        for (stdout, stderr) in [
+            (fixture, ""),
+            ("", fixture),
+            (
+                "progress",
+                "\x1b[4;31m\x1b[1mError:\x1b[0m Failed to download metadata!\nmore context",
+            ),
+        ] {
+            let error =
+                update_error(stdout, stderr).expect("native Error: must override exit zero");
+            assert!(error.contains("Failed to download"));
+            assert!(error.contains("cached metadata was not verified"));
+        }
+    }
+
+    #[test]
+    fn metadata_warnings_and_mentions_of_error_are_not_failures() {
+        for output in [
+            "",
+            "Already up-to-date.",
+            "Warning: using cached download",
+            "Updated 1 tap.\nexample/Error:handling-library 1.0 -> 1.1",
+            "==> Auto-updating Homebrew...\nPlease consider donating",
+        ] {
+            assert!(update_error(output, output).is_none(), "{output}");
+        }
+    }
 
     #[test]
     fn every_homebrew_command_suppresses_process_local_analytics_and_hints() {

@@ -9,47 +9,68 @@ use std::{
 
 const ACTIVE_CHANGES: &str = "/v2/changes?select=in-progress";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
-const SOCKET_TIMEOUT: Duration = Duration::from_millis(300);
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(super) fn watch_refresh() -> Option<Receiver<Option<String>>> {
     let client = SnapdClient::with_timeout(snapd_socket_path(), SOCKET_TIMEOUT);
-    let baseline = client.get(ACTIVE_CHANGES).ok()?;
-    let existing = refreshes(baseline.result.as_array()?)
-        .map(|(id, _)| id.to_owned())
-        .collect::<BTreeSet<_>>();
+    let existing = client.get(ACTIVE_CHANGES).ok().and_then(|baseline| {
+        Some(
+            refreshes(baseline.result.as_array()?)
+                .map(|(id, _)| id.to_owned())
+                .collect::<BTreeSet<_>>(),
+        )
+    });
 
     let (sender, receiver) = mpsc::sync_channel(1);
+    let _ = sender.try_send(Some("Waiting for Snap task details".to_owned()));
     thread::Builder::new()
         .name("snap-refresh-progress".to_owned())
         .spawn(move || {
             let mut tracked_id: Option<String> = None;
             loop {
                 thread::sleep(POLL_INTERVAL);
-                let Ok(response) = client.get(ACTIVE_CHANGES) else {
-                    break;
-                };
-                let Some(changes) = response.result.as_array() else {
-                    break;
-                };
-                let mut new_refreshes =
-                    refreshes(changes).filter(|(id, _)| !existing.contains(*id));
-                let change = new_refreshes.next();
-                // The CLI doesn't publish its change ID while waiting. Avoid
-                // attributing progress when several new refreshes are active.
-                if new_refreshes.next().is_some() {
-                    break;
-                }
-                let detail = if let Some((id, change)) = change {
-                    if tracked_id.as_deref().is_some_and(|tracked| tracked != id) {
-                        break;
+                let response = client.get(ACTIVE_CHANGES);
+                let detail = match response.as_ref().ok().and_then(|r| r.result.as_array()) {
+                    None => Some("Snap progress unavailable; retrying".to_owned()),
+                    Some(changes) => {
+                        if let Some(tracked) = tracked_id.as_deref() {
+                            let Some((_, change)) =
+                                refreshes(changes).find(|(id, _)| *id == tracked)
+                            else {
+                                break;
+                            };
+                            task_detail(change)
+                        } else if let Some(existing) = &existing {
+                            let mut new_refreshes =
+                                refreshes(changes).filter(|(id, _)| !existing.contains(*id));
+                            match (new_refreshes.next(), new_refreshes.next()) {
+                                (Some((id, change)), None) => {
+                                    tracked_id = Some(id.to_owned());
+                                    task_detail(change)
+                                }
+                                (None, _) => Some("Waiting for Snap task details".to_owned()),
+                                _ => Some(
+                                    "Multiple Snap refreshes active; inspect snap changes"
+                                        .to_owned(),
+                                ),
+                            }
+                        } else {
+                            // Without a baseline, the CLI's change cannot be
+                            // identified safely. Label this as system activity.
+                            let details = refreshes(changes)
+                                .filter_map(|(_, change)| task_detail(change))
+                                .take(2)
+                                .collect::<Vec<_>>();
+                            Some(if details.is_empty() {
+                                "Waiting for Snap task details".to_owned()
+                            } else {
+                                format!("System activity: {}", details.join("; "))
+                            })
+                        }
                     }
-                    tracked_id.get_or_insert_with(|| id.to_owned());
-                    task_detail(change)
-                } else if tracked_id.is_some() {
-                    break;
-                } else {
-                    None
                 };
+                let detail =
+                    Some(detail.unwrap_or_else(|| "Waiting for Snap task details".to_owned()));
                 if let Err(TrySendError::Disconnected(_)) = sender.try_send(detail) {
                     break;
                 }
@@ -86,25 +107,35 @@ fn task_detail(change: &Value) -> Option<String> {
     let task = active
         .clone()
         .find(|task| {
-            !matches!(
-                task["kind"].as_str(),
-                Some("check-rerefresh" | "process-delayed-security-backend-effects")
-            )
+            task["status"] == "Doing"
+                && !matches!(
+                    task["kind"].as_str(),
+                    Some("check-rerefresh" | "process-delayed-security-backend-effects")
+                )
+        })
+        .or_else(|| {
+            active.clone().find(|task| {
+                !matches!(
+                    task["kind"].as_str(),
+                    Some("check-rerefresh" | "process-delayed-security-backend-effects")
+                )
+            })
         })
         .or_else(|| active.next())?;
     let summary = task["summary"].as_str()?;
+    let summary = task_name(task)
+        .map(|name| format!("{name} · {summary}"))
+        .unwrap_or_else(|| summary.to_owned());
     Some(match task["status"].as_str() {
         Some("Wait") => format!("Waiting: {summary}"),
         Some("Undoing" | "Abort") => format!("Reverting: {summary}"),
-        _ => summary.to_owned(),
+        _ => summary,
     })
 }
 
 fn download_detail(task: &Value) -> Option<String> {
     let progress = &task["progress"];
-    let name = task["summary"]
-        .as_str()
-        .and_then(|summary| summary.split('"').nth(1))
+    let name = task_name(task)
         .or_else(|| progress["label"].as_str())
         .filter(|name| !name.is_empty())?;
     match (progress["done"].as_u64(), progress["total"].as_u64()) {
@@ -113,5 +144,62 @@ fn download_detail(task: &Value) -> Option<String> {
             Some(format!("{name} {percent}%"))
         }
         _ => Some(name.to_owned()),
+    }
+}
+
+fn task_name(task: &Value) -> Option<&str> {
+    task["data"]["affected-snaps"]
+        .as_array()
+        .and_then(|names| names.first())
+        .and_then(Value::as_str)
+        .or_else(|| {
+            task["summary"]
+                .as_str()
+                .and_then(|summary| summary.split('"').nth(1))
+        })
+        .filter(|name| !name.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::task_detail;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn live_download_fixture_reports_the_package_and_real_percentage() {
+        let change: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/snap/refresh-progress.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            task_detail(&change).as_deref(),
+            Some("Downloading code 91%")
+        );
+    }
+
+    #[test]
+    fn package_name_precedes_long_phase_text_and_work_takes_priority_over_waiting() {
+        let change = json!({"tasks": [
+            {"kind":"run-hook", "status":"Wait", "summary":"Waiting for an unrelated hook"},
+            {"kind":"link-snap", "status":"Doing", "summary":"Make current revision of a snap available to the system", "data":{"affected-snaps":["code"]}},
+            {"kind":"check-rerefresh", "status":"Doing", "summary":"Monitoring snaps"}
+        ]});
+        assert_eq!(
+            task_detail(&change).as_deref(),
+            Some("code · Make current revision of a snap available to the system")
+        );
+    }
+
+    #[test]
+    fn waiting_and_rollback_keep_package_identity_without_fabricating_percentages() {
+        for (status, expected) in [
+            ("Wait", "Waiting: code · Wait for code"),
+            ("Undoing", "Reverting: code · Wait for code"),
+        ] {
+            let change = json!({"tasks":[{"kind":"link-snap", "status":status, "summary":"Wait for code", "data":{"affected-snaps":["code"]}}]});
+            assert_eq!(task_detail(&change).as_deref(), Some(expected));
+        }
+        let change = json!({"tasks":[{"kind":"download-snap", "status":"Doing", "summary":"Download snap \"code\"", "progress":{"done":0,"total":0}}]});
+        assert_eq!(task_detail(&change).as_deref(), Some("Downloading code"));
     }
 }

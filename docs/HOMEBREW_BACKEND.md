@@ -40,6 +40,12 @@ Both capture operations and mutations travel through the same elevated `Original
 
 Allp treats Homebrew metadata refresh and installed-package upgrade as separate operations. `allp update` capability-probes and prefers `brew update-if-needed`, falling back to `brew update` only when the command is unsupported. Refreshes set `HOMEBREW_NO_UPDATE_REPORT_NEW=1` once for the planned command to avoid Homebrew's potentially enormous post-update formula and cask report; update errors and normal progress remain visible.
 
+The native auto-update wrapper can print a metadata download `Error:` and still
+exit zero. Allp treats that evidence as a failed refresh, retains the diagnostics,
+and does not mark metadata fresh or run dependent outdated/upgrade checks.
+Warnings and donation notices alone do not indicate failure. Check network,
+DNS and proxy configuration, then retry `allp update --from brew --skip-self-update`.
+
 `allp upgrade` establishes metadata freshness, then runs `brew outdated --json=v2` with `HOMEBREW_NO_AUTO_UPDATE=1`. An empty formula/cask result is evidence that no upgrade command is needed. Non-empty results are included in the execution plan; the upgrade also receives `HOMEBREW_NO_AUTO_UPDATE=1`, and Allp queries JSON v2 again afterward to report updated and remaining counts.
 
 Homebrew plans are user-scoped. Under sudo, Allp returns to the original user with `sudo -H -u <user>` and supplies that user's HOME, USER, LOGNAME, PATH, SHELL, and XDG paths. Root-direct Homebrew execution is refused. Homebrew update-lock contention is reported as Busy; Allp never removes Homebrew lock files automatically.

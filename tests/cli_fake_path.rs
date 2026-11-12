@@ -3356,6 +3356,20 @@ fn maintenance_tui_streams_native_output_with_only_apt_style_progress_in_a_pty()
 
 #[test]
 fn maintenance_tui_reports_the_current_snap_downloads() {
+    check_snap_progress(false, false);
+}
+
+#[test]
+fn maintenance_tui_recovers_snap_progress_after_a_temporary_api_failure() {
+    check_snap_progress(false, true);
+}
+
+#[test]
+fn maintenance_tui_shows_system_snap_activity_when_initial_snapshot_fails() {
+    check_snap_progress(true, false);
+}
+
+fn check_snap_progress(initial_failure: bool, polling_failure: bool) {
     let dir = temp_dir("snap-tui");
     let refresh_started = dir.join("refresh-started");
     let progress_delivered = dir.join("progress-delivered");
@@ -3418,6 +3432,17 @@ esac
                     break;
                 }
             }
+            if request.contains(" /v2/changes?") {
+                if initial_failure && !refresh_started.is_file() {
+                    write!(stream, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n{{\"type\":\"error\",\"status-code\":503,\"result\":{{\"message\":\"temporarily unavailable\"}}}}").unwrap();
+                    continue;
+                }
+                if polling_failure && refresh_started.is_file() && samples == 1 {
+                    samples += 1;
+                    write!(stream, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n{{\"type\":\"error\",\"status-code\":503,\"result\":{{\"message\":\"temporarily unavailable\"}}}}").unwrap();
+                    continue;
+                }
+            }
             let download = |name: &str, status: &str, done: u64| {
                 serde_json::json!({
                     "kind": "download-snap", "status": status,
@@ -3426,7 +3451,11 @@ esac
                 })
             };
             let change = |id: &str, tasks: Vec<Value>| serde_json::json!({ "id": id, "kind": "refresh-snap", "ready": false, "tasks": tasks });
-            let mut changes = vec![change("319", vec![download("unrelated", "Doing", 99)])];
+            let mut changes = if initial_failure {
+                Vec::new()
+            } else {
+                vec![change("319", vec![download("unrelated", "Doing", 99)])]
+            };
             if request.contains(" /v2/changes?") && refresh_started.is_file() {
                 samples += 1;
                 let tasks = match samples {
@@ -3434,19 +3463,19 @@ esac
                         download("firefox", "Doing", 25),
                         download("brave", "Doing", 97),
                     ],
-                    2 => vec![
+                    n if n == 2 || polling_failure && n == 3 => vec![
                         download("firefox", "Doing", 55),
                         download("brave", "Done", 100),
                     ],
                     _ => vec![serde_json::json!({
-                        "kind": "mount-snap", "status": "Doing", "summary": "Mount snap firefox"
+                        "kind": "mount-snap", "status": "Doing", "summary": "Mount snap firefox", "data": {"affected-snaps": ["firefox"]}
                     })],
                 };
                 changes.push(change("320", tasks));
             }
             let body = serde_json::json!({ "type": "sync", "status-code": 200, "result": changes });
             write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}").unwrap();
-            if samples >= 3 {
+            if samples >= (if polling_failure { 4 } else { 3 }) {
                 fs::write(&progress_delivered, "").unwrap();
             }
         }
@@ -3458,13 +3487,23 @@ esac
 
     let rendered = stdout(&output);
     assert!(output.status.success(), "{rendered}");
-    assert!(
-        rendered.contains("Downloading firefox 25%, brave 97%"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("Downloading firefox 25%"), "{rendered}");
+    if !initial_failure {
+        assert!(
+            rendered.contains("Downloading firefox 25%, brave 97%"),
+            "{rendered}"
+        );
+    }
     assert!(rendered.contains("Downloading firefox 55%"), "{rendered}");
-    assert!(rendered.contains("Mount snap firefox"), "{rendered}");
-    assert!(!rendered.contains("Downloading unrelated"), "{rendered}");
+    assert!(rendered.contains("firefox · Mount snap"), "{rendered}");
+    if initial_failure {
+        assert!(rendered.contains("System activity:"), "{rendered}");
+    } else {
+        assert!(!rendered.contains("Downloading unrelated"), "{rendered}");
+    }
+    if polling_failure {
+        assert!(rendered.contains("retrying"), "{rendered}");
+    }
     assert!(rendered.contains("Upgrade Summary"), "{rendered}");
 }
 
@@ -4016,6 +4055,58 @@ fn no_interactive_keeps_the_classic_maintenance_stream_in_a_pty() {
     assert!(!rendered.contains("Progress: ["));
     assert!(rendered.contains("APT update started"));
     assert!(rendered.contains("apt update native output"));
+}
+
+#[test]
+fn homebrew_zero_exit_download_error_blocks_upgrade_and_freshness_in_classic_and_tui() {
+    for tui in [false, true] {
+        for stream in ["1", "2"] {
+            let dir = temp_dir("brew-zero-exit-download-error");
+            let marker = dir.join("brew-commands");
+            write_executable(
+                &dir,
+                "brew",
+                &format!(
+                    r#"#!/bin/sh
+case "$1" in
+ --version) echo 'Homebrew 6.0.15' ;;
+ --prefix) echo '{}' ;;
+ help) exit 0 ;;
+ update-if-needed|update)
+   echo "$1" >> '{}'
+   printf '%s\n' '{}'
+   printf '\033[31mError:\033[0m Failed to download Homebrew metadata!\n' >&{stream}
+   exit 0 ;;
+ outdated) echo outdated >> '{}'; echo '{{"formulae":[],"casks":[]}}' ;;
+ upgrade) echo upgrade >> '{}' ;;
+esac
+"#,
+                    dir.display(),
+                    marker.display(),
+                    include_str!("fixtures/homebrew/update-download-error.txt").trim(),
+                    marker.display(),
+                    marker.display(),
+                ),
+            );
+            let args = ["upgrade", "--from", "brew", "--yes", "--no-color"];
+            let output = if tui {
+                run_allp_pty_with_tui(&dir, &args, "")
+            } else {
+                run_allp(&dir, &args)
+            };
+            let out = stdout(&output);
+            assert_eq!(output.status.code(), Some(8), "{out}");
+            assert!(out.contains("Failed to download"), "{out}");
+            assert!(out.contains("required metadata refresh failed"), "{out}");
+            assert!(!out.contains("Homebrew metadata refreshed"), "{out}");
+            assert!(!out.contains("no outdated formulae or casks"), "{out}");
+            let commands = fs::read_to_string(marker).unwrap();
+            assert!(!commands.contains("outdated"), "{commands}");
+            assert!(!commands.contains("upgrade"), "{commands}");
+            let state = dir.join("xdg-state/allp/backend-metadata-refresh.json");
+            assert!(!state.exists(), "failed metadata must not be marked fresh");
+        }
+    }
 }
 
 #[test]
@@ -5842,6 +5933,46 @@ exit 42
         .iter()
         .any(|r| r["backend_name"] == "npm global" && r["status"] == "up_to_date"));
     assert!(!String::from_utf8_lossy(&json_output.stdout).contains("Checking targets"));
+}
+
+#[test]
+fn snap_dns_failure_explains_recovery_without_replaying_refresh() {
+    for tui in [false, true] {
+        let dir = temp_dir("snap-dns-summary");
+        let marker = dir.join("snap-refresh-count");
+        install_fake_sudo_marker(&dir, &dir.join("sudo-called"));
+        write_executable(
+            &dir,
+            "snap",
+            &format!(
+                r#"#!/bin/sh
+case "$1" in
+ version) printf 'snap 2.78\nsnapd 2.78\n' ;;
+ refresh)
+   echo refresh >> '{}'
+   printf '%s\n' '{}' >&2
+   exit 1 ;;
+esac
+"#,
+                marker.display(),
+                include_str!("fixtures/snap/refresh-dns-error.stderr").trim()
+            ),
+        );
+        let args = ["upgrade", "--from", "snap", "--yes", "--no-color"];
+        let output = if tui {
+            run_allp_pty_with_tui(&dir, &args, "")
+        } else {
+            run_allp(&dir, &args)
+        };
+        let out = stdout(&output);
+        assert_eq!(output.status.code(), Some(8), "{out}");
+        assert!(out.contains("Snap Store DNS lookup failed"), "{out}");
+        assert!(out.contains("resolvectl query api.snapcraft.io"), "{out}");
+        assert!(out.contains("VPN"), "{out}");
+        assert!(out.contains("snap tasks <change-id>"), "{out}");
+        assert!(out.contains("server misbehaving"), "{out}");
+        assert_eq!(fs::read_to_string(marker).unwrap(), "refresh\n");
+    }
 }
 
 #[test]
