@@ -64,6 +64,18 @@ impl SnapdRestError {
         )
     }
 
+    /// A read can safely be retried through the CLI after a transient socket
+    /// failure. Never use this policy for a POST: snapd may already have
+    /// accepted the mutation before the response was lost.
+    pub fn allows_read_only_cli_fallback(&self) -> bool {
+        self.allows_cli_fallback()
+            || matches!(self, Self::Io(error) if matches!(error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::NotConnected))
+    }
+
     pub fn fallback_reason(&self) -> String {
         self.to_string()
     }
@@ -109,6 +121,17 @@ impl fmt::Display for SnapdRestError {
                     write!(formatter, " ({kind})")?;
                 }
                 write!(formatter, ": {message}")
+            }
+            Self::Io(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                write!(
+                    formatter,
+                    "snapd request timed out waiting for a response: {error}"
+                )
             }
             Self::Io(error) => write!(formatter, "snapd I/O error: {error}"),
         }
@@ -403,6 +426,56 @@ mod tests {
             } if kind.as_deref() == Some("snap-not-found")
         ));
         assert!(!error.allows_cli_fallback());
+        assert!(!error.allows_read_only_cli_fallback());
+    }
+
+    #[test]
+    fn transient_io_retries_are_read_only_and_do_not_replay_mutations() {
+        for kind in [
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            let error = SnapdRestError::Io(std::io::Error::new(kind, "lost response"));
+            assert!(error.allows_read_only_cli_fallback());
+            assert!(
+                !error.allows_cli_fallback(),
+                "a lost POST response must not authorize another install"
+            );
+        }
+        let error = SnapdRestError::Io(std::io::Error::other("unrecognized failure"));
+        assert!(!error.allows_read_only_cli_fallback());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn actual_socket_read_timeout_allows_a_read_only_fallback() {
+        use std::{fs, thread};
+        let socket =
+            std::env::temp_dir().join(format!("allp-snapd-timeout-{}.sock", std::process::id()));
+        let Some(listener) = bind_test_listener(&socket, "timeout fixture socket should bind")
+        else {
+            return;
+        };
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 2048];
+            let count = stream.read(&mut request).unwrap();
+            assert!(count > 0, "the client must send its read-only request");
+            thread::sleep(Duration::from_millis(150));
+        });
+        let error = SnapdClient::with_timeout(&socket, Duration::from_millis(30))
+            .get("/v2/find?q=hello-world&scope=wide")
+            .expect_err("delayed response should time out");
+        assert!(error.allows_read_only_cli_fallback(), "{error}");
+        assert!(!error.allows_cli_fallback());
+        assert!(error.to_string().contains("timed out"));
+        server.join().unwrap();
+        fs::remove_file(socket).unwrap();
     }
 
     #[cfg(unix)]

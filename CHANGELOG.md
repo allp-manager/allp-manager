@@ -4,6 +4,28 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-12
+
+### Release Title
+
+Allp v0.6.7 — Snap Recovery and Native Installation Checks
+
+### Fixed
+
+- Recover read-only Snap discovery and resolution from transient REST timeouts
+  through the native CLI, without replaying installations or ignoring exact 404s.
+- Report Snap Store refresh HTTP errors and preserve native diagnostic output;
+  classify install/removal failures as Failed rather than Busy unless locked.
+- Extend the Snap canary to install, run, refresh and remove a real test snap
+  on a disposable Ubuntu runner.
+
+### Known Limitations
+
+- Snap Store HTTP errors can still prevent native Snap operations. Connectivity
+  checks can pass while a refresh request fails; native errors remain authoritative.
+- The new socket recovery applies to read-only lookups. A lost installation
+  response is not retried automatically because the operation may already exist.
+
 ## [0.6.6] - 2026-11-12
 
 ### Release Title

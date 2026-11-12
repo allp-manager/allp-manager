@@ -103,6 +103,7 @@ jobs:
   snap-search:
     name: Snap on Ubuntu
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -121,9 +122,30 @@ jobs:
           grep -q '"schema_version": 2' canary.json
           grep -q '"complete": true' canary.json
           grep -q '"package_id":' canary.json
+      - name: Exercise real Snap install, refresh and removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          if snap list hello-world >/dev/null 2>&1; then
+            echo 'Refusing to replace a pre-existing smoke-test application.' >&2
+            exit 1
+          fi
+          trap 'sudo snap remove --purge hello-world >snap-cleanup.log 2>&1 || true' EXIT
+          timeout 180s target/debug/allp install hello-world --from snap --yes --no-interactive --no-color | tee snap-install.log
+          snap list hello-world | tee snap-installed.log
+          snap run hello-world | tee snap-run.log
+          grep -Fq 'Hello World!' snap-run.log
+          timeout 180s target/debug/allp upgrade --from snap --yes --no-interactive --no-tui --no-color | tee snap-upgrade.log
+          timeout 180s target/debug/allp remove hello-world --from snap --yes --no-interactive --no-color | tee snap-remove.log
+          if snap list hello-world >/dev/null 2>&1; then
+            echo 'Allp reported removal success but hello-world is still installed.' >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: search-snap
-          path: canary.json
+          path: |
+            canary.json
+            snap-*.log
           if-no-files-found: ignore

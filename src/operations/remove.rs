@@ -154,7 +154,11 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
                 1,
                 1,
                 &plan.backend_name,
-                &OperationStatus::Busy,
+                &if matches!(&error, AllpError::BackendBusy { .. }) {
+                    OperationStatus::Busy
+                } else {
+                    OperationStatus::Failed
+                },
                 Some(&message),
                 started.elapsed(),
             );
@@ -165,14 +169,22 @@ pub fn run(context: &OperationContext<'_>, package: &str) -> AllpResult<()> {
             1,
             &plan.backend_name,
             &OperationStatus::Failed,
-            Some(&status.stderr),
+            Some(if status.stderr.trim().is_empty() {
+                &status.stdout
+            } else {
+                &status.stderr
+            }),
             started.elapsed(),
         );
         Err(AllpError::CommandFailed {
             backend: plan.backend_name.clone(),
             command,
             code: status.code,
-            stderr: status.stderr,
+            stderr: if status.stderr.trim().is_empty() {
+                status.stdout
+            } else {
+                status.stderr
+            },
         })
     }
 }

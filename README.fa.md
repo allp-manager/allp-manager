@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="نسخه 0.6.6" src="https://img.shields.io/badge/version-0.6.6-7c3aed">
+  <img alt="نسخه 0.6.7" src="https://img.shields.io/badge/version-0.6.7-7c3aed">
   <img alt="آلفای عمومی" src="https://img.shields.io/badge/status-public%20alpha-f59e0b">
   <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-dea584">
   <a href="LICENSE"><img alt="مجوز MIT" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
@@ -24,7 +24,7 @@
 
 Allp Package Manager تازه ای نیست. هسته runtime آن cross-platform است و Backendهای package بیشتر Linux-first هستند. Allp ابزارهایی مثل APT، Pacman، DNF، rpm-ostree روی Bazzite/Atomic، Flatpak، Snap، Homebrew/Linuxbrew، Python، Node و Rust/Cargo را کشف می کند و قبل از هر تغییر، دستور Native یا درخواست API محلی دقیق را نشان می دهد.
 
-نسخهٔ Stable **0.6.6**
+نسخهٔ Stable **0.6.7**
 سطح بلوغ: **Public Alpha**
 
 ## از اینجا شروع کنید
@@ -626,7 +626,7 @@ RubyGems و Maven/Gradle، همچنان کارهای بعدی هستند.
 
 ## Changelog
 
-نسخهٔ Stable `0.6.6` از WinGet و Termux پشتیبانی می‌کند، ایرادهای نگه‌داری بسته‌ها را رفع
+نسخهٔ Stable `0.6.7` از WinGet و Termux پشتیبانی می‌کند، ایرادهای نگه‌داری بسته‌ها را رفع
 می‌کند، مدیر نصب ابزارهای Node و Python را حفظ می‌کند و بعد از خودبه‌روزرسانی نسخهٔ قبلی را
 در بک‌آپ نگه می‌دارد. جزئیات در [CHANGELOG.md](CHANGELOG.md) است.
 

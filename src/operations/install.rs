@@ -513,7 +513,11 @@ fn execute_install(
                     1,
                     1,
                     &plan.backend_name,
-                    &crate::domain::OperationStatus::Busy,
+                    &if matches!(&error, AllpError::BackendBusy { .. }) {
+                        crate::domain::OperationStatus::Busy
+                    } else {
+                        crate::domain::OperationStatus::Failed
+                    },
                     Some(&message),
                     started.elapsed(),
                 );
@@ -525,14 +529,22 @@ fn execute_install(
             1,
             &plan.backend_name,
             &crate::domain::OperationStatus::Failed,
-            Some(&status.stderr),
+            Some(if status.stderr.trim().is_empty() {
+                &status.stdout
+            } else {
+                &status.stderr
+            }),
             started.elapsed(),
         );
         Err(AllpError::CommandFailed {
             backend: plan.backend_name.clone(),
             command,
             code: status.code,
-            stderr: status.stderr,
+            stderr: if status.stderr.trim().is_empty() {
+                status.stdout
+            } else {
+                status.stderr
+            },
         })
     }
 }
