@@ -39,6 +39,15 @@ def store_outage(job, raw_log):
             or 'Store metadata via IPv4: HTTP 000' in log
         ):
             return 'Native Snap Store connection failed before Allp execution.'
+        discovery = [step for step in job['steps'] if step['name'] == 'Exercise Snap discovery']
+        if ('timeout 60s snap find hello-world' in log
+                and 'Process completed with exit code 124.' in log
+                and len(discovery) == 1 and discovery[0].get('conclusion') == 'skipped'
+                and re.search(r'^Store metadata via IPv4: HTTP 000\s*$', log, re.M)
+                and re.search(r'^curl: \(28\)[^\n]*\bapi\.snapcraft\.io(?=[ :/]|$)[^\n]*(?:timeout|timed out)',
+                              log, re.M | re.I)):
+            return ('Native Snap Store search timed out and an independent Store HTTPS probe '
+                    'failed before Allp execution.')
     if failed == ['Require complete search output']:
         start = log.find('{\n  "schema_version":')
         if start < 0:

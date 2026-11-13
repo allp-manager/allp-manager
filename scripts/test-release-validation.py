@@ -72,6 +72,53 @@ class ReleaseValidationTests(unittest.TestCase):
         self.assertEqual(proof['status'], 'passed_with_store_outage')
         self.assertIn('before Allp execution', proof['store_outage'])
 
+    def native_preflight_timeout(self):
+        self.log = (Path(__file__).parents[1] / 'tests/fixtures/release/snap-native-preflight-timeout.txt').read_text()
+        snap = next(job for job in self.jobs if job['name'] == 'Snap on Ubuntu')
+        snap['steps'] = [dict(name='Check native Snap Store availability', conclusion='failure'),
+                         dict(name='Exercise Snap discovery', conclusion='skipped')]
+        return snap
+
+    def test_native_timeout_with_independent_store_timeout_is_a_proven_outage(self):
+        self.native_preflight_timeout()
+        self.assertEqual(self.assess()['status'], 'passed_with_store_outage')
+
+    def test_native_timeout_alone_or_healthy_independent_probe_still_blocks(self):
+        self.native_preflight_timeout()
+        self.log = self.log.replace('Store metadata via IPv4: HTTP 000', 'Store metadata via IPv4: HTTP 200')
+        with self.assertRaises(ValueError):
+            self.assess()
+        self.native_preflight_timeout()
+        self.log = '\n'.join(line for line in self.log.splitlines() if 'curl: (28)' not in line)
+        with self.assertRaises(ValueError):
+            self.assess()
+
+    def test_native_timeout_requires_store_host_and_native_search_deadline(self):
+        self.native_preflight_timeout()
+        self.log = self.log.replace('api.snapcraft.io', 'unrelated.example')
+        with self.assertRaises(ValueError):
+            self.assess()
+        self.native_preflight_timeout()
+        self.log = self.log.replace('timeout 60s snap find hello-world', 'timeout 60s another-command')
+        with self.assertRaises(ValueError):
+            self.assess()
+
+    def test_native_timeout_cannot_hide_allp_execution_or_mutation(self):
+        snap = self.native_preflight_timeout()
+        snap['steps'][-1]['conclusion'] = 'success'
+        with self.assertRaises(ValueError):
+            self.assess()
+        self.native_preflight_timeout()
+        self.log += '\nSnap install started\n'
+        with self.assertRaises(ValueError):
+            self.assess()
+
+    def test_native_timeout_must_retain_its_failure_status(self):
+        self.native_preflight_timeout()
+        self.log = self.log.replace('exit code 124', 'exit code 1')
+        with self.assertRaises(ValueError):
+            self.assess()
+
     def test_each_required_check_must_pass_for_exact_commit(self):
         for index in range(3):
             original = copy.deepcopy(self.runs)

@@ -116,7 +116,9 @@ interactive `sudo -v` preflight after the final confirmation and before the
 progress renderer is created. Its standard streams stay attached to the real terminal;
 Allp never reads or stores a password. During dashboard execution, privileged
 children use `sudo -n -- …`. Before a later root operation, Allp checks the
-cached credential with `sudo -n -v`. If it has expired, the footer is cleared,
+cached credential with `sudo -n -v`. Both classic sudo's password-required
+diagnostics and sudo-rs's `interactive authentication is required` diagnostic
+are treated as renewable credential expiry. If it has expired, the footer is cleared,
 an interactive `sudo -v` owns the normal terminal, and the footer is redrawn
 only after authentication succeeds. A failed or unavailable revalidation
 produces a structured blocked result rather than mixing a password prompt into

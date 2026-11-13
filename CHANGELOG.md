@@ -4,6 +4,33 @@ All notable changes to Allp will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-11-13
+
+### Release Title
+
+Allp v0.6.11 — Renew Sudo Sessions and Show Live Snap Tasks
+
+### Changed
+
+- Recognize a native Snap preflight deadline as a proven external outage only
+  when an independent Store HTTPS probe also times out and Allp never executed.
+
+### Fixed
+
+- Recognize sudo-rs credential expiration after long operations. Interactive
+  maintenance safely renews authentication and resumes pending privileged plans;
+  noninteractive runs remain blocked without opening a password prompt.
+
+### Included repairs
+
+- Include the live Snap task/percentage display, Snap DNS guidance and truthful
+  Homebrew metadata results from the unpublished v0.6.9/v0.6.10 candidates.
+
+### Known Limitations
+
+- Native Store outages remain visible as failed canaries. Only proven failures
+  before mutation may be recorded separately; application/mutation failures block release.
+
 ## [0.6.10] - 2026-11-13
 
 ### Release Title

@@ -1,0 +1,4 @@
+2026-11-12T22:34:52.3034276Z timeout 60s snap find hello-world | tee snap-native-search.log
+2026-11-12T22:35:52.3145590Z ##[error]Process completed with exit code 124.
+2026-11-12T22:36:51.3034758Z curl: (28) Failed to connect to api.snapcraft.io port 443 after 10002 ms: Timeout was reached
+2026-11-12T22:36:51.3035149Z Store metadata via IPv4: HTTP 000

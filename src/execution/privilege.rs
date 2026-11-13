@@ -376,7 +376,7 @@ fn classify_noninteractive_validation_output(output: &Output) -> PrivilegeStatus
 
 /// Maps C-locale `sudo -n` diagnostics to an administrator boundary state.
 ///
-/// A password-specific failure means a previously authenticated credential
+/// A password or sudo-rs interactive-authentication request means a credential
 /// may be renewed outside the TUI. Policy, TTY, and helper failures are not
 /// retried interactively because doing so would only repeat an unavailable
 /// configuration.
@@ -386,6 +386,7 @@ pub(crate) fn classify_noninteractive_sudo_diagnostics(diagnostics: &str) -> Pri
         || diagnostics.contains("password is required")
         || diagnostics.contains("password is needed")
         || diagnostics.contains("no password was provided")
+        || diagnostics.contains("interactive authentication is required")
     {
         PrivilegeStatus::CredentialExpired
     } else {
@@ -1405,6 +1406,16 @@ mod tests {
             requires_root: true,
             interactive: false,
         }
+    }
+
+    #[test]
+    fn sudo_rs_authentication_request_is_renewable_credential_expiry() {
+        assert_eq!(
+            super::classify_noninteractive_sudo_diagnostics(include_str!(
+                "../../tests/fixtures/sudo/credential-expired-sudo-rs.stderr"
+            )),
+            crate::domain::PrivilegeStatus::CredentialExpired
+        );
     }
 
     #[test]

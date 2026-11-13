@@ -454,6 +454,24 @@ fn install_fake_sudo_expiring_session(
     tty_trace: &Path,
     reauthentication_exit: i32,
 ) {
+    install_fake_sudo_expiring_session_with_diagnostic(
+        dir,
+        trace,
+        tty_trace,
+        reauthentication_exit,
+        "sudo: a password is required",
+        1,
+    );
+}
+
+fn install_fake_sudo_expiring_session_with_diagnostic(
+    dir: &Path,
+    trace: &Path,
+    tty_trace: &Path,
+    reauthentication_exit: i32,
+    expiry_diagnostic: &str,
+    successful_validations: usize,
+) {
     let trace = trace.display();
     let tty_trace = tty_trace.display();
     let initial_auth = dir.join("sudo-initial-auth").display().to_string();
@@ -491,13 +509,17 @@ if [ "$1" = "-n" ] && [ "$2" = "-v" ]; then
     printf '%s\n' 'validation-after-reauthenticated' >> '{trace}'
     exit 0
   fi
+  validations=0
   if [ -f '{first_validation}' ]; then
+    IFS= read -r validations < '{first_validation}'
+  fi
+  if [ "$validations" -ge {successful_validations} ]; then
     printf '%s\n' 'credential-expired' >> '{trace}'
-    printf '%s\n' 'sudo: a password is required' >&2
+    printf '%s\n' '{expiry_diagnostic}' >&2
     exit 1
   fi
   printf '%s\n' 'first-validation-ok' >> '{trace}'
-  : > '{first_validation}'
+  printf '%s\n' "$((validations + 1))" > '{first_validation}'
   exit 0
 fi
 if [ "$1" = "-n" ] && [ "$2" = "--" ]; then
@@ -3776,6 +3798,99 @@ fn failed_maintenance_privilege_preflight_blocks_backends_before_tui_or_native_e
     );
     let trace = fs::read_to_string(trace).expect("preflight should invoke sudo once");
     assert_eq!(trace.lines().collect::<Vec<_>>(), ["-v"]);
+}
+
+#[test]
+fn sudo_rs_expiry_after_apt_resumes_remaining_operations_in_classic_and_tui() {
+    for tui in [false, true] {
+        let dir = temp_dir("sudo-rs-after-long-upgrade");
+        let apt_marker = dir.join("apt-executed");
+        let snap_marker = dir.join("snap-executed");
+        let trace = dir.join("sudo-trace");
+        install_fake_apt_phased_upgrade(&dir, &apt_marker);
+        install_fake_snap(&dir, &snap_marker, 0);
+        install_fake_sudo_expiring_session_with_diagnostic(
+            &dir,
+            &trace,
+            &dir.join("tty-mode"),
+            0,
+            include_str!("fixtures/sudo/credential-expired-sudo-rs.stderr").trim(),
+            2,
+        );
+        let mut args = vec!["upgrade", "--yes", "--no-color"];
+        if !tui {
+            args.push("--no-tui");
+        }
+        let output = run_allp_pty_with_tui_after_prompt(
+            &dir,
+            &args,
+            "ALLP_TEST_SUDO_REAUTH_PROMPT",
+            "reauthentication-password\n",
+        );
+        let out = stdout(&output);
+        assert!(output.status.success(), "{out}");
+        assert!(
+            snap_marker.exists(),
+            "pending Snap refresh must resume after authentication: {out}"
+        );
+        assert!(
+            !out.contains("administrator authentication unavailable"),
+            "{out}"
+        );
+        let apt = fs::read_to_string(apt_marker).unwrap();
+        assert_eq!(
+            apt.lines()
+                .filter(|line| line.contains("apt-upgrade"))
+                .count(),
+            1,
+            "{apt}"
+        );
+        let calls = fs::read_to_string(trace).unwrap();
+        assert_eq!(
+            calls.lines().filter(|line| *line == "argv:-v").count(),
+            2,
+            "{calls}"
+        );
+        let upgrade = calls.find("upgrade --with-new-pkgs").unwrap();
+        let expired = calls.find("credential-expired").unwrap();
+        let refreshed = calls.find("snap refresh").unwrap();
+        assert!(upgrade < expired && expired < refreshed, "{calls}");
+        assert!(
+            calls.contains("reauth-stdio-is-a-tty")
+                && calls.contains("reauth-password-read-from-tty"),
+            "{calls}"
+        );
+    }
+}
+
+#[test]
+fn sudo_rs_expiry_stays_blocked_in_noninteractive_runs_without_prompting() {
+    let dir = temp_dir("sudo-rs-noninteractive-expiry");
+    let snap_marker = dir.join("snap-executed");
+    let trace = dir.join("sudo-trace");
+    install_fake_apt_phased_upgrade(&dir, &dir.join("apt-executed"));
+    install_fake_snap(&dir, &snap_marker, 0);
+    install_fake_sudo_expiring_session_with_diagnostic(
+        &dir,
+        &trace,
+        &dir.join("tty-mode"),
+        0,
+        include_str!("fixtures/sudo/credential-expired-sudo-rs.stderr").trim(),
+        3,
+    );
+    let output = run_allp(
+        &dir,
+        &["upgrade", "--yes", "--no-interactive", "--no-color"],
+    );
+    let out = stdout(&output);
+    assert_eq!(output.status.code(), Some(8), "{out}");
+    assert!(
+        !snap_marker.exists(),
+        "noninteractive expiry must not run the pending root command"
+    );
+    let calls = fs::read_to_string(trace).unwrap();
+    assert!(!calls.lines().any(|line| line == "argv:-v"), "{calls}");
+    assert!(out.contains("Blocked"), "{out}");
 }
 
 #[test]
